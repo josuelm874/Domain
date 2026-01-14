@@ -329,24 +329,24 @@
     }
 
     if (loginForm) {
-        loginForm.addEventListener('submit', (e) => {
+        loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            handleLogin();
+            await handleLogin();
         });
     }
 
     if (loginUsername) {
-        loginUsername.addEventListener('keydown', (e) => {
+        loginUsername.addEventListener('keydown', async (e) => {
             if (e.key === 'Enter') {
-                handleLogin();
+                await handleLogin();
             }
         });
     }
 
     if (loginPassword) {
-        loginPassword.addEventListener('keydown', (e) => {
+        loginPassword.addEventListener('keydown', async (e) => {
             if (e.key === 'Enter') {
-                handleLogin();
+                await handleLogin();
             }
         });
     }
@@ -379,7 +379,7 @@
         });
     }
 
-    function handleLogin() {
+    async function handleLogin() {
         // #region agent log
         fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:380',message:'handleLogin called',data:{hasLoginUsername:!!loginUsername,hasLoginPassword:!!loginPassword},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
@@ -388,8 +388,49 @@
         const username = loginUsername.value.trim().toLowerCase();
         const password = loginPassword.value.trim();
         
+        // CRÍTICO: Se localStorage estiver vazio, tentar carregar do Supabase primeiro
+        let registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        
+        // Se não há usuários no localStorage, tentar carregar do Supabase
+        if (registeredUsers.length === 0 && window.supabaseSync && window.supabaseSync.isConfigured()) {
+            console.log('📥 Nenhum usuário no localStorage, tentando carregar do Supabase...');
+            
+            // Mostrar indicador de carregamento
+            const loginButton = loginForm?.querySelector('button[type="submit"]');
+            const originalButtonText = loginButton?.textContent || '';
+            if (loginButton) {
+                loginButton.disabled = true;
+                loginButton.textContent = 'Carregando usuários...';
+            }
+            
+            try {
+                // Tentar carregar dados do Supabase diretamente
+                registeredUsers = await loadDataSync('registeredUsers', []);
+                console.log(`✅ Carregados ${registeredUsers.length} usuários do Supabase`);
+                
+                // Se ainda estiver vazio, tentar sincronizar
+                if (registeredUsers.length === 0) {
+                    console.log('🔄 Tentando sincronizar dados do Supabase...');
+                    if (loginButton) {
+                        loginButton.textContent = 'Sincronizando...';
+                    }
+                    await window.supabaseSync.syncAll(['registeredUsers']);
+                    registeredUsers = await loadDataSync('registeredUsers', []);
+                    console.log(`✅ Após sincronização: ${registeredUsers.length} usuários carregados`);
+                }
+            } catch (error) {
+                console.warn('⚠️ Erro ao carregar usuários do Supabase:', error);
+                // Continuar com array vazio - admin sempre pode fazer login
+            } finally {
+                // Restaurar botão
+                if (loginButton) {
+                    loginButton.disabled = false;
+                    loginButton.textContent = originalButtonText;
+                }
+            }
+        }
+        
         // Verificar usuários cadastrados dinamicamente
-        const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
         const user = registeredUsers.find(u => u.username === username);
         
         // Verificar se é usuário cadastrado
@@ -2089,15 +2130,27 @@ async function loadDataSync(key, defaultValue = null) {
 
 // Função para sincronizar dados no início da aplicação
 async function initializeSync() {
-    if (window.supabaseSync) {
+    if (window.supabaseSync && window.supabaseSync.isConfigured()) {
         console.log('🔄 Iniciando sincronização de dados...');
         try {
-            // Sincronizar dados principais
+            // CRÍTICO: Carregar dados do Supabase mesmo se localStorage estiver vazio
+            // Isso garante que usuários cadastrados possam fazer login em nova máquina
+            const registeredUsers = await loadDataSync('registeredUsers', []);
+            console.log(`📥 Carregados ${registeredUsers.length} usuários na inicialização`);
+            
+            // Sincronizar dados principais (bidirecional)
             await window.supabaseSync.syncAll(['users', 'registeredUsers', 'contributorContacts']);
             console.log('✅ Sincronização inicial concluída!');
+            
+            // Verificar novamente após sincronização
+            const registeredUsersAfterSync = await loadDataSync('registeredUsers', []);
+            console.log(`📥 Após sincronização: ${registeredUsersAfterSync.length} usuários disponíveis`);
         } catch (e) {
             console.warn('⚠️ Erro na sincronização inicial:', e);
+            // Continuar mesmo com erro - sistema pode funcionar offline
         }
+    } else {
+        console.log('ℹ️ Supabase não configurado, usando apenas localStorage');
     }
 }
 
@@ -2656,7 +2709,35 @@ async function processIcmsXmls() {
         // C3 = Razão Social
         const cellC3 = abaPrincipal.getCell('C3');
         if (!cellC3.formula) { // CRÍTICO: Não alterar se tiver fórmula
+            // Preservar formatação original ANTES de alterar o valor
+            let styleCloneC3 = null;
+            if (cellC3.style) {
+                try {
+                    styleCloneC3 = JSON.parse(JSON.stringify(cellC3.style));
+                } catch (e) {
+                    styleCloneC3 = {
+                        fill: cellC3.fill ? JSON.parse(JSON.stringify(cellC3.fill)) : undefined,
+                        font: cellC3.font ? JSON.parse(JSON.stringify(cellC3.font)) : undefined,
+                        border: cellC3.border ? JSON.parse(JSON.stringify(cellC3.border)) : undefined,
+                        alignment: cellC3.alignment ? JSON.parse(JSON.stringify(cellC3.alignment)) : undefined
+                    };
+                }
+            }
+            
             cellC3.value = razaoSocialFinal;
+            
+            // Restaurar estilo original se existia
+            if (styleCloneC3) {
+                try {
+                    if (styleCloneC3.fill) cellC3.fill = styleCloneC3.fill;
+                    if (styleCloneC3.font) cellC3.font = styleCloneC3.font;
+                    if (styleCloneC3.border) cellC3.border = styleCloneC3.border;
+                    if (styleCloneC3.alignment) cellC3.alignment = styleCloneC3.alignment;
+                } catch (e) {
+                    console.warn(`⚠️ Erro ao restaurar estilo da célula C3:`, e);
+                }
+            }
+            
             console.log(`  C3 = "${razaoSocialFinal}"`);
         } else {
             console.warn(`  ⚠️ C3 tem fórmula, não foi alterado`);
@@ -2665,15 +2746,27 @@ async function processIcmsXmls() {
         // C5 = Período (formato data)
         const cellC5 = abaPrincipal.getCell('C5');
         if (!cellC5.formula) { // CRÍTICO: Não alterar se tiver fórmula
+            // Preservar formatação original ANTES de alterar o valor
+            const numFmtOriginal = cellC5.numFmt;
+            const styleOriginal = cellC5.style ? JSON.parse(JSON.stringify(cellC5.style)) : null;
+            
             // Converter período (MM-YYYY) para data
             const [mes, ano] = periodo.split('-');
             const dataPeriodo = new Date(parseInt(ano), parseInt(mes) - 1, 1);
             cellC5.value = dataPeriodo;
-            // Preservar formatação original se existir, senão aplicar "mmm-yy"
-            if (!cellC5.numFmt) {
-                cellC5.numFmt = 'mmm-yy';
+            
+            // Restaurar formatação original se existia (NÃO alterar se já tinha formatação)
+            if (numFmtOriginal) {
+                cellC5.numFmt = numFmtOriginal;
             }
-            console.log(`  C5 = ${periodo} (formato: ${cellC5.numFmt})`);
+            // NÃO definir numFmt se não existia - deixar como está no modelo
+            
+            // Restaurar estilo original se existia
+            if (styleOriginal) {
+                Object.assign(cellC5.style, styleOriginal);
+            }
+            
+            console.log(`  C5 = ${periodo} (formato preservado: ${cellC5.numFmt || 'original'})`);
         } else {
             console.warn(`  ⚠️ C5 tem fórmula, não foi alterado`);
         }
@@ -2744,19 +2837,71 @@ async function processIcmsXmls() {
                     return; // Pular células com fórmulas
                 }
                 
-                // CRÍTICO: Apenas alterar o valor, ExcelJS preserva automaticamente todas as formatações
+                // CRÍTICO: Preservar TODAS as formatações existentes ANTES de alterar o valor
+                // Salvar todas as propriedades de formatação
+                const numFmtOriginal = cell.numFmt;
+                const typeOriginal = cell.type;
+                
+                // Salvar estilo completo (deep clone)
+                let styleClone = null;
+                if (cell.style) {
+                    try {
+                        styleClone = JSON.parse(JSON.stringify(cell.style));
+                    } catch (e) {
+                        // Se falhar, tentar copiar propriedades principais
+                        styleClone = {
+                            fill: cell.fill ? JSON.parse(JSON.stringify(cell.fill)) : undefined,
+                            font: cell.font ? JSON.parse(JSON.stringify(cell.font)) : undefined,
+                            border: cell.border ? JSON.parse(JSON.stringify(cell.border)) : undefined,
+                            alignment: cell.alignment ? JSON.parse(JSON.stringify(cell.alignment)) : undefined,
+                            numFmt: cell.numFmt,
+                            protection: cell.protection ? JSON.parse(JSON.stringify(cell.protection)) : undefined
+                        };
+                    }
+                }
+                
                 // Campos numéricos (Frete, Outras, IPI, Valor Produto) - índices 8, 9, 10, 11
                 if (indexColuna >= 8 && indexColuna <= 11) {
                     const numVal = parseFloat(String(valor || '0').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
-                    // Apenas alterar o valor - formatação, estilo, cor, etc são preservados automaticamente
+                    
+                    // Apenas alterar o valor - ExcelJS preserva formatações automaticamente
                     cell.value = numVal;
-                    // NÃO alterar numFmt se já existir - preservar formatação original
-                    if (!cell.numFmt) {
-                        cell.numFmt = 'R$ #,##0.00';
+                    
+                    // CRÍTICO: Restaurar formatação numérica original se existia
+                    // NÃO definir nova formatação se não existia
+                    if (numFmtOriginal) {
+                        cell.numFmt = numFmtOriginal;
+                    }
+                    
+                    // Restaurar estilo completo se existia
+                    if (styleClone) {
+                        try {
+                            // Restaurar propriedades individuais para garantir preservação
+                            if (styleClone.fill) cell.fill = styleClone.fill;
+                            if (styleClone.font) cell.font = styleClone.font;
+                            if (styleClone.border) cell.border = styleClone.border;
+                            if (styleClone.alignment) cell.alignment = styleClone.alignment;
+                            if (styleClone.protection) cell.protection = styleClone.protection;
+                        } catch (e) {
+                            console.warn(`⚠️ Erro ao restaurar estilo da célula ${linha},${coluna}:`, e);
+                        }
                     }
                 } else {
-                    // Campos de texto - apenas alterar o valor, formatações são preservadas automaticamente
+                    // Campos de texto - apenas alterar o valor
                     cell.value = String(valor || '');
+                    
+                    // Restaurar estilo completo se existia
+                    if (styleClone) {
+                        try {
+                            if (styleClone.fill) cell.fill = styleClone.fill;
+                            if (styleClone.font) cell.font = styleClone.font;
+                            if (styleClone.border) cell.border = styleClone.border;
+                            if (styleClone.alignment) cell.alignment = styleClone.alignment;
+                            if (styleClone.protection) cell.protection = styleClone.protection;
+                        } catch (e) {
+                            console.warn(`⚠️ Erro ao restaurar estilo da célula ${linha},${coluna}:`, e);
+                        }
+                    }
                 }
             });
             produtosPreenchidos++;
