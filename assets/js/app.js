@@ -351,20 +351,22 @@
         });
     }
 
-    if (adminForm) {
-        adminForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            handleAdminLogin();
-        });
-    }
+    // Admin form não é mais usado - login unificado no handleLogin
+    // if (adminForm) {
+    //     adminForm.addEventListener('submit', (e) => {
+    //         e.preventDefault();
+    //         handleAdminLogin();
+    //     });
+    // }
 
-    if (adminPassword) {
-        adminPassword.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                handleAdminLogin();
-            }
-        });
-    }
+    // Admin password Enter key não é mais usado - login unificado no handleLogin
+    // if (adminPassword) {
+    //     adminPassword.addEventListener('keydown', (e) => {
+    //         if (e.key === 'Enter') {
+    //             handleAdminLogin();
+    //         }
+    //     });
+    // }
 
     const adminLoginContainer = document.querySelector('#admin-login-container');
     
@@ -378,6 +380,9 @@
     }
 
     function handleLogin() {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:380',message:'handleLogin called',data:{hasLoginUsername:!!loginUsername,hasLoginPassword:!!loginPassword},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         if (!loginUsername || !loginPassword) return;
         
         const username = loginUsername.value.trim().toLowerCase();
@@ -391,6 +396,9 @@
         if (user) {
             const hashedPassword = generateUltraSecureHash(password);
             if (user.password === hashedPassword) {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:393',message:'Login validated successfully',data:{username:username},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+                // #endregion
                 // Salvar ou remover credenciais baseado no checkbox (igual ao Chat.html)
                 const rememberMe = rememberMeCheckbox?.checked || false;
                 if (rememberMe) {
@@ -405,37 +413,12 @@
                 currentUser = user.username;
                 window.currentUser = user.username;
                 
-                // Esconder login container completamente
-                if (loginContainer) {
-                    loginContainer.style.display = 'none';
-                    loginContainer.style.visibility = 'hidden';
-                    loginContainer.classList.add('hidden');
-                }
-                
-                // Mostrar dashboard container
-                if (dashboardContainer) {
-                    dashboardContainer.style.display = 'block';
-                    dashboardContainer.style.visibility = 'visible';
-                    console.log('✅ Dashboard container mostrado');
-                } else {
-                    console.error('❌ Dashboard container não encontrado!');
-                }
-                
-                // Aguardar um frame para garantir que o DOM foi atualizado
-                requestAnimationFrame(() => {
-                    try {
-                        loadUserPreferences();
-                        navigateTo('dashboard');
-                        // Atualizar reminders após login (com segurança)
-                        setTimeout(() => {
-                            if (typeof safeUpdateTaxReminders === 'function') {
-                                safeUpdateTaxReminders();
-                            }
-                        }, 1000);
-                    } catch (error) {
-                        console.error('❌ Erro após login:', error);
-                    }
-                });
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:410',message:'About to call showDashboardAfterLogin',data:{currentUser:currentUser,hasShowDashboardAfterLogin:typeof showDashboardAfterLogin==='function'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+                // #endregion
+                // Usar função centralizada para mostrar dashboard
+                loadUserPreferences();
+                showDashboardAfterLogin();
                 const userNameElement = document.querySelector('#current-user-name');
                 const adminLabelElement = document.querySelector('#admin-label');
                 const profileImageElement = document.querySelector('#profile-image');
@@ -459,10 +442,99 @@
                 }
             }
         } else if (username === 'adm') {
-            // Redirecionar para login de administrador
-            if (loginContainer) loginContainer.style.display = 'none';
-            if (adminLoginContainer) adminLoginContainer.style.display = 'flex';
-            if (adminUsername) adminUsername.value = 'ADM';
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:442',message:'Validating admin login directly',data:{username:username},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
+            // Validar login de administrador diretamente no mesmo handle
+            const hashedPassword = generateUltraSecureHash(password);
+            const adminHash = "fmAvLiwiJztcXVs/Pjw6fH17K18pKComXiUkI0AhNDA0eXRpcnVjZVNuaW1kQX5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAIW1ldHN5U2F0ZUJtdWluaW1vRH5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAITQyMDJnb3JQZXVzb0o9WVdiQlpIVHBkWGFLcEhkamhsVno5Q1VxZG5ObWhVTTNzVU00QTNTRDlXYllsV1ZybEVNQmhtVEVGRU1saGxVd05tYldwbVdXNVVkaGRWTXJGRlZ4b2xWeW8wUVh0R2FWTjJSU2xWV1ZSM2RUZGtVeEYyUjRkVlpxeEdSV2hsUnJKMmExUVhZR1psVE5OalRXUkZWU0pVVHg0VVJQWkZacGQxVjRobFZ1cDBjU1ZWTURGMlJ4VWxVWGQzZGFWRU40SlZNdmxIVnJSV2FSTkRhSWRGYnJGVFl5SVZWalpFWk9sbFZ3TkhWVlIzVE5aa1c1Rm1Sa2RWWXRKbGNXWkZjelpGYlpkbldFNWtWVFZFY1hsbE1vdG1VWFpWV1cxV01vTldNS0puVnN4V1lOZGtSd1JtUms5VVRGcEZkVngyWXhZbFZTWmpUSFIzVldabFN6WlZWTmhuVlZGRFVXcG1RVlpWTUtoVldXaDJhUzFtVmFkVmI0bDJVd1VUZFdabFdIVkdiRzltV0dabFRaZGxVelZsYmt0bVVXcFZXUnBtVFZWbE1TSlhWeFEyU1dGalNvRm1SYWRWWnRSR1NXRkRadkptUldsMFZzcDFVbFJFYTBaRk1rZFhUV0psY1I1R2NwNWtWd05YV1dSV1lpWmtWWWRWYjRkVlY2WkVTWkZEWmhaVmJLTlZZR2hHV090R2NYZDFWc2RsVlZGalNUcG1Sb1ZsTVJoM1ZZWjBWTmRsVVlwVlJXdDJVRnBGU1p0R2RURkdiYWgzVnRSWFZYeFdTNGxGVk9GV1RYWmtka1prVlZkRlJWZG5WVlZ6VlN4R2M2UlZieGMxVXlnMlZXTlRUeDBrUldWMVZ0UkhXWlpsV1hsbGJvSmxWc3BGTmlKRGVYWkZWV1JuVndnMlNTMW1Tb1ZsYUNwbFV4QTNjV0pEZWhKMVZLbGtZR3BsVGlOalUwWkZiYU5rVkhaRlZrZFVNWVJsZUZkWFZzcDBkaXhtV0hkRmJhcFZWeEEzY1dabFJQMUViSmhIVlVaa1ZrVjFiM2xWTXd0bVlHcFVVWDFHZVROMk1DVm5WWUoxVU5KalJ2UjJSeGdWWkdCM1ZVaEZaUGRsUlNkbFVySjFWWFJrVklsVk1rTmxVeDRVZGlWRWFYZDFSbmxuVnMxRWVpWlZXNE5WVmFkbFV5STFWWHRtVkxKbFZrZGxXRVprYU9aRWN6UlZWa2RrVUdwbGVqWmtXYUZHU29SblY2WjBjTlZWTUVSbGFHZDFVR2xGZWFaa1NYSm1SV0ZsVXNSMlVTMVdVNlpsVm9ObFlzcDFiWHRtV28xVVJ3aEVWVmxETk5aRWJHcFZSa3htVklGa2VYUmxVUDFrVktGMlVySlZZbFZsUlpaVlZ4OFVZc0pWV2FSa1JUUkZNS1YxVnVwMFFUZGtUeU4xYVNsR1ZzbFVlWlZGWlRKR2JrVlhUV0pWVVNSRmJZbGxiQkZqVnlVRWVOZFZNU0ptUktsMVZXSjFjTkpUVDNaRmJrbFdZRlYwZFRkRmRXRm1Wb1JuWXc0RVRqUjBaNE5sZWpoM1VIbGxNa0pEY1J4ME1PZDFWSDVFTWx0R2N3Um1NczFFWnJaRWRhZFdQOW8wYnpWWFpRSjNibkpETXlRVElBTkNKbDRsSnFnU0tmdHllOXhuTzg0elBiMUZYN2NpSXM0eUxnNUhSdjFXYXVsV2R0SlVaMEYyVTVOSGRsMVdJQU5DSmw0bEpxZ1NLZnR5ZTl4bk84NHpQYjFGWDdjaUlzNHlMZzVYUWsxV2F1TlZaalZuY3BSWGUwQUROaEEwSWtVaVhtb0NLcDgxSzcxSGY2d2pQL3NWWGN0ekppd2lMdkFtZg==";
+            
+            // Verificar se a senha é a senha de administrador
+            if (hashedPassword === adminHash) {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:446',message:'Admin password validated - calling showDashboardAfterLogin',data:{currentUser:'adm'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+                // #endregion
+                currentUser = 'adm';
+                window.currentUser = 'adm';
+                
+                // Salvar ou remover credenciais baseado no checkbox
+                const rememberMe = rememberMeCheckbox?.checked || false;
+                if (rememberMe) {
+                    localStorage.setItem('savedUsername', username);
+                    localStorage.setItem('savedPassword', password);
+                    console.log('Credenciais salvas para lembrar:', username);
+                } else {
+                    localStorage.removeItem('savedUsername');
+                    localStorage.removeItem('savedPassword');
+                }
+                
+                // Usar função centralizada para mostrar dashboard
+                loadUserPreferences();
+                showDashboardAfterLogin();
+                
+                // Configurar perfil de admin
+                const userNameElement = document.querySelector('#current-user-name');
+                const adminLabelElement = document.querySelector('#admin-label');
+                const profileImageElement = document.querySelector('#profile-image');
+                if (userNameElement) {
+                    userNameElement.textContent = 'Administrador';
+                }
+                if (adminLabelElement) {
+                    adminLabelElement.style.display = 'none';
+                }
+                if (profileImageElement) {
+                    profileImageElement.src = profileImages['default'];
+                    console.log(`Imagem de perfil atualizada para ${currentUser}: ${profileImageElement.src}`);
+                }
+            } else {
+                // Verificar se é um usuário administrador cadastrado
+                const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+                const adminUser = registeredUsers.find(u => u.control === 'administrador' && u.password === hashedPassword);
+                
+                if (adminUser) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:476',message:'Admin user found and validated',data:{username:adminUser.username},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+                    // #endregion
+                    currentUser = adminUser.username;
+                    window.currentUser = adminUser.username;
+                    
+                    // Salvar ou remover credenciais baseado no checkbox
+                    const rememberMe = rememberMeCheckbox?.checked || false;
+                    if (rememberMe) {
+                        localStorage.setItem('savedUsername', adminUser.username);
+                        localStorage.setItem('savedPassword', password);
+                    } else {
+                        localStorage.removeItem('savedUsername');
+                        localStorage.removeItem('savedPassword');
+                    }
+                    
+                    // Usar função centralizada para mostrar dashboard
+                    loadUserPreferences();
+                    showDashboardAfterLogin();
+                    
+                    // Configurar perfil de admin user
+                    const userNameElement = document.querySelector('#current-user-name');
+                    const adminLabelElement = document.querySelector('#admin-label');
+                    const profileImageElement = document.querySelector('#profile-image');
+                    if (userNameElement) {
+                        userNameElement.textContent = adminUser.name;
+                    }
+                    if (adminLabelElement) {
+                        adminLabelElement.style.display = 'block';
+                    }
+                    if (profileImageElement) {
+                        profileImageElement.src = adminUser.profileImage || profileImages['default'];
+                    }
+                } else {
+                    if (loginForm) {
+                        const errorDiv = document.createElement('div');
+                        errorDiv.className = 'error-message';
+                        errorDiv.textContent = 'Senha incorreta. Tente novamente.';
+                        loginForm.appendChild(errorDiv);
+                        setTimeout(() => errorDiv.remove(), 3000);
+                    }
+                }
+            }
         } else {
             if (loginForm) {
                 const errorDiv = document.createElement('div');
@@ -528,6 +600,9 @@
     }
 
     function handleAdminLogin() {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:514',message:'handleAdminLogin called',data:{hasAdminPassword:!!adminPassword},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         if (!adminPassword) return;
         
         const password = adminPassword.value.trim();
@@ -538,35 +613,20 @@
         const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
         const adminUser = registeredUsers.find(u => u.control === 'administrador' && u.password === hashedPassword);
         
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:522',message:'Admin password validation',data:{passwordLength:password.length,hashedMatchesAdminHash:hashedPassword===adminHash,hasAdminUser:!!adminUser},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        
         if (hashedPassword === adminHash) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:525',message:'Admin password validated - calling showDashboardAfterLogin',data:{currentUser:'adm'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
             currentUser = 'adm';
             window.currentUser = 'adm';
             
-            // Esconder containers de login completamente
-            if (loginContainer) {
-                loginContainer.style.display = 'none';
-                loginContainer.style.visibility = 'hidden';
-                loginContainer.classList.add('hidden');
-            }
-            if (adminLoginContainer) {
-                adminLoginContainer.style.display = 'none';
-                adminLoginContainer.style.visibility = 'hidden';
-            }
-            
-            // Mostrar dashboard container
-            if (dashboardContainer) {
-                dashboardContainer.style.display = 'block';
-                dashboardContainer.style.visibility = 'visible';
-                console.log('✅ Dashboard container mostrado (admin)');
-            } else {
-                console.error('❌ Dashboard container não encontrado! (admin)');
-            }
-            
-            // Aguardar um frame para garantir que o DOM foi atualizado
-            requestAnimationFrame(() => {
-                loadUserPreferences();
-                navigateTo('dashboard');
-            });
+            // Usar função centralizada para mostrar dashboard
+            loadUserPreferences();
+            showDashboardAfterLogin();
             // MODIFICAÇÃO: Definir nome como "Administrador", ocultar "Admin" e usar profile-1.png
             const userNameElement = document.querySelector('#current-user-name');
             const adminLabelElement = document.querySelector('#admin-label');
@@ -585,31 +645,9 @@
             currentUser = adminUser.username;
             window.currentUser = adminUser.username;
             
-            // Esconder containers de login completamente
-            if (loginContainer) {
-                loginContainer.style.display = 'none';
-                loginContainer.style.visibility = 'hidden';
-                loginContainer.classList.add('hidden');
-            }
-            if (adminLoginContainer) {
-                adminLoginContainer.style.display = 'none';
-                adminLoginContainer.style.visibility = 'hidden';
-            }
-            
-            // Mostrar dashboard container
-            if (dashboardContainer) {
-                dashboardContainer.style.display = 'block';
-                dashboardContainer.style.visibility = 'visible';
-                console.log('✅ Dashboard container mostrado (admin user)');
-            } else {
-                console.error('❌ Dashboard container não encontrado! (admin user)');
-            }
-            
-            // Aguardar um frame para garantir que o DOM foi atualizado
-            requestAnimationFrame(() => {
-                loadUserPreferences();
-                navigateTo('dashboard');
-            });
+            // Usar função centralizada para mostrar dashboard
+            loadUserPreferences();
+            showDashboardAfterLogin();
             
             const userNameElement = document.querySelector('#current-user-name');
             const adminLabelElement = document.querySelector('#admin-label');
@@ -654,6 +692,193 @@
                 document.documentElement.style.background = '#f6f6f9';
             }
         }
+    }
+
+    // Função auxiliar para criar conteúdo do dashboard manualmente
+    function createDashboardContentManually() {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:821',message:'createDashboardContentManually ENTRY',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+        console.log('🔧 Criando conteúdo do dashboard manualmente...');
+        const mainContent = document.querySelector('#main-content');
+        if (!mainContent) {
+            console.error('❌ #main-content não encontrado para criação manual');
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:826',message:'Main content not found in createDashboardContentManually',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+            // #endregion
+            setTimeout(() => createDashboardContentManually(), 100);
+            return;
+        }
+        
+        try {
+            mainContent.innerHTML = `
+                <h1>Dashboard</h1>
+                <div class="dashboard-grid">
+                    <div class="box animate-section" style="animation-delay: 0s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.05s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.1s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.15s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.2s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.25s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.3s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.35s"></div>
+                    <div class="box animate-section" style="animation-delay: 0.4s"></div>
+                </div>
+            `;
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:843',message:'Dashboard content created',data:{innerHTMLLength:mainContent.innerHTML.length,hasH1:mainContent.innerHTML.includes('<h1>'),hasGrid:mainContent.innerHTML.includes('dashboard-grid')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+            // #endregion
+            console.log('✅ Conteúdo do dashboard criado manualmente com sucesso!');
+        } catch (e) {
+            console.error('❌ Erro ao criar conteúdo manualmente:', e);
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:848',message:'ERROR creating dashboard content',data:{errorMessage:e.message,errorStack:e.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+            // #endregion
+        }
+    }
+
+    // FUNÇÃO CENTRALIZADA PARA MOSTRAR DASHBOARD APÓS LOGIN
+    function showDashboardAfterLogin() {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:640',message:'showDashboardAfterLogin ENTRY',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        console.log('🚀 ========== INICIANDO showDashboardAfterLogin ==========');
+        
+        // PASSO 1: Esconder completamente o login
+        const loginContainer = document.querySelector('.login-container');
+        const adminLoginContainer = document.querySelector('#admin-login-container');
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:648',message:'Login containers found',data:{hasLoginContainer:!!loginContainer,hasAdminLoginContainer:!!adminLoginContainer,loginDisplay:loginContainer?loginContainer.style.display:'N/A',loginVisible:loginContainer?window.getComputedStyle(loginContainer).display:'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
+        
+        if (loginContainer) {
+            loginContainer.style.display = 'none';
+            loginContainer.style.visibility = 'hidden';
+            loginContainer.style.opacity = '0';
+            loginContainer.style.position = 'fixed';
+            loginContainer.style.zIndex = '-1';
+            loginContainer.classList.add('hidden');
+            console.log('✅ Login container escondido');
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:658',message:'Login container hidden',data:{display:loginContainer.style.display,visibility:loginContainer.style.visibility,computedDisplay:window.getComputedStyle(loginContainer).display},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+            // #endregion
+        }
+        
+        if (adminLoginContainer) {
+            adminLoginContainer.style.display = 'none';
+            adminLoginContainer.style.visibility = 'hidden';
+            adminLoginContainer.style.opacity = '0';
+            adminLoginContainer.classList.add('hidden');
+            console.log('✅ Admin login container escondido');
+        }
+        
+        // PASSO 2: Mostrar dashboard FORÇADAMENTE
+        const dashboardContainer = document.querySelector('.dashboard-container');
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:672',message:'Dashboard container query',data:{found:!!dashboardContainer,display:dashboardContainer?dashboardContainer.style.display:'N/A',computedDisplay:dashboardContainer?window.getComputedStyle(dashboardContainer).display:'N/A',offsetParent:dashboardContainer?dashboardContainer.offsetParent:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        if (!dashboardContainer) {
+            console.error('❌ Dashboard container não encontrado!');
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:675',message:'Dashboard container NOT FOUND - RETRY',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            setTimeout(() => showDashboardAfterLogin(), 100);
+            return;
+        }
+        
+        // Remover TODAS as classes que possam esconder
+        dashboardContainer.classList.remove('hidden', 'active');
+        
+        // Forçar exibição com TODAS as propriedades possíveis
+        dashboardContainer.style.display = 'block';
+        dashboardContainer.style.visibility = 'visible';
+        dashboardContainer.style.opacity = '1';
+        dashboardContainer.style.position = 'relative';
+        dashboardContainer.style.zIndex = '1';
+        dashboardContainer.style.width = '100%';
+        dashboardContainer.style.minHeight = '100vh';
+        
+        // #region agent log
+        const computedStyle = window.getComputedStyle(dashboardContainer);
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:685',message:'Dashboard styles set',data:{inlineDisplay:dashboardContainer.style.display,computedDisplay:computedStyle.display,inlineVisibility:dashboardContainer.style.visibility,computedVisibility:computedStyle.visibility,opacity:computedStyle.opacity,zIndex:computedStyle.zIndex,offsetParent:!!dashboardContainer.offsetParent},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        
+        console.log('✅ Dashboard container configurado:', {
+            display: dashboardContainer.style.display,
+            visibility: dashboardContainer.style.visibility,
+            opacity: dashboardContainer.style.opacity,
+            position: dashboardContainer.style.position
+        });
+        
+        // PASSO 3: Criar conteúdo IMEDIATAMENTE
+        const mainContent = document.querySelector('#main-content');
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:697',message:'Main content query',data:{found:!!mainContent,innerHTMLLength:mainContent?mainContent.innerHTML.length:0,innerHTMLPreview:mainContent?mainContent.innerHTML.substring(0,50):'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+        if (mainContent) {
+            if (!mainContent.innerHTML || mainContent.innerHTML.trim() === '' || mainContent.innerHTML.includes('<!-- Conteúdo será gerado')) {
+                console.log('📝 Criando conteúdo do dashboard imediatamente...');
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:702',message:'Creating dashboard content manually',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                // #endregion
+                createDashboardContentManually();
+            } else {
+                console.log('✅ Conteúdo já existe no dashboard');
+            }
+        } else {
+            console.warn('⚠️ #main-content não encontrado, tentando novamente...');
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:708',message:'Main content NOT FOUND - retry',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+            // #endregion
+            setTimeout(() => {
+                createDashboardContentManually();
+            }, 50);
+        }
+        
+        // PASSO 4: Usar navigateTo se disponível (com retry)
+        setTimeout(() => {
+            let navFunc = null;
+            if (typeof navigateTo === 'function') {
+                navFunc = navigateTo;
+            } else if (typeof window.navigateTo === 'function') {
+                navFunc = window.navigateTo;
+            }
+            
+            if (navFunc) {
+                try {
+                    console.log('🧭 Chamando navigateTo...');
+                    navFunc('dashboard');
+                } catch (e) {
+                    console.error('❌ Erro ao chamar navigateTo:', e);
+                }
+            }
+            
+            // PASSO 5: Verificações finais
+            setTimeout(() => {
+                // Verificar se dashboard ainda está visível
+                if (dashboardContainer && (dashboardContainer.style.display === 'none' || dashboardContainer.offsetParent === null)) {
+                    console.warn('⚠️ Dashboard não está visível! Forçando novamente...');
+                    dashboardContainer.style.display = 'block';
+                    dashboardContainer.style.visibility = 'visible';
+                    dashboardContainer.style.opacity = '1';
+                }
+                
+                // Verificar se conteúdo foi criado
+                const mainContentCheck = document.querySelector('#main-content');
+                if (mainContentCheck && (!mainContentCheck.innerHTML || mainContentCheck.innerHTML.trim() === '')) {
+                    console.warn('⚠️ Conteúdo não criado! Criando agora...');
+                    createDashboardContentManually();
+                }
+                
+                // Atualizar reminders
+                if (typeof safeUpdateTaxReminders === 'function') {
+                    safeUpdateTaxReminders();
+                }
+                
+                console.log('✅ ========== showDashboardAfterLogin CONCLUÍDO ==========');
+            }, 300);
+        }, 100);
     }
 
     const sideMenu = document.querySelector('aside');
@@ -726,7 +951,23 @@
     }
 
     function navigateTo(page) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:801',message:'navigateTo called',data:{page:page},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         console.log('🧭 Navegando para:', page);
+        
+        // Verificar se o dashboard está visível
+        const dashboardContainer = document.querySelector('.dashboard-container');
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:806',message:'navigateTo dashboard check',data:{found:!!dashboardContainer,display:dashboardContainer?dashboardContainer.style.display:'N/A',computedDisplay:dashboardContainer?window.getComputedStyle(dashboardContainer).display:'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        if (dashboardContainer && dashboardContainer.style.display === 'none') {
+            console.warn('⚠️ Dashboard não está visível, forçando exibição...');
+            dashboardContainer.style.display = 'block';
+            dashboardContainer.style.visibility = 'visible';
+            dashboardContainer.style.opacity = '1';
+            dashboardContainer.classList.remove('hidden');
+        }
         
         if (page !== 'analytics') {
             lastPage = page;
@@ -745,6 +986,16 @@
         const mainContent = document.querySelector('#main-content');
         if (!mainContent) {
             console.error('❌ Elemento #main-content não encontrado!');
+            // Tentar aguardar um pouco e tentar novamente
+            setTimeout(() => {
+                const mainContentRetry = document.querySelector('#main-content');
+                if (mainContentRetry) {
+                    console.log('✅ Elemento #main-content encontrado após retry');
+                    navigateTo(page);
+                } else {
+                    console.error('❌ Elemento #main-content ainda não encontrado após retry');
+                }
+            }, 100);
             return;
         }
         mainContent.innerHTML = '';
@@ -753,47 +1004,116 @@
         if (existingModal) existingModal.remove();
 
         if (page === 'dashboard') {
-            mainContent.innerHTML = `
-                <h1>Dashboard</h1>
-                <div class="dashboard-grid">
-                    <div class="box animate-section" style="animation-delay: 0s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.05s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.1s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.15s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.2s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.25s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.3s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.35s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.4s"></div>
-                </div>
-            `;
-            const now = new Date();
-            const currentYear = now.getFullYear();
-            const currentMonth = now.getMonth();
-            const envioImpostosDueDate = `15/${(currentMonth + 1).toString().padStart(2, '0')}`;
-            const icmsDueDate = getNextBusinessDay(currentYear, currentMonth, 20);
-            const dirbiDueDate = `20/${(currentMonth + 1).toString().padStart(2, '0')}`;
-            const dctfwebDueDate = getLastBusinessDayOfMonth();
-            console.log('Datas calculadas:', {
-                envioImpostos: envioImpostosDueDate,
-                icms: icmsDueDate,
-                dirbi: dirbiDueDate,
-                dctfweb: dctfwebDueDate
-            });
-            const envioImpostosElement = document.querySelector('.notification-envio .info small');
-            const icmsElement = document.querySelector('.notification-icms .info small');
-            const dirbiElement = document.querySelector('.notification-dirbi .info small');
-            const dctfwebElement = document.querySelector('.notification-dctfweb .info small');
-            console.log('Elementos selecionados:', {
-                envioImpostos: envioImpostosElement,
-                icms: icmsElement,
-                dirbi: dirbiElement,
-                dctfweb: dctfwebElement
-            });
-            if (envioImpostosElement) envioImpostosElement.textContent = `Vencimento: ${envioImpostosDueDate}`;
-            if (icmsElement) icmsElement.textContent = `Vencimento: ${icmsDueDate}`;
-            if (dirbiElement) dirbiElement.textContent = `Vencimento: ${dirbiDueDate}`;
-            if (dctfwebElement) dctfwebElement.textContent = `Vencimento: ${dctfwebDueDate}`;
+            try {
+                console.log('✅ Criando conteúdo do dashboard...');
+                
+                // Garantir que o mainContent existe antes de inserir conteúdo
+                if (!mainContent) {
+                    console.error('❌ mainContent não existe!');
+                    return;
+                }
+                
+                mainContent.innerHTML = `
+                    <h1>Dashboard</h1>
+                    <div class="dashboard-grid">
+                        <div class="box animate-section" style="animation-delay: 0s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.05s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.1s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.15s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.2s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.25s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.3s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.35s"></div>
+                        <div class="box animate-section" style="animation-delay: 0.4s"></div>
+                    </div>
+                `;
+                
+                console.log('✅ HTML do dashboard inserido:', mainContent.innerHTML.substring(0, 100) + '...');
+                
+                // Atualizar reminders de forma segura
+                try {
+                    const now = new Date();
+                    const currentYear = now.getFullYear();
+                    const currentMonth = now.getMonth();
+                    const envioImpostosDueDate = `15/${(currentMonth + 1).toString().padStart(2, '0')}`;
+                    
+                    let icmsDueDate = `20/${(currentMonth + 1).toString().padStart(2, '0')}`;
+                    let dirbiDueDate = `20/${(currentMonth + 1).toString().padStart(2, '0')}`;
+                    let dctfwebDueDate = formatDate(new Date(currentYear, currentMonth + 1, 0));
+                    
+                    // Tentar calcular datas de forma segura
+                    try {
+                        if (typeof getNextBusinessDay === 'function') {
+                            icmsDueDate = getNextBusinessDay(currentYear, currentMonth, 20);
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Erro ao calcular ICMS due date:', e);
+                    }
+                    
+                    try {
+                        if (typeof getLastBusinessDayOfMonth === 'function') {
+                            const lastDay = getLastBusinessDayOfMonth();
+                            dctfwebDueDate = formatDate(lastDay);
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Erro ao calcular DCTFWeb due date:', e);
+                    }
+                    
+                    console.log('📅 Datas calculadas:', {
+                        envioImpostos: envioImpostosDueDate,
+                        icms: icmsDueDate,
+                        dirbi: dirbiDueDate,
+                        dctfweb: dctfwebDueDate
+                    });
+                    
+                    // Aguardar um pouco para garantir que os elementos de reminder estejam no DOM
+                    setTimeout(() => {
+                        try {
+                            const envioImpostosElement = document.querySelector('.notification-envio .info small');
+                            const icmsElement = document.querySelector('.notification-icms .info small');
+                            const dirbiElement = document.querySelector('.notification-dirbi .info small');
+                            const dctfwebElement = document.querySelector('.notification-dctfweb .info small');
+                            
+                            console.log('🔍 Elementos de reminder encontrados:', {
+                                envioImpostos: !!envioImpostosElement,
+                                icms: !!icmsElement,
+                                dirbi: !!dirbiElement,
+                                dctfweb: !!dctfwebElement
+                            });
+                            
+                            if (envioImpostosElement) envioImpostosElement.textContent = `Vencimento: ${envioImpostosDueDate}`;
+                            if (icmsElement) icmsElement.textContent = `Vencimento: ${icmsDueDate}`;
+                            if (dirbiElement) dirbiElement.textContent = `Vencimento: ${dirbiDueDate}`;
+                            if (dctfwebElement) dctfwebElement.textContent = `Vencimento: ${dctfwebDueDate}`;
+                        } catch (e) {
+                            console.warn('⚠️ Erro ao atualizar elementos de reminder:', e);
+                        }
+                    }, 200);
+                } catch (e) {
+                    console.warn('⚠️ Erro ao calcular datas de reminders:', e);
+                }
+                
+                console.log('✅ Dashboard criado com sucesso!');
+            } catch (error) {
+                console.error('❌ Erro ao criar dashboard:', error);
+                // Tentar criar conteúdo mínimo mesmo em caso de erro
+                if (mainContent) {
+                    mainContent.innerHTML = `
+                        <h1>Dashboard</h1>
+                        <div class="dashboard-grid">
+                            <div class="box animate-section" style="animation-delay: 0s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.05s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.1s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.15s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.2s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.25s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.3s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.35s"></div>
+                            <div class="box animate-section" style="animation-delay: 0.4s"></div>
+                        </div>
+                    `;
+                }
+            }
         } else if (page === 'analytics') {
             // Verificar tipo de usuário
             const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');

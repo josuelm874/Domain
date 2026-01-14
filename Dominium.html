@@ -259,16 +259,22 @@
     
     <!-- Script de verificação e debug -->
     <script>
+        // Handler global de erros para debug
+        window.addEventListener('error', (e) => {
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Dominium.html:269',message:'GLOBAL ERROR',data:{filename:e.filename,message:e.message,lineno:e.lineno,colno:e.colno,error:e.error?e.error.toString():'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+            console.error('❌ Erro JavaScript global:', e.filename, e.message, e.lineno, e.colno);
+        });
+        
+        window.addEventListener('unhandledrejection', (e) => {
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Dominium.html:275',message:'UNHANDLED REJECTION',data:{reason:e.reason?e.reason.toString():'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+            console.error('❌ Promise rejeitada:', e.reason);
+        });
+        
         // Verificar se o dashboard foi carregado corretamente
         window.addEventListener('load', () => {
             console.log('📦 Página carregada completamente');
             console.log('📦 Login container:', document.querySelector('.login-container') ? '✅ Encontrado' : '❌ Não encontrado');
             console.log('📦 Dashboard container:', document.querySelector('.dashboard-container') ? '✅ Encontrado' : '❌ Não encontrado');
-            
-            // Verificar se há erros de carregamento de recursos
-            window.addEventListener('error', (e) => {
-                console.error('❌ Erro ao carregar recurso:', e.filename, e.message);
-            });
         });
     </script>
     

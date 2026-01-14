@@ -120,6 +120,36 @@ html {
     opacity: 1 !important;
 }
 
+/* Garantir que o dashboard seja exibido quando tiver display: block */
+.dashboard-container[style*="display: block"],
+.dashboard-container[style*="display:block"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Garantir que o dashboard seja exibido quando não estiver explicitamente escondido */
+.dashboard-container:not([style*="display: none"]):not([style*="display:none"]):not(.hidden) {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: relative !important;
+    width: 100% !important;
+    min-height: 100vh !important;
+}
+
+/* Garantir que o login esteja escondido quando necessário */
+.login-container.hidden,
+.login-container[style*="display: none"],
+.login-container[style*="display:none"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    position: fixed !important;
+    z-index: -1 !important;
+}
+
 .login-container * {
     margin: 0;
     padding: 0;
