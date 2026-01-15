@@ -1,5 +1,29 @@
 //------------------------------------ SISTEMA PRINCIPAL ----------------------------------------//
 (function() {
+    // Função helper para logs de debug (trata erros de bloqueio silenciosamente)
+    const debugLog = (location, message, data = {}) => {
+        try {
+            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    location,
+                    message,
+                    data,
+                    timestamp: Date.now(),
+                    sessionId: 'debug-session',
+                    runId: 'run1',
+                    hypothesisId: 'A'
+                })
+            }).catch(() => {
+                // Silenciosamente ignorar erros de bloqueio (ERR_BLOCKED_BY_CLIENT)
+                // Não poluir o console com esses erros
+            });
+        } catch (e) {
+            // Silenciosamente ignorar qualquer erro
+        }
+    };
+    
     // Função auxiliar para garantir que elementos sejam encontrados
     const ensureElements = () => {
         const loginContainer = document.querySelector('.login-container');
@@ -381,7 +405,7 @@
 
     async function handleLogin() {
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:380',message:'handleLogin called',data:{hasLoginUsername:!!loginUsername,hasLoginPassword:!!loginPassword},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        debugLog('app.js:380', 'handleLogin called', { hasLoginUsername: !!loginUsername, hasLoginPassword: !!loginPassword });
         // #endregion
         if (!loginUsername || !loginPassword) return;
         
@@ -1092,18 +1116,29 @@
                     }
                     
                     try {
+                        // Usar a função getLastBusinessDayOfMonth com parâmetros (year, month)
+                        // que retorna um objeto Date
                         if (typeof getLastBusinessDayOfMonth === 'function') {
-                            const lastDay = getLastBusinessDayOfMonth();
-                            // Verificar se lastDay é um Date ou uma string
-                            if (lastDay instanceof Date) {
+                            const lastDay = getLastBusinessDayOfMonth(currentYear, currentMonth);
+                            // Verificar se lastDay é um Date válido
+                            if (lastDay instanceof Date && !isNaN(lastDay.getTime())) {
                                 dctfwebDueDate = formatDate(lastDay);
                             } else {
-                                // Se já for string formatada, usar diretamente
-                                dctfwebDueDate = lastDay;
+                                // Fallback: usar último dia do mês formatado
+                                dctfwebDueDate = formatDate(new Date(currentYear, currentMonth + 1, 0));
                             }
+                        } else {
+                            // Fallback se a função não estiver disponível
+                            dctfwebDueDate = formatDate(new Date(currentYear, currentMonth + 1, 0));
                         }
                     } catch (e) {
                         console.warn('⚠️ Erro ao calcular DCTFWeb due date:', e);
+                        // Fallback em caso de erro
+                        try {
+                            dctfwebDueDate = formatDate(new Date(currentYear, currentMonth + 1, 0));
+                        } catch (fallbackError) {
+                            dctfwebDueDate = `Último dia útil/${(currentMonth + 1).toString().padStart(2, '0')}`;
+                        }
                     }
                     
                     console.log('📅 Datas calculadas:', {
