@@ -1,3 +1,59 @@
+import subprocess
+import sys
+import importlib.util
+
+# Bibliotecas necessárias para a automação
+BIBLIOTECAS_NECESSARIAS = ['pyautogui', 'keyboard', 'pyperclip']
+
+def verificar_e_instalar_bibliotecas():
+    """Verifica e instala/atualiza todas as bibliotecas necessárias"""
+    print("🔍 Verificando bibliotecas necessárias...")
+    
+    bibliotecas_faltando = []
+    bibliotecas_instaladas = []
+    
+    # Verificar quais bibliotecas estão instaladas
+    for biblioteca in BIBLIOTECAS_NECESSARIAS:
+        spec = importlib.util.find_spec(biblioteca)
+        if spec is None:
+            bibliotecas_faltando.append(biblioteca)
+            print(f"  ❌ {biblioteca} - não instalada")
+        else:
+            bibliotecas_instaladas.append(biblioteca)
+            print(f"  ✅ {biblioteca} - instalada")
+    
+    # Instalar bibliotecas faltando
+    if bibliotecas_faltando:
+        print(f"\n📦 Instalando {len(bibliotecas_faltando)} biblioteca(s) faltando...")
+        for biblioteca in bibliotecas_faltando:
+            try:
+                print(f"  ⬇️ Instalando {biblioteca}...")
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', biblioteca, '--quiet', '--upgrade'], 
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"  ✅ {biblioteca} instalada com sucesso")
+            except subprocess.CalledProcessError:
+                print(f"  ❌ Erro ao instalar {biblioteca}")
+                return False
+    
+    # Atualizar todas as bibliotecas para versões mais recentes
+    if bibliotecas_instaladas:
+        print(f"\n🔄 Atualizando {len(bibliotecas_instaladas)} biblioteca(s) para versões mais recentes...")
+        for biblioteca in bibliotecas_instaladas:
+            try:
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', biblioteca, '--quiet'], 
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"  ✅ {biblioteca} atualizada")
+            except subprocess.CalledProcessError:
+                print(f"  ⚠️ Aviso: não foi possível atualizar {biblioteca} (pode já estar na versão mais recente)")
+    
+    print("✅ Verificação de bibliotecas concluída!\n")
+    return True
+
+# Verificar e instalar bibliotecas antes de importar
+if not verificar_e_instalar_bibliotecas():
+    print("❌ Erro ao verificar/instalar bibliotecas. Encerrando...")
+    sys.exit(1)
+
 import pyautogui
 import time
 import keyboard
