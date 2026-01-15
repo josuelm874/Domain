@@ -1664,6 +1664,16 @@
 
     // Função para mostrar modal de CEST
     function showCestModal() {
+        // Verificar se o usuário atual é administrador
+        const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+        const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
+        const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
+        
+        if (!isAdmin) {
+            alert('Apenas administradores podem acessar a Lista de CEST.');
+            return;
+        }
+        
         // Remover modal existente se houver
         const existingModal = document.querySelector('.cest-modal');
         if (existingModal) {
@@ -1804,8 +1814,8 @@ function addCestProduct(cestCode) {
         return;
     }
     
-    // Separar produtos por vírgula e limpar espaços
-    const productNames = inputValue.split(',').map(name => name.trim()).filter(name => name.length > 0);
+    // Separar produtos por ponto e vírgula (;) e limpar espaços
+    const productNames = inputValue.split(';').map(name => name.trim()).filter(name => name.length > 0);
     
     if (productNames.length === 0) {
         alert('Por favor, digite pelo menos um produto válido.');
@@ -8010,8 +8020,9 @@ function showUserRegistrationModal() {
             </div>
             <div class="modal-body">
                 <div class="form-section">
-                    <h3>Cadastrar Novo Usuário</h3>
+                    <h3 id="form-title">Cadastrar Novo Usuário</h3>
                     <form id="user-registration-form">
+                        <input type="hidden" id="user-edit-id" value="">
                         <div class="form-columns">
                             <div class="input-group">
                                 <div class="input-box">
@@ -8038,17 +8049,19 @@ function showUserRegistrationModal() {
                                     <i class='bx bxs-shield'></i>
                                 </div>
                             </div>
-                            <div class="input-group full-width">
+                        </div>
+                        <div class="form-columns">
+                            <div class="input-group full-width" id="password-fields">
                                 <div class="input-box">
-                                    <input type="password" id="user-password" required>
-                                    <label for="user-password">Senha</label>
+                                    <input type="password" id="user-password">
+                                    <label for="user-password">Nova Senha <small style="font-size: 0.75rem; opacity: 0.7;">(deixe em branco para manter a atual)</small></label>
                                     <i class='bx bxs-lock-alt'></i>
                                 </div>
                             </div>
-                            <div class="input-group full-width">
+                            <div class="input-group full-width" id="confirm-password-field">
                                 <div class="input-box">
-                                    <input type="password" id="user-confirm-password" required>
-                                    <label for="user-confirm-password">Confirmar Senha</label>
+                                    <input type="password" id="user-confirm-password">
+                                    <label for="user-confirm-password">Confirmar Nova Senha</label>
                                     <i class='bx bxs-lock-alt'></i>
                                 </div>
                             </div>
@@ -8064,8 +8077,8 @@ function showUserRegistrationModal() {
                             </div>
                         </div>
                         <div class="modal-footer">
-                            <button type="button" class="btn-cancel" onclick="closeUserRegistrationModal()">Cancelar</button>
-                            <button type="submit" class="btn-save">Cadastrar Usuário</button>
+                            <button type="button" class="btn-cancel" onclick="cancelEditUser()">Cancelar</button>
+                            <button type="submit" class="btn-save" id="submit-btn">Cadastrar Usuário</button>
                         </div>
                     </form>
                 </div>
@@ -8144,11 +8157,79 @@ async function loadUsersList() {
                     <span class="user-value">${new Date(user.createdAt).toLocaleDateString('pt-BR')}</span>
                 </div>
             </div>
-            <button class="btn-delete" onclick="deleteUser(${user.id})">
-                <span class="material-icons-sharp">delete</span>
-            </button>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-edit" onclick="editUser(${user.id})" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                    <span class="material-icons-sharp" style="font-size: 1.2rem;">edit</span>
+                </button>
+                <button class="btn-delete" onclick="deleteUser(${user.id})">
+                    <span class="material-icons-sharp">delete</span>
+                </button>
+            </div>
         </div>
     `).join('');
+}
+
+// Função para editar usuário
+async function editUser(userId) {
+    const users = await loadDataSync('registeredUsers', []);
+    const user = users.find(u => u.id === userId);
+    
+    if (!user) {
+        alert('Usuário não encontrado.');
+        return;
+    }
+    
+    // Preencher formulário com dados do usuário
+    document.getElementById('user-edit-id').value = user.id;
+    document.getElementById('user-name').value = user.name;
+    document.getElementById('user-username').value = user.username;
+    document.getElementById('user-control').value = user.control;
+    document.getElementById('user-password').value = '';
+    document.getElementById('user-confirm-password').value = '';
+    document.getElementById('user-profile-image').value = '';
+    document.getElementById('profile-preview').src = user.profileImage || 'assets/images/profile-1.png';
+    
+    // Atualizar título e botão
+    document.getElementById('form-title').textContent = 'Editar Usuário';
+    document.getElementById('submit-btn').textContent = 'Salvar Alterações';
+    
+    // Tornar senha opcional (remover required)
+    document.getElementById('user-password').removeAttribute('required');
+    document.getElementById('user-confirm-password').removeAttribute('required');
+    
+    // Desabilitar campo username durante edição (para evitar conflitos)
+    document.getElementById('user-username').setAttribute('readonly', 'readonly');
+    document.getElementById('user-username').style.backgroundColor = 'var(--color-light)';
+    document.getElementById('user-username').style.cursor = 'not-allowed';
+    
+    // Scroll para o formulário
+    document.querySelector('.form-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Função para cancelar edição e resetar formulário
+function cancelEditUser() {
+    // Limpar formulário
+    document.getElementById('user-edit-id').value = '';
+    document.getElementById('user-name').value = '';
+    document.getElementById('user-username').value = '';
+    document.getElementById('user-control').value = '';
+    document.getElementById('user-password').value = '';
+    document.getElementById('user-confirm-password').value = '';
+    document.getElementById('user-profile-image').value = '';
+    document.getElementById('profile-preview').src = 'assets/images/profile-1.png';
+    
+    // Restaurar título e botão
+    document.getElementById('form-title').textContent = 'Cadastrar Novo Usuário';
+    document.getElementById('submit-btn').textContent = 'Cadastrar Usuário';
+    
+    // Restaurar campos de senha como obrigatórios
+    document.getElementById('user-password').setAttribute('required', 'required');
+    document.getElementById('user-confirm-password').setAttribute('required', 'required');
+    
+    // Habilitar campo username
+    document.getElementById('user-username').removeAttribute('readonly');
+    document.getElementById('user-username').style.backgroundColor = '';
+    document.getElementById('user-username').style.cursor = '';
 }
 
 // Função para deletar usuário
@@ -8179,6 +8260,9 @@ function closeUserRegistrationModal() {
 async function handleUserRegistration(e) {
     e.preventDefault();
 
+    const editId = document.getElementById('user-edit-id').value;
+    const isEditing = editId !== '';
+    
     const name = document.getElementById('user-name').value.trim();
     const username = document.getElementById('user-username').value.trim().toLowerCase();
     const control = document.getElementById('user-control').value;
@@ -8186,22 +8270,40 @@ async function handleUserRegistration(e) {
     const confirmPassword = document.getElementById('user-confirm-password').value;
     const profileImageInput = document.getElementById('user-profile-image');
 
-    // Validações
-    if (!name || !username || !control || !password || !confirmPassword) {
-        alert('Todos os campos são obrigatórios.');
+    // Validações básicas
+    if (!name || !username || !control) {
+        alert('Nome, Username e Controle são obrigatórios.');
         return;
     }
 
-    if (password !== confirmPassword) {
-        alert('As senhas não coincidem.');
-        return;
+    // Validações de senha
+    if (!isEditing) {
+        // Novo usuário: senha obrigatória
+        if (!password || !confirmPassword) {
+            alert('Senha e confirmação são obrigatórias para novos usuários.');
+            return;
+        }
+        if (password !== confirmPassword) {
+            alert('As senhas não coincidem.');
+            return;
+        }
+    } else {
+        // Editando: senha opcional, mas se informada, deve coincidir
+        if (password || confirmPassword) {
+            if (password !== confirmPassword) {
+                alert('As senhas não coincidem.');
+                return;
+            }
+        }
     }
 
-    // Verificar se o username já existe (com sincronização)
-    const existingUsers = await loadDataSync('registeredUsers', []);
-    if (existingUsers.find(user => user.username === username)) {
-        alert('Este username já está em uso. Escolha outro.');
-        return;
+    // Verificar se o username já existe (apenas para novos usuários)
+    if (!isEditing) {
+        const existingUsers = await loadDataSync('registeredUsers', []);
+        if (existingUsers.find(user => user.username === username)) {
+            alert('Este username já está em uso. Escolha outro.');
+            return;
+        }
     }
 
     // Processar imagem de perfil
@@ -8227,52 +8329,82 @@ async function handleUserRegistration(e) {
         reader.onload = async function(event) {
             profileImage = event.target.result;
             
-            // Continuar com o cadastro após processar a imagem
-            await completeUserRegistration(name, username, control, password, profileImage);
+            // Continuar com o cadastro/edição após processar a imagem
+            await completeUserRegistration(name, username, control, password, profileImage, isEditing, editId);
         };
         reader.onerror = function() {
             alert('Erro ao processar a imagem. Tente novamente.');
         };
         reader.readAsDataURL(file);
     } else {
-        // Sem imagem selecionada, usar a imagem padrão
-        await completeUserRegistration(name, username, control, password, profileImage);
+        // Sem imagem selecionada, manter a atual se editando ou usar padrão
+        if (isEditing) {
+            const existingUsers = await loadDataSync('registeredUsers', []);
+            const userToEdit = existingUsers.find(u => u.id === parseInt(editId));
+            if (userToEdit && userToEdit.profileImage) {
+                profileImage = userToEdit.profileImage;
+            }
+        }
+        await completeUserRegistration(name, username, control, password, profileImage, isEditing, editId);
     }
 }
 
 // Função para completar o cadastro do usuário
-async function completeUserRegistration(name, username, control, password, profileImage) {
-    // Criar hash da senha (usando a mesma função do sistema)
-    const hashedPassword = generateUltraSecureHash(password);
-
+async function completeUserRegistration(name, username, control, password, profileImage, isEditing = false, editId = null) {
     // Obter usuários existentes (com sincronização)
     const existingUsers = await loadDataSync('registeredUsers', []);
 
-    // Criar objeto do usuário
-    const newUser = {
-        id: Date.now(),
-        name: name,
-        username: username,
-        control: control,
-        password: hashedPassword,
-        profileImage: profileImage, // Adicionar imagem de perfil
-        createdAt: new Date().toISOString(),
-        createdBy: window.currentUser
-    };
+    if (isEditing) {
+        // EDITAR USUÁRIO EXISTENTE
+        const userIndex = existingUsers.findIndex(u => u.id === parseInt(editId));
+        if (userIndex === -1) {
+            alert('Usuário não encontrado para edição.');
+            return;
+        }
+        
+        const existingUser = existingUsers[userIndex];
+        
+        // Atualizar dados do usuário
+        existingUsers[userIndex] = {
+            ...existingUser,
+            name: name,
+            control: control,
+            profileImage: profileImage,
+            // Atualizar senha apenas se foi informada
+            password: password ? generateUltraSecureHash(password) : existingUser.password,
+            updatedAt: new Date().toISOString(),
+            updatedBy: window.currentUser
+        };
+        
+        await saveDataSync('registeredUsers', existingUsers);
+        console.log('✅ Usuário atualizado e sincronizado:', existingUsers[userIndex]);
+        alert('Usuário atualizado com sucesso!');
+    } else {
+        // CRIAR NOVO USUÁRIO
+        // Criar hash da senha (usando a mesma função do sistema)
+        const hashedPassword = generateUltraSecureHash(password);
 
-    // Salvar usuário (com sincronização automática)
-    existingUsers.push(newUser);
-    await saveDataSync('registeredUsers', existingUsers);
-    console.log('✅ Usuário salvo e sincronizado:', newUser);
+        // Criar objeto do usuário
+        const newUser = {
+            id: Date.now(),
+            name: name,
+            username: username,
+            control: control,
+            password: hashedPassword,
+            profileImage: profileImage, // Adicionar imagem de perfil
+            createdAt: new Date().toISOString(),
+            createdBy: window.currentUser
+        };
 
-    // Limpar formulário
-    document.getElementById('user-name').value = '';
-    document.getElementById('user-username').value = '';
-    document.getElementById('user-control').value = '';
-    document.getElementById('user-password').value = '';
-    document.getElementById('user-confirm-password').value = '';
-    document.getElementById('user-profile-image').value = '';
-    document.getElementById('profile-preview').src = 'assets/images/profile-1.png';
+        // Salvar usuário (com sincronização automática)
+        existingUsers.push(newUser);
+        await saveDataSync('registeredUsers', existingUsers);
+        console.log('✅ Usuário salvo e sincronizado:', newUser);
+        alert('Usuário cadastrado com sucesso!');
+    }
+
+    // Limpar formulário e resetar modo
+    cancelEditUser();
 
     // Recarregar lista de usuários
     await loadUsersList();
@@ -8320,8 +8452,9 @@ function showContributorRegistrationModal() {
             </div>
             <div class="modal-body">
                 <div class="form-section">
-                    <h3>Cadastrar Novo Contribuinte</h3>
+                    <h3 id="contributor-form-title">Cadastrar Novo Contribuinte</h3>
                     <form id="contributor-registration-form">
+                        <input type="hidden" id="contributor-edit-id" value="">
                         <div class="form-columns">
                             <div class="input-group">
                                 <div class="input-box">
@@ -8381,8 +8514,8 @@ function showContributorRegistrationModal() {
                             </div>
                         </div>
                         <div class="modal-footer">
-                            <button type="button" class="btn-cancel contributor-cancel-btn">Cancelar</button>
-                            <button type="submit" class="btn-save">Cadastrar Contribuinte</button>
+                            <button type="button" class="btn-cancel contributor-cancel-btn" onclick="cancelEditContributor()">Cancelar</button>
+                            <button type="submit" class="btn-save" id="contributor-submit-btn">Cadastrar Contribuinte</button>
                         </div>
                     </form>
                 </div>
@@ -8518,19 +8651,33 @@ async function loadContributorsList() {
                     <span class="user-value">${new Date(contributor.createdAt).toLocaleDateString('pt-BR')}</span>
                 </div>
             </div>
-            <button class="btn-delete contributor-delete-btn" data-contributor-id="${safeId}" style="margin-left: 1rem;">
-                <span class="material-icons-sharp">delete</span>
-            </button>
+            <div style="display: flex; gap: 0.5rem; margin-left: 1rem;">
+                <button class="btn-edit contributor-edit-btn" data-contributor-id="${safeId}" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                    <span class="material-icons-sharp" style="font-size: 1.2rem;">edit</span>
+                </button>
+                <button class="btn-delete contributor-delete-btn" data-contributor-id="${safeId}">
+                    <span class="material-icons-sharp">delete</span>
+                </button>
+            </div>
         </div>
     `;
     }).join('');
     
-    // Adicionar event listeners aos botões de delete
+    // Adicionar event listeners aos botões de delete e edit
     contributorsList.querySelectorAll('.contributor-delete-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             const contributorId = parseInt(this.getAttribute('data-contributor-id'));
             if (contributorId) {
                 deleteContributor(contributorId);
+            }
+        });
+    });
+    
+    contributorsList.querySelectorAll('.contributor-edit-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const contributorId = parseInt(this.getAttribute('data-contributor-id'));
+            if (contributorId) {
+                editContributor(contributorId);
             }
         });
     });
@@ -8542,6 +8689,76 @@ function formatCNPJ(cnpj) {
     const cleaned = cnpj.replace(/\D/g, '');
     if (cleaned.length !== 14) return cnpj;
     return cleaned.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+}
+
+// Função para editar contribuinte
+async function editContributor(contributorId) {
+    const contributors = await loadDataSync('contributors', []);
+    const contributor = contributors.find(c => c.id === contributorId);
+    
+    if (!contributor) {
+        alert('Contribuinte não encontrado.');
+        return;
+    }
+    
+    // Preencher formulário com dados do contribuinte
+    document.getElementById('contributor-edit-id').value = contributor.id;
+    document.getElementById('contributor-codigo').value = contributor.codigo || '';
+    document.getElementById('contributor-razao-social').value = contributor.razaoSocial || '';
+    document.getElementById('contributor-cnpj').value = contributor.cnpj || '';
+    document.getElementById('contributor-atividade').value = contributor.atividade || '';
+    document.getElementById('contributor-regime').value = contributor.regime || '';
+    document.getElementById('contributor-municipio').value = contributor.municipio || '';
+    document.getElementById('contributor-iss').value = contributor.iss || '';
+    document.getElementById('contributor-password').value = '';
+    
+    // Atualizar título e botão
+    document.getElementById('contributor-form-title').textContent = 'Editar Contribuinte';
+    document.getElementById('contributor-submit-btn').textContent = 'Salvar Alterações';
+    
+    // Desabilitar campo CNPJ durante edição (para evitar conflitos)
+    const cnpjInput = document.getElementById('contributor-cnpj');
+    cnpjInput.setAttribute('readonly', 'readonly');
+    cnpjInput.style.backgroundColor = 'var(--color-light)';
+    cnpjInput.style.cursor = 'not-allowed';
+    
+    // Desabilitar campo código durante edição
+    const codigoInput = document.getElementById('contributor-codigo');
+    codigoInput.setAttribute('readonly', 'readonly');
+    codigoInput.style.backgroundColor = 'var(--color-light)';
+    codigoInput.style.cursor = 'not-allowed';
+    
+    // Scroll para o formulário
+    document.querySelector('.form-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Função para cancelar edição e resetar formulário de contribuinte
+function cancelEditContributor() {
+    // Limpar formulário
+    document.getElementById('contributor-edit-id').value = '';
+    document.getElementById('contributor-codigo').value = '';
+    document.getElementById('contributor-razao-social').value = '';
+    document.getElementById('contributor-cnpj').value = '';
+    document.getElementById('contributor-atividade').value = '';
+    document.getElementById('contributor-regime').value = '';
+    document.getElementById('contributor-municipio').value = '';
+    document.getElementById('contributor-iss').value = '';
+    document.getElementById('contributor-password').value = '';
+    
+    // Restaurar título e botão
+    document.getElementById('contributor-form-title').textContent = 'Cadastrar Novo Contribuinte';
+    document.getElementById('contributor-submit-btn').textContent = 'Cadastrar Contribuinte';
+    
+    // Habilitar campos CNPJ e código
+    const cnpjInput = document.getElementById('contributor-cnpj');
+    cnpjInput.removeAttribute('readonly');
+    cnpjInput.style.backgroundColor = '';
+    cnpjInput.style.cursor = '';
+    
+    const codigoInput = document.getElementById('contributor-codigo');
+    codigoInput.removeAttribute('readonly');
+    codigoInput.style.backgroundColor = '';
+    codigoInput.style.cursor = '';
 }
 
 // Função para deletar contribuinte
@@ -8596,6 +8813,9 @@ function closeContributorRegistrationModal() {
 async function handleContributorRegistration(e) {
     e.preventDefault();
 
+    const editId = document.getElementById('contributor-edit-id').value;
+    const isEditing = editId !== '';
+    
     const codigo = document.getElementById('contributor-codigo').value.trim();
     const razaoSocial = document.getElementById('contributor-razao-social').value.trim();
     const cnpj = document.getElementById('contributor-cnpj').value.replace(/\D/g, '');
@@ -8617,17 +8837,19 @@ async function handleContributorRegistration(e) {
         return;
     }
 
-    // Verificar se o CNPJ já existe (com sincronização)
-    const existingContributors = await loadDataSync('contributors', []);
-    if (existingContributors.find(c => c.cnpj === cnpj)) {
-        alert('Este CNPJ já está cadastrado. Escolha outro.');
-        return;
-    }
+    // Verificar se o CNPJ já existe (apenas para novos contribuintes)
+    if (!isEditing) {
+        const existingContributors = await loadDataSync('contributors', []);
+        if (existingContributors.find(c => c.cnpj === cnpj)) {
+            alert('Este CNPJ já está cadastrado. Escolha outro.');
+            return;
+        }
 
-    // Verificar se o código já existe
-    if (existingContributors.find(c => c.codigo === codigo)) {
-        alert('Este código já está em uso. Escolha outro.');
-        return;
+        // Verificar se o código já existe
+        if (existingContributors.find(c => c.codigo === codigo)) {
+            alert('Este código já está em uso. Escolha outro.');
+            return;
+        }
     }
 
     // Processar senha se fornecida
@@ -8636,6 +8858,46 @@ async function handleContributorRegistration(e) {
         passwordHash = generateUltraSecureHash(password);
     }
 
+    // Obter contribuintes existentes (com sincronização)
+    const existingContributors = await loadDataSync('contributors', []);
+
+    if (isEditing) {
+        // EDITAR CONTRIBUINTE EXISTENTE
+        const contributorIndex = existingContributors.findIndex(c => c.id === parseInt(editId));
+        if (contributorIndex === -1) {
+            alert('Contribuinte não encontrado para edição.');
+            return;
+        }
+        
+        const existingContributor = existingContributors[contributorIndex];
+        
+        // Atualizar dados do contribuinte
+        existingContributors[contributorIndex] = {
+            ...existingContributor,
+            razaoSocial: razaoSocial,
+            atividade: atividade,
+            regime: regime,
+            municipio: municipio,
+            iss: iss || null,
+            // Atualizar senha apenas se foi informada
+            password: passwordHash || existingContributor.password,
+            updatedAt: new Date().toISOString(),
+            updatedBy: window.currentUser
+        };
+        
+        await saveDataSync('contributors', existingContributors);
+        console.log('✅ Contribuinte atualizado e sincronizado:', existingContributors[contributorIndex]);
+        alert('Contribuinte atualizado com sucesso!');
+        
+        // Limpar formulário e resetar modo
+        cancelEditContributor();
+        
+        // Recarregar lista
+        await loadContributorsList();
+        return;
+    }
+
+    // CRIAR NOVO CONTRIBUINTE
     // Criar objeto do contribuinte
     const newContributor = {
         id: Date.now(),
@@ -8729,37 +8991,17 @@ function showPythonLibraryModal() {
     
     // Carregar e detectar arquivos Python automaticamente
     initializePythonFilesList().then(() => {
-        // Mostrar informação sobre detecção
+        // Configurar seção de adicionar arquivo manualmente (apenas para ambiente file://)
         if (isAdmin) {
-            const infoDiv = modal.querySelector('#python-detection-info');
             const addFileSection = modal.querySelector('#python-add-file-section');
-            if (infoDiv) {
+            if (addFileSection) {
                 const isFileProtocol = window.location.protocol === 'file:';
                 if (isFileProtocol) {
-                    infoDiv.innerHTML = `
-                        <div style="padding: 0.75rem; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: var(--border-radius-1); margin-bottom: 0.5rem;">
-                            <p style="margin: 0; font-size: 0.85rem; color: #856404;">
-                                <strong>⚠️ Ambiente file:// detectado:</strong> A detecção automática requer um servidor HTTP. 
-                                Você pode adicionar arquivos manualmente abaixo ou executar o sistema via servidor (ex: Live Server) para detecção automática completa.
-                            </p>
-                        </div>
-                    `;
-                    // Mostrar seção de adicionar arquivo manualmente
-                    if (addFileSection) {
-                        addFileSection.style.display = 'block';
-                    }
+                    // Mostrar seção de adicionar arquivo manualmente em ambiente file://
+                    addFileSection.style.display = 'block';
                 } else {
-                    infoDiv.innerHTML = `
-                        <div style="padding: 0.75rem; background: #d1ecf1; border-left: 4px solid #17a2b8; border-radius: var(--border-radius-1); margin-bottom: 0.5rem;">
-                            <p style="margin: 0; font-size: 0.85rem; color: #0c5460;">
-                                <strong>ℹ️ Detecção automática ativa:</strong> O sistema detecta arquivos através do <code>index.json</code>.
-                            </p>
-                        </div>
-                    `;
                     // Ocultar seção de adicionar manualmente em servidor HTTP
-                    if (addFileSection) {
-                        addFileSection.style.display = 'none';
-                    }
+                    addFileSection.style.display = 'none';
                 }
             }
         }
@@ -8787,14 +9029,13 @@ function showPythonLibraryModal() {
             <div class="modal-body">
                 ${isAdmin ? `
                     <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--color-light); border-radius: var(--border-radius-1);">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
                             <h3 style="margin: 0; color: var(--color-dark); font-size: 1.1rem;">Gerenciar Biblioteca Python</h3>
                             <button id="refresh-python-list-btn" style="padding: 0.5rem 1rem; background: var(--color-info); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-size: 0.9rem; display: flex; align-items: center; gap: 0.25rem;">
                                 <span class="material-icons-sharp" style="font-size: 1.2rem;">refresh</span>
                                 Atualizar Lista
                             </button>
                         </div>
-                        <div id="python-detection-info" style="margin-bottom: 0.5rem;"></div>
                         <div id="python-add-file-section" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-primary);">
                             <h4 style="margin: 0 0 0.75rem 0; color: var(--color-dark); font-size: 1rem;">Adicionar Arquivo Manualmente</h4>
                             <div style="display: flex; gap: 0.5rem; align-items: end;">
@@ -8808,9 +9049,6 @@ function showPythonLibraryModal() {
                                 </button>
                             </div>
                         </div>
-                        <p style="margin: 0.5rem 0 0 0; font-size: 0.85rem; color: var(--color-dark-variant);">
-                            <small>O sistema detecta automaticamente arquivos Python na pasta <code>assets/py/</code> através do arquivo <code>index.json</code>. Você pode editar as descrições dos arquivos para informar aos usuários o que cada script faz.</small>
-                        </p>
                     </div>
                 ` : ''}
                 <div id="python-library-list" style="display: flex; flex-direction: column; gap: 1rem;">
@@ -8992,6 +9230,16 @@ function renderPythonLibrary(modal, isAdmin) {
 
 // Função para editar descrição de arquivo Python
 function editPythonFileDescription(index, modal) {
+    // Verificar se o usuário atual é administrador
+    const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
+    const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
+    
+    if (!isAdmin) {
+        alert('Apenas administradores podem editar descrições dos arquivos Python.');
+        return;
+    }
+    
     const file = pythonFilesList[index];
     if (!file) return;
     
@@ -9004,7 +9252,6 @@ function editPythonFileDescription(index, modal) {
         savePythonFilesList();
         
         // Recarregar lista
-        const isAdmin = window.currentUser === 'adm' || (JSON.parse(localStorage.getItem('registeredUsers') || '[]').find(u => u.username === window.currentUser)?.control === 'administrador');
         renderPythonLibrary(modal, isAdmin);
         
         console.log(`Descrição do arquivo ${file.name} atualizada.`);
@@ -9125,6 +9372,8 @@ async function initializePythonFilesList() {
 // Tornar funções de contribuintes globalmente acessíveis
 window.showContributorRegistrationModal = showContributorRegistrationModal;
 window.deleteContributor = deleteContributor;
+window.editContributor = editContributor;
+window.cancelEditContributor = cancelEditContributor;
 window.closeContributorRegistrationModal = closeContributorRegistrationModal;
 window.clearAllContributors = clearAllContributors;
 
