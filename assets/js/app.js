@@ -203,7 +203,7 @@
         } else if (dayOfWeek === 0) {
             date.setDate(date.getDate() - 2);
         }
-        return formatDate(date);
+        return date; // Retornar Date, não string formatada
     }
 
     // Função para tentar login automático com credenciais salvas
@@ -1094,7 +1094,13 @@
                     try {
                         if (typeof getLastBusinessDayOfMonth === 'function') {
                             const lastDay = getLastBusinessDayOfMonth();
-                            dctfwebDueDate = formatDate(lastDay);
+                            // Verificar se lastDay é um Date ou uma string
+                            if (lastDay instanceof Date) {
+                                dctfwebDueDate = formatDate(lastDay);
+                            } else {
+                                // Se já for string formatada, usar diretamente
+                                dctfwebDueDate = lastDay;
+                            }
                         }
                     } catch (e) {
                         console.warn('⚠️ Erro ao calcular DCTFWeb due date:', e);
@@ -1254,7 +1260,17 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section" style="animation-delay: 0.15s"></div>
+                    <div class="box animate-section python-library-box" style="animation-delay: 0.15s; cursor: pointer;">
+                        <div class="box-content">
+                            <div class="box-icon">
+                                <span class="material-icons-sharp">code</span>
+                            </div>
+                            <div class="box-info">
+                                <h3>Biblioteca Python</h3>
+                                <p>Arquivos de automação Python</p>
+                            </div>
+                        </div>
+                    </div>
                     <div class="box animate-section" style="animation-delay: 0.2s"></div>
                     <div class="box animate-section" style="animation-delay: 0.25s"></div>
                     <div class="box animate-section" style="animation-delay: 0.3s"></div>
@@ -1284,6 +1300,14 @@
             if (contributorRegistrationBox) {
                 contributorRegistrationBox.addEventListener('click', () => {
                     showContributorRegistrationModal();
+                });
+            }
+            
+            // Adicionar evento de clique ao box de biblioteca Python
+            const pythonLibraryBox = document.querySelector('.python-library-box');
+            if (pythonLibraryBox) {
+                pythonLibraryBox.addEventListener('click', () => {
+                    showPythonLibraryModal();
                 });
             }
         }
@@ -4559,6 +4583,149 @@ function parseErrorLine(errorLine) {
         };
     }
     
+    // Verificar se é erro de Logradouro (Número do logradouro inválido - S/N)
+    const isLogradouroError = /Número\s+do\s+logradouro/i.test(trimmed) ||
+                              (trimmed.includes('Número do logradouro') && trimmed.includes('valor inválido') && trimmed.includes('Registro PAR'));
+    
+    if (isLogradouroError) {
+        console.log('✓ Erro de Logradouro detectado:', trimmed);
+        // Extrair valor inválido entre parênteses (ex: (S/N))
+        const invalidValueMatch = trimmed.match(/\(([^)]+)\)/);
+        const invalidValue = invalidValueMatch ? invalidValueMatch[1] : null;
+        
+        // Extrair número do campo (ex: "Campo 8" ou "Campo 18")
+        const fieldMatch = trimmed.match(/Campo\s+(\d+)/i);
+        const fieldNumber = fieldMatch ? parseInt(fieldMatch[1], 10) : null;
+        
+        // Extrair tipo de registro (ex: "Registro PAR")
+        const recordMatch = trimmed.match(/Registro\s+(\w+)/i);
+        const recordType = recordMatch ? recordMatch[1].toUpperCase() : null;
+        
+        return {
+            type: 'LOGRADOURO',
+            lineNumber: lineNumber,
+            invalidValue: invalidValue,
+            fieldNumber: fieldNumber || 8, // Campo 8 por padrão (usuário mencionou campo 8)
+            recordType: recordType,
+            originalError: trimmed
+        };
+    }
+    
+    // Verificar se é erro de Estabelecimento não encontrado
+    const isEstabelecimentoError = /Estabelecimento\s+não\s+encontrado/i.test(trimmed) ||
+                                   (trimmed.includes('Estabelecimento não encontrado') && trimmed.includes('Registro NFM'));
+    
+    if (isEstabelecimentoError) {
+        console.log('✓ Erro de Estabelecimento detectado:', trimmed);
+        // Extrair valor inválido entre parênteses (ex: (0000))
+        const invalidValueMatch = trimmed.match(/\((\d+)\)/);
+        const invalidValue = invalidValueMatch ? invalidValueMatch[1] : null;
+        
+        // Extrair número do campo (ex: "Campo 2")
+        const fieldMatch = trimmed.match(/Campo\s+(\d+)/i);
+        const fieldNumber = fieldMatch ? parseInt(fieldMatch[1], 10) : null;
+        
+        // Extrair tipo de registro (ex: "Registro NFM")
+        const recordMatch = trimmed.match(/Registro\s+(\w+)/i);
+        const recordType = recordMatch ? recordMatch[1].toUpperCase() : null;
+        
+        return {
+            type: 'ESTABELECIMENTO',
+            lineNumber: lineNumber,
+            invalidValue: invalidValue,
+            fieldNumber: fieldNumber || 2,
+            recordType: recordType,
+            originalError: trimmed
+        };
+    }
+    
+    // Verificar se é erro de Tamanho Inválido (Descrição com tamanho inválido)
+    const isTamanhoInvalidoError = /tamanho\s+inválido/i.test(trimmed) ||
+                                   (trimmed.includes('tamanho inválido') && trimmed.includes('Esperado:') && trimmed.includes('Informado:'));
+    
+    if (isTamanhoInvalidoError) {
+        console.log('✓ Erro de Tamanho Inválido detectado:', trimmed);
+        // Extrair tamanho esperado e informado
+        const esperadoMatch = trimmed.match(/Esperado:\s*(\d+)/i);
+        const informadoMatch = trimmed.match(/Informado:\s*(\d+)/i);
+        const tamanhoEsperado = esperadoMatch ? parseInt(esperadoMatch[1], 10) : null;
+        const tamanhoInformado = informadoMatch ? parseInt(informadoMatch[1], 10) : null;
+        
+        // Extrair número do campo
+        const fieldMatch = trimmed.match(/Campo\s+(\d+)/i);
+        const fieldNumber = fieldMatch ? parseInt(fieldMatch[1], 10) : null;
+        
+        // Extrair tipo de registro
+        const recordMatch = trimmed.match(/Registro\s+(\w+)/i);
+        const recordType = recordMatch ? recordMatch[1].toUpperCase() : null;
+        
+        // Extrair descrição do campo (para identificar qual campo)
+        const campoDescMatch = trimmed.match(/Campo\s+"([^"]+)"/i) || trimmed.match(/Campo\s+([^.]+)/i);
+        const campoDesc = campoDescMatch ? campoDescMatch[1].trim() : null;
+        
+        return {
+            type: 'TAMANHO_INVALIDO',
+            lineNumber: lineNumber,
+            tamanhoEsperado: tamanhoEsperado,
+            tamanhoInformado: tamanhoInformado,
+            fieldNumber: fieldNumber,
+            recordType: recordType,
+            campoDesc: campoDesc,
+            originalError: trimmed
+        };
+    }
+    
+    // Verificar se é erro de Grupo do produto não encontrado
+    const isGrupoError = /Grupo\s+do\s+produto\s+não\s+encontrado/i.test(trimmed) ||
+                         (trimmed.includes('Grupo do produto não encontrado') && trimmed.includes('Registro PRO'));
+    
+    if (isGrupoError) {
+        console.log('✓ Erro de Grupo detectado:', trimmed);
+        // Extrair valor inválido entre parênteses (ex: (97))
+        const invalidValueMatch = trimmed.match(/\((\d+)\)/);
+        const invalidValue = invalidValueMatch ? invalidValueMatch[1] : null;
+        
+        // Extrair número do campo (ex: "Campo 10")
+        const fieldMatch = trimmed.match(/Campo\s+(\d+)/i);
+        const fieldNumber = fieldMatch ? parseInt(fieldMatch[1], 10) : null;
+        
+        // Extrair tipo de registro (ex: "Registro PRO")
+        const recordMatch = trimmed.match(/Registro\s+(\w+)/i);
+        const recordType = recordMatch ? recordMatch[1].toUpperCase() : null;
+        
+        return {
+            type: 'GRUPO',
+            lineNumber: lineNumber,
+            invalidValue: invalidValue,
+            fieldNumber: fieldNumber || 10,
+            recordType: recordType,
+            originalError: trimmed
+        };
+    }
+    
+    // Verificar se é erro de Unidade de Medida em branco
+    const isUndBrancoError = /Unidade\s+de\s+Medida.*em\s+branco/i.test(trimmed) ||
+                            (trimmed.includes('Unidade de Medida') && trimmed.includes('em branco') && trimmed.includes('Registro UND'));
+    
+    if (isUndBrancoError) {
+        console.log('✓ Erro de Unidade de Medida em branco detectado:', trimmed);
+        // Extrair número do campo (ex: "Campo 3")
+        const fieldMatch = trimmed.match(/Campo\s+(\d+)/i);
+        const fieldNumber = fieldMatch ? parseInt(fieldMatch[1], 10) : null;
+        
+        // Extrair tipo de registro (ex: "Registro UND")
+        const recordMatch = trimmed.match(/Registro\s+(\w+)/i);
+        const recordType = recordMatch ? recordMatch[1].toUpperCase() : null;
+        
+        return {
+            type: 'UND_BRANCO',
+            lineNumber: lineNumber,
+            fieldNumber: fieldNumber || 3,
+            recordType: recordType,
+            originalError: trimmed
+        };
+    }
+    
     
     // Outros tipos de erro podem ser adicionados aqui no futuro
     return {
@@ -4986,6 +5153,188 @@ function fixCestError(line, fieldNumber, invalidCest) {
     fields[fieldIndex] = newFieldValue;
     
     // Reconstruir a linha (mantendo a estrutura original com |)
+    return fields.join('|');
+}
+
+// Função para corrigir erro de Logradouro (remover conteúdo entre parênteses)
+function fixLogradouroError(line, fieldNumber) {
+    if (!line || !line.trim()) return line;
+    
+    const fields = line.split('|');
+    
+    if (fieldNumber < 1 || fieldNumber > fields.length) {
+        console.warn(`Campo ${fieldNumber} não existe na linha. Total de campos: ${fields.length}`);
+        return line;
+    }
+    
+    const fieldIndex = fieldNumber - 1;
+    const currentFieldValue = fields[fieldIndex] || '';
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) antes: "${currentFieldValue}"`);
+    
+    // Remover conteúdo entre parênteses (ex: S/N)
+    let newFieldValue = currentFieldValue.replace(/\([^)]*\)/g, '').trim();
+    
+    // Se o campo ficou vazio, deixar vazio (deve conter somente números)
+    // Se ainda tiver conteúdo não numérico, remover tudo que não for número
+    newFieldValue = newFieldValue.replace(/[^\d]/g, '');
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) depois: "${newFieldValue}"`);
+    
+    fields[fieldIndex] = newFieldValue;
+    
+    return fields.join('|');
+}
+
+// Função para corrigir erro de Estabelecimento (trocar 0000 por 0001)
+function fixEstabelecimentoError(line, fieldNumber, invalidValue) {
+    if (!line || !line.trim()) return line;
+    
+    const fields = line.split('|');
+    
+    // Verificar se é uma linha NFM (campo 1 deve ser "NFM")
+    if (fields.length === 0 || !fields[0] || fields[0].trim() !== 'NFM') {
+        console.warn(`Linha não é do tipo NFM. Primeiro campo: "${fields[0] || ''}"`);
+        return line;
+    }
+    
+    if (fieldNumber < 1 || fieldNumber > fields.length) {
+        console.warn(`Campo ${fieldNumber} não existe na linha. Total de campos: ${fields.length}`);
+        return line;
+    }
+    
+    const fieldIndex = fieldNumber - 1;
+    const currentFieldValue = fields[fieldIndex] || '';
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) antes: "${currentFieldValue}"`);
+    
+    // Trocar 0000 por 0001
+    let newFieldValue = currentFieldValue;
+    if (currentFieldValue.trim() === invalidValue || currentFieldValue.trim() === '0000') {
+        newFieldValue = '0001';
+        console.log(`Campo ${fieldNumber}: ${currentFieldValue} → 0001`);
+    } else {
+        console.warn(`Campo ${fieldNumber} não contém "${invalidValue}" (valor atual: "${currentFieldValue}"). Não será alterado.`);
+        return line;
+    }
+    
+    fields[fieldIndex] = newFieldValue;
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) depois: "${newFieldValue}"`);
+    
+    return fields.join('|');
+}
+
+// Função para corrigir erro de Tamanho Inválido (reduzir para tamanho esperado)
+function fixTamanhoInvalidoError(line, fieldNumber, tamanhoEsperado) {
+    if (!line || !line.trim()) return line;
+    
+    const fields = line.split('|');
+    
+    if (fieldNumber < 1 || fieldNumber > fields.length) {
+        console.warn(`Campo ${fieldNumber} não existe na linha. Total de campos: ${fields.length}`);
+        return line;
+    }
+    
+    const fieldIndex = fieldNumber - 1;
+    const currentFieldValue = fields[fieldIndex] || '';
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) antes: "${currentFieldValue}" (${currentFieldValue.length} caracteres)`);
+    
+    // Reduzir para o tamanho esperado
+    let newFieldValue = currentFieldValue;
+    if (currentFieldValue.length > tamanhoEsperado) {
+        newFieldValue = currentFieldValue.substring(0, tamanhoEsperado);
+        console.log(`Campo ${fieldNumber}: reduzido de ${currentFieldValue.length} para ${tamanhoEsperado} caracteres`);
+    } else {
+        console.log(`Campo ${fieldNumber} já tem tamanho correto (${currentFieldValue.length} caracteres)`);
+        return line;
+    }
+    
+    fields[fieldIndex] = newFieldValue;
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) depois: "${newFieldValue}" (${newFieldValue.length} caracteres)`);
+    
+    return fields.join('|');
+}
+
+// Função para corrigir erro de Grupo (trocar por 001)
+function fixGrupoError(line, fieldNumber, invalidValue) {
+    if (!line || !line.trim()) return line;
+    
+    const fields = line.split('|');
+    
+    if (fieldNumber < 1 || fieldNumber > fields.length) {
+        console.warn(`Campo ${fieldNumber} não existe na linha. Total de campos: ${fields.length}`);
+        return line;
+    }
+    
+    const fieldIndex = fieldNumber - 1;
+    const currentFieldValue = fields[fieldIndex] || '';
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) antes: "${currentFieldValue}"`);
+    
+    // O campo exige 3 números, então o erro menciona 97 mas no arquivo será 097
+    // Trocar 097 por 001 (ou qualquer valor que contenha o número do erro)
+    let newFieldValue = currentFieldValue;
+    
+    // Normalizar o valor inválido para 3 dígitos (097)
+    const invalidValueNormalized = invalidValue.padStart(3, '0');
+    
+    // Verificar se o campo contém o valor inválido (pode estar como 97 ou 097)
+    const currentNormalized = currentFieldValue.trim().padStart(3, '0');
+    
+    if (currentNormalized === invalidValueNormalized || currentFieldValue.trim() === invalidValue) {
+        newFieldValue = '001';
+        console.log(`Campo ${fieldNumber}: ${currentFieldValue} (${invalidValueNormalized}) → 001`);
+    } else {
+        console.warn(`Campo ${fieldNumber} não contém "${invalidValue}" ou "${invalidValueNormalized}" (valor atual: "${currentFieldValue}"). Não será alterado.`);
+        return line;
+    }
+    
+    fields[fieldIndex] = newFieldValue;
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) depois: "${newFieldValue}"`);
+    
+    return fields.join('|');
+}
+
+// Função para corrigir erro de Unidade de Medida em branco (adicionar "UNIDADE")
+function fixUndBrancoError(line, fieldNumber) {
+    if (!line || !line.trim()) return line;
+    
+    const fields = line.split('|');
+    
+    // Verificar se é uma linha UND (campo 1 deve ser "UND")
+    if (fields.length === 0 || !fields[0] || fields[0].trim() !== 'UND') {
+        console.warn(`Linha não é do tipo UND. Primeiro campo: "${fields[0] || ''}"`);
+        return line;
+    }
+    
+    if (fieldNumber < 1 || fieldNumber > fields.length) {
+        console.warn(`Campo ${fieldNumber} não existe na linha. Total de campos: ${fields.length}`);
+        return line;
+    }
+    
+    const fieldIndex = fieldNumber - 1;
+    const currentFieldValue = fields[fieldIndex] || '';
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) antes: "${currentFieldValue}"`);
+    
+    // Se o campo está vazio ou em branco, adicionar "UNIDADE"
+    let newFieldValue = currentFieldValue.trim();
+    if (!newFieldValue || newFieldValue === '') {
+        newFieldValue = 'UNIDADE';
+        console.log(`Campo ${fieldNumber}: vazio → "UNIDADE"`);
+    } else {
+        console.log(`Campo ${fieldNumber} já tem valor: "${newFieldValue}". Não será alterado.`);
+        return line;
+    }
+    
+    fields[fieldIndex] = newFieldValue;
+    
+    console.log(`Campo ${fieldNumber} (índice ${fieldIndex}) depois: "${newFieldValue}"`);
+    
     return fields.join('|');
 }
 
@@ -5537,7 +5886,291 @@ function processFortesAdjustments() {
                     reason: `Valor ${invalidValue} não encontrado no campo ${fieldNumber}` 
                 });
             }
-        } else {
+        }
+        // Verificar se é erro de Logradouro
+        else if (errorInfo.type === 'LOGRADOURO') {
+            const { lineNumber, fieldNumber } = errorInfo;
+            
+            if (lineNumber < 1 || lineNumber > adjustedLines.length) {
+                console.warn(`Linha ${lineNumber} não existe no arquivo. Total de linhas: ${adjustedLines.length}`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: `Linha ${lineNumber} não existe no arquivo` 
+                });
+                return;
+            }
+
+            const lineIndex = lineNumber - 1;
+            const originalLine = adjustedLines[lineIndex];
+            
+            if (!originalLine || !originalLine.trim()) {
+                console.warn(`Linha ${lineNumber} está vazia`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Linha vazia' 
+                });
+                return;
+            }
+
+            const correctedLine = fixLogradouroError(originalLine, fieldNumber);
+            
+            if (correctedLine !== originalLine) {
+                adjustedLines[lineIndex] = correctedLine;
+                adjustmentsApplied++;
+                errorsFixed.push({
+                    line: lineNumber,
+                    type: 'LOGRADOURO',
+                    field: fieldNumber,
+                    originalLine: originalLine.substring(0, 100) + '...',
+                    correctedLine: correctedLine.substring(0, 100) + '...'
+                });
+                console.log(`✓ Erro de Logradouro corrigido na linha ${lineNumber}: campo ${fieldNumber} limpo`);
+            } else {
+                console.warn(`Não foi possível corrigir o erro na linha ${lineNumber}.`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Não foi possível aplicar a correção' 
+                });
+            }
+        }
+        // Verificar se é erro de Estabelecimento
+        else if (errorInfo.type === 'ESTABELECIMENTO') {
+            const { lineNumber, invalidValue, fieldNumber } = errorInfo;
+            
+            if (lineNumber < 1 || lineNumber > adjustedLines.length) {
+                console.warn(`Linha ${lineNumber} não existe no arquivo. Total de linhas: ${adjustedLines.length}`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: `Linha ${lineNumber} não existe no arquivo` 
+                });
+                return;
+            }
+
+            const lineIndex = lineNumber - 1;
+            const originalLine = adjustedLines[lineIndex];
+            
+            if (!originalLine || !originalLine.trim()) {
+                console.warn(`Linha ${lineNumber} está vazia`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Linha vazia' 
+                });
+                return;
+            }
+
+            const correctedLine = fixEstabelecimentoError(originalLine, fieldNumber, invalidValue);
+            
+            if (correctedLine !== originalLine) {
+                adjustedLines[lineIndex] = correctedLine;
+                adjustmentsApplied++;
+                errorsFixed.push({
+                    line: lineNumber,
+                    type: 'ESTABELECIMENTO',
+                    invalidValue: invalidValue,
+                    correctedValue: '0001',
+                    field: fieldNumber,
+                    originalLine: originalLine.substring(0, 100) + '...',
+                    correctedLine: correctedLine.substring(0, 100) + '...'
+                });
+                console.log(`✓ Erro de Estabelecimento corrigido na linha ${lineNumber}: ${invalidValue} → 0001 no campo ${fieldNumber}`);
+                
+                // Corrigir também erros relacionados de PNM na mesma linha ou próximas
+                // Procurar por linhas PNM que referenciam o estabelecimento 0000
+                for (let i = 0; i < adjustedLines.length; i++) {
+                    const pnmLine = adjustedLines[i];
+                    if (pnmLine && pnmLine.trim().startsWith('PNM|')) {
+                        const pnmFields = pnmLine.split('|');
+                        // Verificar se campo 2 (estabelecimento) é 0000
+                        if (pnmFields.length > 2 && pnmFields[1] && pnmFields[1].trim() === '0000') {
+                            pnmFields[1] = '0001';
+                            adjustedLines[i] = pnmFields.join('|');
+                            console.log(`✓ Linha PNM ${i + 1} corrigida: estabelecimento 0000 → 0001`);
+                        }
+                    }
+                }
+            } else {
+                console.warn(`Não foi possível corrigir o erro na linha ${lineNumber}.`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Não foi possível aplicar a correção' 
+                });
+            }
+        }
+        // Verificar se é erro de Tamanho Inválido
+        else if (errorInfo.type === 'TAMANHO_INVALIDO') {
+            const { lineNumber, tamanhoEsperado, fieldNumber } = errorInfo;
+            
+            console.log(`🔍 Processando erro de Tamanho Inválido: linha ${lineNumber}, campo ${fieldNumber}, tamanho esperado: ${tamanhoEsperado}`);
+            
+            if (!tamanhoEsperado || !fieldNumber) {
+                console.warn(`Erro de Tamanho Inválido incompleto: tamanhoEsperado=${tamanhoEsperado}, fieldNumber=${fieldNumber}`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: `Dados incompletos: tamanhoEsperado=${tamanhoEsperado}, fieldNumber=${fieldNumber}` 
+                });
+                return;
+            }
+            
+            if (lineNumber < 1 || lineNumber > adjustedLines.length) {
+                console.warn(`Linha ${lineNumber} não existe no arquivo. Total de linhas: ${adjustedLines.length}`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: `Linha ${lineNumber} não existe no arquivo` 
+                });
+                return;
+            }
+
+            const lineIndex = lineNumber - 1;
+            const originalLine = adjustedLines[lineIndex];
+            
+            if (!originalLine || !originalLine.trim()) {
+                console.warn(`Linha ${lineNumber} está vazia`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Linha vazia' 
+                });
+                return;
+            }
+
+            console.log(`Linha original (primeiros 200 chars): ${originalLine.substring(0, 200)}`);
+            
+            const correctedLine = fixTamanhoInvalidoError(originalLine, fieldNumber, tamanhoEsperado);
+            
+            console.log(`Linha corrigida (primeiros 200 chars): ${correctedLine.substring(0, 200)}`);
+            console.log(`Linhas são diferentes? ${correctedLine !== originalLine}`);
+            
+            if (correctedLine !== originalLine) {
+                adjustedLines[lineIndex] = correctedLine;
+                adjustmentsApplied++;
+                errorsFixed.push({
+                    line: lineNumber,
+                    type: 'TAMANHO_INVALIDO',
+                    tamanhoEsperado: tamanhoEsperado,
+                    field: fieldNumber,
+                    originalLine: originalLine.substring(0, 100) + '...',
+                    correctedLine: correctedLine.substring(0, 100) + '...'
+                });
+                console.log(`✓ Erro de Tamanho Inválido corrigido na linha ${lineNumber}: campo ${fieldNumber} reduzido para ${tamanhoEsperado} caracteres`);
+            } else {
+                console.warn(`Não foi possível corrigir o erro na linha ${lineNumber}. Verifique os logs acima para detalhes.`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Não foi possível aplicar a correção - verifique se o campo existe e tem tamanho maior que o esperado' 
+                });
+            }
+        }
+        // Verificar se é erro de Grupo
+        else if (errorInfo.type === 'GRUPO') {
+            const { lineNumber, invalidValue, fieldNumber } = errorInfo;
+            
+            if (lineNumber < 1 || lineNumber > adjustedLines.length) {
+                console.warn(`Linha ${lineNumber} não existe no arquivo. Total de linhas: ${adjustedLines.length}`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: `Linha ${lineNumber} não existe no arquivo` 
+                });
+                return;
+            }
+
+            const lineIndex = lineNumber - 1;
+            const originalLine = adjustedLines[lineIndex];
+            
+            if (!originalLine || !originalLine.trim()) {
+                console.warn(`Linha ${lineNumber} está vazia`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Linha vazia' 
+                });
+                return;
+            }
+
+            const correctedLine = fixGrupoError(originalLine, fieldNumber, invalidValue);
+            
+            if (correctedLine !== originalLine) {
+                adjustedLines[lineIndex] = correctedLine;
+                adjustmentsApplied++;
+                errorsFixed.push({
+                    line: lineNumber,
+                    type: 'GRUPO',
+                    invalidValue: invalidValue,
+                    correctedValue: '001',
+                    field: fieldNumber,
+                    originalLine: originalLine.substring(0, 100) + '...',
+                    correctedLine: correctedLine.substring(0, 100) + '...'
+                });
+                console.log(`✓ Erro de Grupo corrigido na linha ${lineNumber}: ${invalidValue} → 001 no campo ${fieldNumber}`);
+            } else {
+                console.warn(`Não foi possível corrigir o erro na linha ${lineNumber}.`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Não foi possível aplicar a correção' 
+                });
+            }
+        }
+        // Verificar se é erro de Unidade de Medida em branco
+        else if (errorInfo.type === 'UND_BRANCO') {
+            const { lineNumber, fieldNumber } = errorInfo;
+            
+            if (lineNumber < 1 || lineNumber > adjustedLines.length) {
+                console.warn(`Linha ${lineNumber} não existe no arquivo. Total de linhas: ${adjustedLines.length}`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: `Linha ${lineNumber} não existe no arquivo` 
+                });
+                return;
+            }
+
+            const lineIndex = lineNumber - 1;
+            const originalLine = adjustedLines[lineIndex];
+            
+            if (!originalLine || !originalLine.trim()) {
+                console.warn(`Linha ${lineNumber} está vazia`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Linha vazia' 
+                });
+                return;
+            }
+
+            const correctedLine = fixUndBrancoError(originalLine, fieldNumber);
+            
+            if (correctedLine !== originalLine) {
+                adjustedLines[lineIndex] = correctedLine;
+                adjustmentsApplied++;
+                errorsFixed.push({
+                    line: lineNumber,
+                    type: 'UND_BRANCO',
+                    field: fieldNumber,
+                    addedValue: 'UNIDADE',
+                    originalLine: originalLine.substring(0, 100) + '...',
+                    correctedLine: correctedLine.substring(0, 100) + '...'
+                });
+                console.log(`✓ Erro de Unidade de Medida em branco corrigido na linha ${lineNumber}: campo ${fieldNumber} preenchido com "UNIDADE"`);
+            } else {
+                console.warn(`Não foi possível corrigir o erro na linha ${lineNumber}.`);
+                errorsNotFixed.push({ 
+                    line: lineNumber, 
+                    error: trimmedInstruction, 
+                    reason: 'Não foi possível aplicar a correção' 
+                });
+            }
+        }
+        else {
             console.warn(`Tipo de erro não suportado: ${errorInfo.type}`);
             errorsNotFixed.push({ 
                 line: errorInfo.lineNumber, 
@@ -8004,11 +8637,465 @@ async function handleContributorRegistration(e) {
     alert(`Contribuinte "${razaoSocial}" cadastrado com sucesso!`);
 }
 
+// ==================== BIBLIOTECA PYTHON ====================
+
+// Lista de arquivos Python disponíveis (será carregada dinamicamente)
+let pythonFilesList = [];
+
+// Função para carregar lista de arquivos Python
+async function loadPythonFilesList() {
+    try {
+        // Tentar carregar lista de arquivos do localStorage
+        const savedList = localStorage.getItem('pythonFilesList');
+        if (savedList) {
+            pythonFilesList = JSON.parse(savedList);
+            return pythonFilesList;
+        }
+        
+        // Se não houver lista salva, criar lista vazia
+        // Os arquivos serão adicionados manualmente ou via interface admin
+        pythonFilesList = [];
+        return pythonFilesList;
+    } catch (error) {
+        console.error('Erro ao carregar lista de arquivos Python:', error);
+        return [];
+    }
+}
+
+// Função para salvar lista de arquivos Python
+function savePythonFilesList() {
+    try {
+        localStorage.setItem('pythonFilesList', JSON.stringify(pythonFilesList));
+        // Sincronizar com Supabase se disponível
+        if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+            window.supabaseSync.save('pythonFilesList', pythonFilesList).catch(e => {
+                console.warn('Erro ao sincronizar lista de arquivos Python:', e);
+            });
+        }
+    } catch (error) {
+        console.error('Erro ao salvar lista de arquivos Python:', error);
+    }
+}
+
+// Função para mostrar modal da biblioteca Python
+function showPythonLibraryModal() {
+    // Verificar se o usuário atual é administrador
+    const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
+    const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
+    
+    const modal = document.createElement('div');
+    modal.className = 'python-library-modal';
+    
+    // Adicionar classe de modo escuro se aplicável
+    if (document.body.classList.contains('dark-mode-variables')) {
+        modal.classList.add('dark-mode-variables');
+    }
+    
+    // Carregar e detectar arquivos Python automaticamente
+    initializePythonFilesList().then(() => {
+        // Mostrar informação sobre detecção
+        if (isAdmin) {
+            const infoDiv = modal.querySelector('#python-detection-info');
+            const addFileSection = modal.querySelector('#python-add-file-section');
+            if (infoDiv) {
+                const isFileProtocol = window.location.protocol === 'file:';
+                if (isFileProtocol) {
+                    infoDiv.innerHTML = `
+                        <div style="padding: 0.75rem; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: var(--border-radius-1); margin-bottom: 0.5rem;">
+                            <p style="margin: 0; font-size: 0.85rem; color: #856404;">
+                                <strong>⚠️ Ambiente file:// detectado:</strong> A detecção automática requer um servidor HTTP. 
+                                Você pode adicionar arquivos manualmente abaixo ou executar o sistema via servidor (ex: Live Server) para detecção automática completa.
+                            </p>
+                        </div>
+                    `;
+                    // Mostrar seção de adicionar arquivo manualmente
+                    if (addFileSection) {
+                        addFileSection.style.display = 'block';
+                    }
+                } else {
+                    infoDiv.innerHTML = `
+                        <div style="padding: 0.75rem; background: #d1ecf1; border-left: 4px solid #17a2b8; border-radius: var(--border-radius-1); margin-bottom: 0.5rem;">
+                            <p style="margin: 0; font-size: 0.85rem; color: #0c5460;">
+                                <strong>ℹ️ Detecção automática ativa:</strong> O sistema detecta arquivos através do <code>index.json</code>.
+                            </p>
+                        </div>
+                    `;
+                    // Ocultar seção de adicionar manualmente em servidor HTTP
+                    if (addFileSection) {
+                        addFileSection.style.display = 'none';
+                    }
+                }
+            }
+        }
+        renderPythonLibrary(modal, isAdmin);
+    }).catch(error => {
+        console.error('Erro ao carregar arquivos Python:', error);
+        const listContainer = modal.querySelector('#python-library-list');
+        if (listContainer) {
+            listContainer.innerHTML = `
+                <p style="text-align: center; color: var(--color-danger); padding: 2rem;">
+                    Erro ao carregar arquivos Python. ${isAdmin ? 'Verifique se o arquivo index.json existe em assets/py/' : 'Tente novamente mais tarde.'}
+                </p>
+            `;
+        }
+    });
+    
+    modal.innerHTML = `
+        <div class="python-library-modal-content">
+            <div class="modal-header">
+                <h2>Biblioteca Python - Automação</h2>
+                <button class="close-btn python-library-close-btn">
+                    <span class="material-icons-sharp">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                ${isAdmin ? `
+                    <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--color-light); border-radius: var(--border-radius-1);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3 style="margin: 0; color: var(--color-dark); font-size: 1.1rem;">Gerenciar Biblioteca Python</h3>
+                            <button id="refresh-python-list-btn" style="padding: 0.5rem 1rem; background: var(--color-info); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-size: 0.9rem; display: flex; align-items: center; gap: 0.25rem;">
+                                <span class="material-icons-sharp" style="font-size: 1.2rem;">refresh</span>
+                                Atualizar Lista
+                            </button>
+                        </div>
+                        <div id="python-detection-info" style="margin-bottom: 0.5rem;"></div>
+                        <div id="python-add-file-section" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-primary);">
+                            <h4 style="margin: 0 0 0.75rem 0; color: var(--color-dark); font-size: 1rem;">Adicionar Arquivo Manualmente</h4>
+                            <div style="display: flex; gap: 0.5rem; align-items: end;">
+                                <div style="flex: 1;">
+                                    <label style="display: block; margin-bottom: 0.5rem; color: var(--color-dark-variant); font-size: 0.9rem;">Nome do arquivo (ex: script.py)</label>
+                                    <input type="text" id="new-python-filename" placeholder="exemplo.py" style="width: 100%; padding: 0.75rem; border: 1px solid var(--color-primary); border-radius: var(--border-radius-1); font-size: 1rem; font-family: 'Poppins', sans-serif;">
+                                </div>
+                                <button id="add-python-file-btn" style="padding: 0.75rem 1.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-weight: 600; white-space: nowrap;">
+                                    <span class="material-icons-sharp" style="vertical-align: middle; margin-right: 0.25rem;">add</span>
+                                    Adicionar
+                                </button>
+                            </div>
+                        </div>
+                        <p style="margin: 0.5rem 0 0 0; font-size: 0.85rem; color: var(--color-dark-variant);">
+                            <small>O sistema detecta automaticamente arquivos Python na pasta <code>assets/py/</code> através do arquivo <code>index.json</code>. Você pode editar as descrições dos arquivos para informar aos usuários o que cada script faz.</small>
+                        </p>
+                    </div>
+                ` : ''}
+                <div id="python-library-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <p style="text-align: center; color: var(--color-dark-variant);">Carregando arquivos...</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Fechar modal
+    const closeBtn = modal.querySelector('.python-library-close-btn');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            modal.remove();
+        });
+    }
+    
+    // Fechar ao clicar fora do modal
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.remove();
+        }
+    });
+    
+    // Adicionar eventos (apenas para admins)
+    if (isAdmin) {
+        const refreshBtn = modal.querySelector('#refresh-python-list-btn');
+        const addFileBtn = modal.querySelector('#add-python-file-btn');
+        const filenameInput = modal.querySelector('#new-python-filename');
+        
+        // Botão de atualizar lista (detecta novos arquivos automaticamente)
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', async () => {
+                refreshBtn.disabled = true;
+                refreshBtn.innerHTML = '<span class="material-icons-sharp" style="font-size: 1.2rem; animation: spin 1s linear infinite;">refresh</span> Detectando...';
+                
+                // Salvar descrições existentes antes de atualizar
+                const currentDescriptions = new Map();
+                pythonFilesList.forEach(file => {
+                    if (file.description) {
+                        currentDescriptions.set(file.name, file.description);
+                    }
+                });
+                
+                // Detectar novos arquivos
+                await initializePythonFilesList();
+                
+                // Restaurar descrições existentes
+                pythonFilesList.forEach(file => {
+                    if (currentDescriptions.has(file.name)) {
+                        file.description = currentDescriptions.get(file.name);
+                    }
+                });
+                savePythonFilesList();
+                
+                // Recarregar interface
+                renderPythonLibrary(modal, isAdmin);
+                
+                refreshBtn.disabled = false;
+                refreshBtn.innerHTML = '<span class="material-icons-sharp" style="font-size: 1.2rem;">refresh</span> Atualizar Lista';
+            });
+        }
+        
+        // Botão de adicionar arquivo manualmente (para ambiente file://)
+        if (addFileBtn && filenameInput) {
+            addFileBtn.addEventListener('click', () => {
+                const fileName = filenameInput.value.trim();
+                if (!fileName) {
+                    alert('Por favor, informe o nome do arquivo.');
+                    return;
+                }
+                
+                // Verificar se termina com .py
+                if (!fileName.toLowerCase().endsWith('.py')) {
+                    alert('O arquivo deve ter extensão .py');
+                    return;
+                }
+                
+                // Verificar se o arquivo já existe
+                if (pythonFilesList.find(f => f.name === fileName)) {
+                    alert('Este arquivo já está na lista.');
+                    return;
+                }
+                
+                // Adicionar à lista
+                pythonFilesList.push({ name: fileName, description: '' });
+                savePythonFilesList();
+                
+                // Limpar input e recarregar lista
+                filenameInput.value = '';
+                renderPythonLibrary(modal, isAdmin);
+                
+                console.log(`Arquivo ${fileName} adicionado manualmente à biblioteca Python.`);
+            });
+            
+            // Permitir adicionar com Enter
+            filenameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    addFileBtn.click();
+                }
+            });
+        }
+    }
+}
+
+// Função para renderizar a lista de arquivos Python
+function renderPythonLibrary(modal, isAdmin) {
+    const listContainer = modal.querySelector('#python-library-list');
+    
+    if (!listContainer) return;
+    
+    if (pythonFilesList.length === 0) {
+        listContainer.innerHTML = `
+            <p style="text-align: center; color: var(--color-dark-variant); padding: 2rem;">
+                Nenhum arquivo Python detectado na pasta assets/py/.
+                ${isAdmin ? `
+                    <br><br>
+                    <div style="background: var(--color-light); padding: 1rem; border-radius: var(--border-radius-1); margin-top: 1rem; text-align: left;">
+                        <strong style="display: block; margin-bottom: 0.5rem;">Como adicionar arquivos:</strong>
+                        <ol style="margin: 0; padding-left: 1.5rem; font-size: 0.9rem;">
+                            <li>Adicione arquivos .py na pasta <code>assets/py/</code></li>
+                            <li>Execute o script <code>generate_index.py</code> para gerar/atualizar o index.json</li>
+                            <li>Clique em "Atualizar Lista" para detectar os novos arquivos</li>
+                            <li>Edite as descrições dos arquivos para informar aos usuários</li>
+                        </ol>
+                    </div>
+                ` : ''}
+            </p>
+        `;
+        return;
+    }
+    
+    listContainer.innerHTML = pythonFilesList.map((file, index) => {
+        const fileName = file.name || 'arquivo.py';
+        const description = file.description || '';
+        const filePath = `assets/py/${fileName}`;
+        
+        return `
+            <div class="python-file-item" style="background: var(--color-white); border-radius: var(--card-border-radius); padding: 1.5rem; box-shadow: var(--box-shadow); display: flex; flex-direction: column; gap: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: start; gap: 1rem;">
+                    <div style="flex: 1;">
+                        <h3 style="margin: 0 0 0.5rem 0; color: var(--color-dark); display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="material-icons-sharp" style="color: var(--color-primary);">code</span>
+                            ${escapeHtml(fileName)}
+                        </h3>
+                        <div class="python-file-description" style="color: var(--color-dark-variant); min-height: 2rem;">
+                            ${description ? `<p style="margin: 0;">${escapeHtml(description)}</p>` : '<p style="margin: 0; font-style: italic; color: var(--color-info);">Sem descrição</p>'}
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: start;">
+                        ${isAdmin ? `
+                            <button class="edit-description-btn" data-index="${index}" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Editar descrição">
+                                <span class="material-icons-sharp" style="font-size: 1.2rem;">edit</span>
+                            </button>
+                        ` : ''}
+                        <a href="${filePath}" download="${fileName}" class="download-python-btn" style="padding: 0.5rem; background: var(--color-success); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; display: flex; align-items: center; gap: 0.25rem; text-decoration: none;" title="Baixar arquivo">
+                            <span class="material-icons-sharp" style="font-size: 1.2rem;">download</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Adicionar eventos de edição de descrição e remoção (apenas para admins)
+    if (isAdmin) {
+        const editButtons = listContainer.querySelectorAll('.edit-description-btn');
+        editButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(e.currentTarget.getAttribute('data-index'));
+                editPythonFileDescription(index, modal);
+            });
+        });
+        
+    }
+}
+
+// Função para editar descrição de arquivo Python
+function editPythonFileDescription(index, modal) {
+    const file = pythonFilesList[index];
+    if (!file) return;
+    
+    const currentDescription = file.description || '';
+    
+    const newDescription = prompt(`Editar descrição do arquivo "${file.name}":`, currentDescription);
+    
+    if (newDescription !== null) {
+        file.description = newDescription.trim();
+        savePythonFilesList();
+        
+        // Recarregar lista
+        const isAdmin = window.currentUser === 'adm' || (JSON.parse(localStorage.getItem('registeredUsers') || '[]').find(u => u.username === window.currentUser)?.control === 'administrador');
+        renderPythonLibrary(modal, isAdmin);
+        
+        console.log(`Descrição do arquivo ${file.name} atualizada.`);
+    }
+}
+
+// Função para detectar arquivos Python na pasta assets/py/ automaticamente
+async function detectPythonFiles() {
+    const detectedFiles = [];
+    
+    // Carregar descrições salvas
+    const savedList = localStorage.getItem('pythonFilesList');
+    const savedFiles = savedList ? JSON.parse(savedList) : [];
+    const savedFilesMap = new Map(savedFiles.map(f => [f.name, f.description]));
+    
+    // Verificar se estamos em ambiente file:// (CORS bloqueado)
+    const isFileProtocol = window.location.protocol === 'file:';
+    
+    // PRIMEIRO: Tentar carregar arquivo de índice (index.json) se existir
+    // Este arquivo é gerado automaticamente pelo script generate_index.py
+    if (!isFileProtocol) {
+        try {
+            const indexResponse = await fetch('assets/py/index.json');
+            if (indexResponse.ok) {
+                const indexData = await indexResponse.json();
+                if (Array.isArray(indexData.files) && indexData.files.length > 0) {
+                    console.log(`📋 Carregados ${indexData.files.length} arquivos do index.json`);
+                    // Verificar se cada arquivo realmente existe e adicionar à lista
+                    for (const fileName of indexData.files) {
+                        try {
+                            const fileResponse = await fetch(`assets/py/${fileName}`, { method: 'HEAD' });
+                            if (fileResponse.ok) {
+                                detectedFiles.push({
+                                    name: fileName,
+                                    description: savedFilesMap.get(fileName) || ''
+                                });
+                            } else {
+                                console.warn(`Arquivo ${fileName} listado no index.json mas não encontrado (404)`);
+                            }
+                        } catch (error) {
+                            console.warn(`Erro ao verificar arquivo ${fileName}:`, error);
+                        }
+                    }
+                    if (detectedFiles.length > 0) {
+                        return detectedFiles;
+                    }
+                }
+            }
+        } catch (error) {
+            if (error.name === 'TypeError' && error.message.includes('CORS')) {
+                console.log('ℹ️ CORS bloqueado (ambiente file://), usando lista salva');
+            } else {
+                console.log('ℹ️ index.json não encontrado ou erro ao carregar:', error.message);
+            }
+        }
+    } else {
+        console.log('ℹ️ Ambiente file:// detectado, usando lista salva do localStorage');
+    }
+    
+    // SEGUNDO: Se não houver index.json ou estiver em file://, usar lista salva
+    // Verificar arquivos já conhecidos da lista salva
+    const filesToCheck = new Set();
+    savedFiles.forEach(f => filesToCheck.add(f.name));
+    
+    // Se não estiver em file://, verificar se os arquivos ainda existem
+    if (!isFileProtocol) {
+        for (const fileName of filesToCheck) {
+            try {
+                const response = await fetch(`assets/py/${fileName}`, { method: 'HEAD' });
+                if (response.ok) {
+                    detectedFiles.push({
+                        name: fileName,
+                        description: savedFilesMap.get(fileName) || ''
+                    });
+                } else {
+                    // Arquivo foi removido, não adicionar à lista
+                    console.log(`Arquivo ${fileName} não encontrado mais na pasta`);
+                }
+            } catch (error) {
+                // Erro ao verificar, manter na lista se já estava salvo
+                if (savedFilesMap.has(fileName)) {
+                    detectedFiles.push({
+                        name: fileName,
+                        description: savedFilesMap.get(fileName) || ''
+                    });
+                }
+            }
+        }
+    } else {
+        // Em ambiente file://, usar lista salva diretamente (não podemos verificar)
+        savedFiles.forEach(file => {
+            detectedFiles.push({
+                name: file.name,
+                description: file.description || ''
+            });
+        });
+    }
+    
+    return detectedFiles;
+}
+
+// Função para inicializar lista de arquivos Python (será chamada quando necessário)
+async function initializePythonFilesList() {
+    console.log('🔍 Detectando arquivos Python na pasta assets/py/...');
+    
+    // Detectar arquivos automaticamente
+    const detectedFiles = await detectPythonFiles();
+    
+    // Atualizar lista mantendo descrições existentes
+    pythonFilesList = detectedFiles;
+    savePythonFilesList();
+    
+    console.log(`✅ ${detectedFiles.length} arquivo(s) Python detectado(s):`, detectedFiles.map(f => f.name));
+    
+    return detectedFiles;
+}
+
 // Tornar funções de contribuintes globalmente acessíveis
 window.showContributorRegistrationModal = showContributorRegistrationModal;
 window.deleteContributor = deleteContributor;
 window.closeContributorRegistrationModal = closeContributorRegistrationModal;
 window.clearAllContributors = clearAllContributors;
+
+// Tornar funções da biblioteca Python globalmente acessíveis
+window.showPythonLibraryModal = showPythonLibraryModal;
+window.initializePythonFilesList = initializePythonFilesList;
 
 // Configurar eventos
 document.addEventListener('DOMContentLoaded', async () => {
