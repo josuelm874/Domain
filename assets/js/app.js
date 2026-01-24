@@ -1,7 +1,8 @@
 //------------------------------------ SISTEMA PRINCIPAL ----------------------------------------//
 (function() {
     // Função helper para logs de debug (trata erros de bloqueio silenciosamente)
-    const debugLog = (location, message, data = {}) => {
+    // Tornar global para ser acessível em todas as funções
+    window.debugLog = (location, message, data = {}) => {
         try {
             fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1', {
                 method: 'POST',
@@ -23,6 +24,7 @@
             // Silenciosamente ignorar qualquer erro
         }
     };
+    const debugLog = window.debugLog; // Alias local para compatibilidade
     
     // Função auxiliar para garantir que elementos sejam encontrados
     const ensureElements = () => {
@@ -2276,9 +2278,17 @@ function createIcmsWithholdingPage(mainContent) {
     mainContent.innerHTML = `
         <h1>ICMS Withholding</h1>
         <div class="icms-withholding-container" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
-            <!-- Status do Modelo Excel (carregado automaticamente) -->
+            <!-- Status do Modelo Excel -->
             <div class="box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
                 <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--color-dark);">Arquivo Modelo Excel:</label>
+                <!-- Input de arquivo (apenas para modo local) -->
+                <div id="icms-modelo-input-container" style="display: none; margin-bottom: 0.5rem;">
+                    <input type="file" id="icms-modelo-input" accept=".xlsx,.xls" style="display: none;">
+                    <button id="icms-modelo-select-btn" class="btn-process" style="padding: 0.5rem 1rem; background: var(--color-primary); color: var(--color-white); border: none; border-radius: var(--border-radius-1); cursor: pointer; font-family: 'Poppins', sans-serif; font-weight: 500; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.5rem;">
+                        <span class="material-icons-sharp" style="font-size: 1rem;">folder_open</span>
+                        Selecionar Modelo Excel
+                    </button>
+                </div>
                 <p id="icms-modelo-info" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--color-dark-variant);">
                     <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">hourglass_empty</span>
                     Carregando modelo Excel...
@@ -2314,6 +2324,9 @@ function createIcmsWithholdingPage(mainContent) {
     `;
 
     const icmsModeloInfo = document.getElementById('icms-modelo-info');
+    const icmsModeloInputContainer = document.getElementById('icms-modelo-input-container');
+    const icmsModeloInput = document.getElementById('icms-modelo-input');
+    const icmsModeloSelectBtn = document.getElementById('icms-modelo-select-btn');
     const icmsXmlBox = document.getElementById('icms-xml-box');
     const icmsXmlInput = document.getElementById('icms-xml-input');
     const icmsXmlLabel = document.getElementById('icms-xml-label');
@@ -2324,12 +2337,94 @@ function createIcmsWithholdingPage(mainContent) {
     const icmsStatus = document.getElementById('icms-status');
     const icmsStatusText = document.getElementById('icms-status-text');
     
-    // Carregar automaticamente a planilha modelo do caminho fixo
+    // Detectar se está em servidor ou local
+    const isServerMode = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+    
+    // Função para carregar modelo a partir de um ArrayBuffer
+    async function loadModeloFromBuffer(arrayBuffer, fileName = 'ICMS ST.xlsx') {
+        try {
+            // Carregar com XLSX para leitura (compatibilidade)
+            icmsModeloWorkbook = XLSX.read(arrayBuffer, { type: 'array' });
+            
+            // Carregar com ExcelJS para preservar formatações
+            if (typeof ExcelJS !== 'undefined') {
+                const workbook = new ExcelJS.Workbook();
+                await workbook.xlsx.load(arrayBuffer);
+                icmsModeloExcelJS = workbook;
+                console.log('✅ Modelo ExcelJS carregado:', fileName, 'Abas:', workbook.worksheets.map(ws => ws.name));
+                
+                // #region agent log - Verificar tabelas no modelo ao carregar (API e modelo interno)
+                let tablesInfoOnLoad = [];
+                let tablesInModel = [];
+                workbook.worksheets.forEach(ws => {
+                    // Verificar API worksheet.tables
+                    if (ws.tables && ws.tables.length > 0) {
+                        ws.tables.forEach(table => {
+                            tablesInfoOnLoad.push({
+                                sheet: ws.name,
+                                tableName: table.name,
+                                displayName: table.displayName,
+                                ref: table.ref,
+                                hasAutoFilter: table.autoFilter ? true : false
+                            });
+                        });
+                    }
+                    // Verificar modelo interno (worksheet.model.tables)
+                    if (ws.model && ws.model.tables && Array.isArray(ws.model.tables) && ws.model.tables.length > 0) {
+                        ws.model.tables.forEach((table, idx) => {
+                            tablesInModel.push({
+                                sheet: ws.name,
+                                index: idx,
+                                tableName: table.name || `Table${idx}`,
+                                ref: table.ref || 'N/A',
+                                displayName: table.displayName || 'N/A'
+                            });
+                        });
+                    }
+                });
+                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2352',message:'TABELAS_AO_CARREGAR_MODELO',data:{tablesCount:tablesInfoOnLoad.length,tablesViaAPI:tablesInfoOnLoad,tablesInModelCount:tablesInModel.length,tablesInModel:tablesInModel},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
+                console.log(`📊 Tabelas encontradas (API: ${tablesInfoOnLoad.length}, Model: ${tablesInModel.length})`);
+                // #endregion
+            }
+            
+            icmsModeloInfo.innerHTML = `
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-success);">check_circle</span>
+                <span>✓ Modelo carregado: ${fileName}</span>
+            `;
+            icmsModeloInfo.style.color = 'var(--color-success)';
+            console.log('✅ Modelo Excel carregado:', fileName, 'Abas:', icmsModeloWorkbook.SheetNames);
+            
+            return true;
+        } catch (error) {
+            icmsModeloInfo.innerHTML = `
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-danger);">error</span>
+                <span>Erro ao carregar modelo: ${error.message}</span>
+            `;
+            icmsModeloInfo.style.color = 'var(--color-danger)';
+            console.error('❌ Erro ao carregar modelo Excel:', error);
+            return false;
+        }
+    }
+    
+    // Carregar automaticamente a planilha modelo do servidor
     async function carregarModeloExcel() {
+        if (!isServerMode) {
+            // Modo local: mostrar input de arquivo
+            icmsModeloInputContainer.style.display = 'block';
+            icmsModeloInfo.innerHTML = `
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-dark-variant);">info</span>
+                <span>Modo local: Selecione o arquivo modelo Excel</span>
+            `;
+            icmsModeloInfo.style.color = 'var(--color-dark-variant)';
+            console.log('ℹ️ Modo local detectado - aguardando seleção do modelo pelo usuário');
+            return;
+        }
+        
+        // Modo servidor: tentar carregar automaticamente
         try {
             icmsModeloInfo.innerHTML = `
                 <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">hourglass_empty</span>
-                Carregando modelo Excel...
+                Carregando modelo Excel do servidor...
             `;
             icmsModeloInfo.style.color = 'var(--color-dark-variant)';
             
@@ -2345,24 +2440,7 @@ function createIcmsWithholdingPage(mainContent) {
             }
             
             const arrayBuffer = await response.arrayBuffer();
-            
-            // Carregar com XLSX para leitura (compatibilidade)
-            icmsModeloWorkbook = XLSX.read(arrayBuffer, { type: 'array' });
-            
-            // Carregar com ExcelJS para preservar formatações
-            if (typeof ExcelJS !== 'undefined') {
-                const workbook = new ExcelJS.Workbook();
-                await workbook.xlsx.load(arrayBuffer);
-                icmsModeloExcelJS = workbook;
-                console.log('✅ Modelo ExcelJS carregado automaticamente:', caminhoModelo, 'Abas:', workbook.worksheets.map(ws => ws.name));
-            }
-            
-            icmsModeloInfo.innerHTML = `
-                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-success);">check_circle</span>
-                <span>✓ Modelo carregado automaticamente: ICMS ST.xlsx</span>
-            `;
-            icmsModeloInfo.style.color = 'var(--color-success)';
-            console.log('✅ Modelo Excel carregado automaticamente:', caminhoModelo, 'Abas:', icmsModeloWorkbook.SheetNames);
+            await loadModeloFromBuffer(arrayBuffer, 'ICMS ST.xlsx');
             
         } catch (error) {
             icmsModeloInfo.innerHTML = `
@@ -2375,7 +2453,44 @@ function createIcmsWithholdingPage(mainContent) {
         }
     }
     
-    // Carregar modelo automaticamente quando a página for criada
+    // Configurar input de arquivo para modo local
+    if (icmsModeloSelectBtn && icmsModeloInput) {
+        icmsModeloSelectBtn.addEventListener('click', () => {
+            icmsModeloInput.click();
+        });
+        
+        icmsModeloInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+                alert('Por favor, selecione um arquivo Excel (.xlsx ou .xls)');
+                return;
+            }
+            
+            icmsModeloInfo.innerHTML = `
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">hourglass_empty</span>
+                Carregando modelo Excel...
+            `;
+            icmsModeloInfo.style.color = 'var(--color-dark-variant)';
+            
+            try {
+                // Salvar arquivo original para uso na API Python
+                icmsModeloFile = file;
+                const arrayBuffer = await readFileAsArrayBuffer(file);
+                await loadModeloFromBuffer(arrayBuffer, file.name);
+            } catch (error) {
+                icmsModeloInfo.innerHTML = `
+                    <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-danger);">error</span>
+                    <span>Erro ao carregar modelo: ${error.message}</span>
+                `;
+                icmsModeloInfo.style.color = 'var(--color-danger)';
+                console.error('❌ Erro ao carregar modelo Excel:', error);
+            }
+        });
+    }
+    
+    // Carregar modelo automaticamente quando a página for criada (apenas se servidor)
     carregarModeloExcel();
 
     // Configurar drag & drop
@@ -2451,555 +2566,352 @@ function createIcmsWithholdingPage(mainContent) {
     });
 }
 
-// Função para processar XMLs e gerar planilha
-async function processIcmsXmls() {
+// Configuração da API Python (pode ser ajustada conforme necessário)
+const ICMS_API_URL = 'http://localhost:5000/api/icms';
+const USE_PYTHON_API = true; // Flag para habilitar/desabilitar API Python
+
+// Função para processar ICMS usando API Python (openpyxl - preserva fórmulas e tabelas)
+async function processIcmsXmlsWithPython() {
     const statusText = document.getElementById('icms-status-text');
     
-    // Verificar se o modelo já foi carregado
-    if (!icmsModeloWorkbook || !icmsModeloExcelJS) {
+    if (!icmsModeloFile) {
         throw new Error('Modelo Excel não foi carregado. Por favor, selecione o arquivo modelo primeiro.');
     }
     
-    const modeloWorkbook = icmsModeloWorkbook;
-    const modeloExcelJS = icmsModeloExcelJS;
+    if (!icmsXmlFiles || icmsXmlFiles.length === 0) {
+        throw new Error('Nenhum arquivo XML foi selecionado.');
+    }
+    
+    statusText.textContent = 'Enviando arquivos para processamento Python...';
+    
+    try {
+        // Verificar se API está disponível
+        const healthResponse = await fetch(`${ICMS_API_URL}/health`).catch(() => null);
+        if (!healthResponse || !healthResponse.ok) {
+            const errorMsg = 'API Python não está disponível.\n\n' +
+                'Para usar o processamento Python (que preserva fórmulas e tabelas):\n' +
+                '1. Abra um terminal na pasta: api_icms\n' +
+                '2. Execute: python api_icms.py\n' +
+                '3. Aguarde a mensagem "API ICMS ST iniciando..."\n' +
+                '4. Tente processar novamente\n\n' +
+                'O sistema tentará usar processamento JavaScript local como fallback.';
+            throw new Error(errorMsg);
+        }
+        
+        // Preparar FormData
+        const formData = new FormData();
+        formData.append('modelo', icmsModeloFile);
+        icmsXmlFiles.forEach(xmlFile => {
+            formData.append('xmls', xmlFile);
+        });
+        
+        statusText.textContent = 'Processando com Python (openpyxl)...';
+        
+        // Enviar para API Python
+        const response = await fetch(`${ICMS_API_URL}/process`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
+            throw new Error(errorData.error || `Erro na API: ${response.status}`);
+        }
+        
+        statusText.textContent = 'Recebendo planilha gerada...';
+        
+        // Receber arquivo Excel gerado
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        
+        // Obter nome do arquivo do header Content-Disposition (mesmo formato do Python)
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let fileName = 'ICMS ST.xlsx';
+        if (contentDisposition) {
+            // Tentar extrair nome do arquivo (suporta filename="..." e filename*=UTF-8''...)
+            const fileNameMatch = contentDisposition.match(/filename\*=UTF-8''(.+)|filename=["']?([^"';]+)["']?/i);
+            if (fileNameMatch) {
+                fileName = fileNameMatch[1] ? decodeURIComponent(fileNameMatch[1]) : fileNameMatch[2];
+                fileName = fileName.replace(/['"]/g, '');
+            }
+        }
+        
+        // Download do arquivo
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        
+        statusText.textContent = `✅ Planilha gerada com sucesso via Python: ${fileName}`;
+        statusText.style.color = 'var(--color-success)';
+        
+        // Resetar
+        setTimeout(() => {
+            icmsXmlFiles = [];
+            document.getElementById('icms-xml-label').textContent = 'Arraste e solte os arquivos XML aqui';
+            document.getElementById('icms-xml-label').style.color = 'var(--color-dark)';
+            document.getElementById('icms-xml-info').style.display = 'none';
+            document.getElementById('icms-process-btn').disabled = true;
+            document.getElementById('icms-status').style.display = 'none';
+        }, 3000);
+        
+        return true; // Sucesso
+        
+    } catch (error) {
+        console.error('❌ Erro ao processar com API Python:', error);
+        throw error; // Propagar erro para fallback
+    }
+}
+
+// Função para processar XMLs e gerar planilha (REESCRITA DO ZERO - baseada no Python que funciona)
+async function processIcmsXmls() {
+    const statusText = document.getElementById('icms-status-text');
+    
+    // Tentar usar API Python primeiro se habilitada (preserva fórmulas e tabelas)
+    if (USE_PYTHON_API && icmsModeloFile) {
+        try {
+            await processIcmsXmlsWithPython();
+            return; // Sucesso com Python, sair
+        } catch (error) {
+            // Se API Python falhar, tentar processamento local
+            console.warn('⚠️ API Python não disponível, usando processamento JavaScript local:', error);
+            const errorMessage = error.message || 'Erro desconhecido';
+            if (errorMessage.includes('API Python não está disponível')) {
+                statusText.innerHTML = `⚠️ API Python não disponível. Usando processamento JavaScript local.<br><small style="color: var(--color-warning);">Nota: Para preservar fórmulas corretamente, inicie o servidor Python (veja console para instruções)</small>`;
+            } else {
+                statusText.textContent = 'Processando localmente com JavaScript (fórmulas podem falhar)...';
+            }
+        }
+    }
+    
+    // Verificar se o modelo já foi carregado (para processamento local)
+    if (!icmsModeloExcelJS) {
+        throw new Error('Modelo Excel não foi carregado. Por favor, selecione o arquivo modelo primeiro.');
+    }
     
     statusText.textContent = 'Extraindo dados dos XMLs...';
     
-    // Estrutura para agrupar produtos conforme código Python
+    // Grupos conforme Python
     const produtosPorGrupo = {
         "Aliquota 1,54%": [],
         "Aliquota 4%": [],
         "Aliquota 7%": []
     };
-    const cnpjs = [];
     const periodos = [];
     const razoesSociais = [];
 
-    // Processar cada XML
-    let xmlsProcessados = 0;
-    let xmlsIgnorados = 0;
-    
-    for (let i = 0; i < icmsXmlFiles.length; i++) {
-        const file = icmsXmlFiles[i];
-        statusText.textContent = `Processando ${i + 1}/${icmsXmlFiles.length}: ${file.name}...`;
-        
+    // Processar XMLs
+    for (const file of icmsXmlFiles) {
         try {
             const xmlText = await readFileAsText(file);
-            const { cnpj, periodo, razaoSocial, resultados } = extrairDadosFiltrados(xmlText);
+            const { periodo, razaoSocial, resultados } = extrairDadosFiltrados(xmlText);
             
-            console.log(`XML ${i + 1}: ${file.name}`);
-            console.log(`  - CNPJ: ${cnpj || 'não encontrado'}`);
-            console.log(`  - Período: ${periodo || 'não encontrado'}`);
-            console.log(`  - Razão Social: ${razaoSocial || 'não encontrada'}`);
+            if (periodo) periodos.push(periodo);
+            if (razaoSocial) razoesSociais.push(razaoSocial);
             
-            // Agrupar produtos por grupo (conforme código Python)
-            let produtosEncontrados = 0;
+            // Agrupar produtos
             for (const [grupo, produtos] of Object.entries(resultados || {})) {
                 if (produtos && produtos.length > 0) {
                     produtosPorGrupo[grupo] = produtosPorGrupo[grupo] || [];
                     produtosPorGrupo[grupo].push(...produtos);
-                    produtosEncontrados += produtos.length;
-                    console.log(`  - ${grupo}: ${produtos.length} produtos`);
                 }
-            }
-            
-            if (produtosEncontrados > 0) {
-                xmlsProcessados++;
-            } else {
-                console.warn(`  - ⚠️ Nenhum produto encontrado neste XML`);
-                xmlsIgnorados++;
-            }
-            
-            // Adicionar CNPJ, período e razão social (se encontrados)
-            if (cnpj && cnpj.trim()) {
-                cnpjs.push(cnpj.trim());
-            }
-            
-            if (periodo && periodo.trim()) {
-                periodos.push(periodo.trim());
-            }
-            
-            if (razaoSocial && razaoSocial.trim()) {
-                razoesSociais.push(razaoSocial.trim());
             }
         } catch (error) {
             console.error(`Erro ao processar ${file.name}:`, error);
-            xmlsIgnorados++;
         }
-    }
-    
-    console.log(`\n=== RESUMO DO PROCESSAMENTO ===`);
-    console.log(`XMLs processados: ${xmlsProcessados}, ignorados: ${xmlsIgnorados}`);
-    console.log(`CNPJs coletados: ${cnpjs.length}, Períodos coletados: ${periodos.length}, Razões Sociais: ${razoesSociais.length}`);
-    console.log(`Produtos por grupo:`);
-    for (const [grupo, produtos] of Object.entries(produtosPorGrupo)) {
-        console.log(`  - ${grupo}: ${produtos.length} produtos`);
-    }
-
-    // Encontrar CNPJ mais comum
-    let cnpjFinal = "";
-    if (cnpjs.length > 0) {
-        const cnpjCount = {};
-        cnpjs.forEach(c => {
-            cnpjCount[c] = (cnpjCount[c] || 0) + 1;
-        });
-        cnpjFinal = Object.keys(cnpjCount).reduce((a, b) => cnpjCount[a] > cnpjCount[b] ? a : b);
-        console.log(`CNPJ selecionado: ${cnpjFinal} (apareceu ${cnpjCount[cnpjFinal]} vezes)`);
     }
 
     // Encontrar período mais comum
-    let periodo = "";
-    if (periodos.length > 0) {
-        const periodoCount = {};
-        periodos.forEach(p => {
-            periodoCount[p] = (periodoCount[p] || 0) + 1;
-        });
-        periodo = Object.keys(periodoCount).reduce((a, b) => periodoCount[a] > periodoCount[b] ? a : b);
-        console.log(`Período selecionado: ${periodo} (apareceu ${periodoCount[periodo]} vezes)`);
-    }
+    const periodoCount = {};
+    periodos.forEach(p => periodoCount[p] = (periodoCount[p] || 0) + 1);
+    const periodo = Object.keys(periodoCount).reduce((a, b) => periodoCount[a] > periodoCount[b] ? a : b, periodos[0] || '');
 
-    // Verificar se há produtos para processar
-    const totalProdutos = produtosPorGrupo["Aliquota 1,54%"].length + 
-                          produtosPorGrupo["Aliquota 4%"].length + 
-                          produtosPorGrupo["Aliquota 7%"].length;
-    
-    if (totalProdutos === 0) {
-        throw new Error('Nenhum produto foi encontrado nos XMLs processados após aplicar os filtros (UF=23, CFOP válidos, CST/CSOSN).');
+    // Normalizar razão social (conforme Python)
+    function normalizar(nome) {
+        return nome.toUpperCase().trim().replace(/[-–—]\s*ME$/i, '').replace(/\s{2,}/g, ' ');
     }
+    const razaoCount = {};
+    razoesSociais.map(normalizar).forEach(r => razaoCount[r] = (razaoCount[r] || 0) + 1);
+    const razaoSocialFinal = Object.keys(razaoCount).reduce((a, b) => razaoCount[a] > razaoCount[b] ? a : b, '');
 
-    // Normalizar razão social (conforme código Python)
-    let razaoSocialFinal = "";
-    if (razoesSociais.length > 0) {
-        // Normalizar cada razão social
-        function normalizar(nome) {
-            nome = nome.toUpperCase().trim();
-            nome = nome.replace(/[-–—]\s*ME$/i, '');
-            nome = nome.replace(/\s{2,}/g, ' ');
-            return nome;
-        }
-        
-        // TODO: Usar biblioteca de razões sociais se disponível (BIBLIOTECA_RAZOES)
-        const razoesNormalizadas = razoesSociais.map(razao => normalizar(razao));
-        
-        // Encontrar a mais comum
-        const razaoCount = {};
-        razoesNormalizadas.forEach(razao => {
-            razaoCount[razao] = (razaoCount[razao] || 0) + 1;
-        });
-        razaoSocialFinal = Object.keys(razaoCount).reduce((a, b) => razaoCount[a] > razaoCount[b] ? a : b);
-        console.log(`Razão social selecionada: ${razaoSocialFinal} (apareceu ${razaoCount[razaoSocialFinal]} vezes)`);
-    }
-    
     if (!razaoSocialFinal || !periodo) {
         throw new Error('Não foi possível extrair a razão social ou a data de apuração dos XMLs.');
     }
 
-    // Formatar CNPJ (XX.XXX.XXX/XXXX-XX) - usar o mais comum ou "N/A" se não houver
-    let cnpjFormatado = "N/A";
-    if (cnpjFinal) {
-        cnpjFormatado = cnpjFinal.replace(/\D/g, '');
-        if (cnpjFormatado.length === 14) {
-            cnpjFormatado = cnpjFormatado.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-        }
-    }
-    
-    // Usar período mais comum ou data atual se não houver
-    if (!periodo) {
-        const hoje = new Date();
-        periodo = `${String(hoje.getMonth() + 1).padStart(2, '0')}-${hoje.getFullYear()}`;
-    }
-    
-    console.log(`\n=== DADOS FINAIS ===`);
-    console.log(`CNPJ formatado: ${cnpjFormatado}`);
-    console.log(`Período: ${periodo}`);
-    console.log(`Razão Social: ${razaoSocialFinal}`);
-    console.log(`Total de produtos: ${totalProdutos}`);
-
     statusText.textContent = 'Preenchendo planilha...';
     
-    // CRÍTICO: Usar ExcelJS para preservar COMPLETAMENTE todas as formatações
-    // A melhor forma é clonar o workbook inteiro usando writeBuffer e readBuffer
-    // Isso preserva TUDO automaticamente
-    const modelBuffer = await modeloExcelJS.xlsx.writeBuffer();
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(modelBuffer);
-    
-    console.log('✅ Workbook ExcelJS clonado preservando todas as formatações, estilos, cores e fórmulas');
-    
-    // Manter código XLSX para compatibilidade (não será usado para escrita)
-    const wb = XLSX.utils.book_new();
-    
-    // Encontrar primeiro a aba principal no modelo original
-    let nomeAbaPrincipal = null;
-    for (const sheetName of modeloWorkbook.SheetNames) {
-        if (sheetName.includes('ICMS ST') || sheetName.includes('1104')) {
-            nomeAbaPrincipal = sheetName;
-            break;
+    // Trabalhar diretamente no modelo (como Python)
+    const workbook = icmsModeloExcelJS;
+
+    // Preencher cabeçalho (conforme Python: aba_icms["C3"] = razao_social)
+    const abaPrincipal = workbook.getWorksheet('ICMS ST 1104');
+    if (abaPrincipal) {
+        const cellC3 = abaPrincipal.getCell('C3');
+        if (!cellC3.formula) cellC3.value = razaoSocialFinal;
+        
+        const cellC5 = abaPrincipal.getCell('C5');
+        if (!cellC5.formula) {
+            // Conforme Python: aba_icms["C5"] = datetime.strptime(periodo, "%m-%Y")
+            // aba_icms["C5"].number_format = "mmm-yy"
+            const [mes, ano] = periodo.split('-');
+            cellC5.value = new Date(parseInt(ano), parseInt(mes) - 1, 1);
+            cellC5.numFmt = "mmm-yy"; // Conforme Python linha 192
         }
     }
-    
-    // Se não encontrou, usar a primeira aba
-    if (!nomeAbaPrincipal && modeloWorkbook.SheetNames.length > 0) {
-        nomeAbaPrincipal = modeloWorkbook.SheetNames[0];
-    }
-    
-    if (!nomeAbaPrincipal) {
-        throw new Error('Não foi possível encontrar a aba principal na planilha modelo.');
-    }
-    
-    console.log(`Aba principal selecionada: "${nomeAbaPrincipal}"`);
-    console.log('Todas as abas disponíveis:', modeloWorkbook.SheetNames);
-    
-    // Copiar todas as abas do modelo preservando COMPLETAMENTE toda a estrutura
-    // Usar uma função auxiliar para clonar profundamente células preservando tudo
-    function cloneCell(cell) {
-        if (!cell) return null;
-        const cloned = {};
-        // Copiar TODAS as propriedades da célula (preservar propriedades especiais)
-        for (const key in cell) {
-            if (cell.hasOwnProperty(key)) {
-                const value = cell[key];
-                if (value !== null && value !== undefined) {
-                    if (typeof value === 'object' && !Array.isArray(value)) {
-                        // Objetos (como 's' para estilos) - clonar profundamente
-                        try {
-                            cloned[key] = JSON.parse(JSON.stringify(value));
-                        } catch (e) {
-                            cloned[key] = value; // Se falhar, manter referência
-                        }
-                    } else if (Array.isArray(value)) {
-                        cloned[key] = JSON.parse(JSON.stringify(value));
-                    } else {
-                        cloned[key] = value;
-                    }
-                } else {
-                    cloned[key] = value;
-                }
-            }
-        }
-        // Garantir propriedades padrão do XLSX.js (v, t, f, r, h, c, z, l, s, w)
-        const propsPadrao = ['v', 't', 'f', 'r', 'h', 'c', 'z', 'l', 's', 'w'];
-        propsPadrao.forEach(prop => {
-            if (cell[prop] !== undefined && cloned[prop] === undefined) {
-                if (typeof cell[prop] === 'object' && cell[prop] !== null) {
-                    try {
-                        cloned[prop] = JSON.parse(JSON.stringify(cell[prop]));
-                    } catch (e) {
-                        cloned[prop] = cell[prop];
-                    }
-                } else {
-                    cloned[prop] = cell[prop];
-                }
-            }
-        });
-        return cloned;
-    }
-    
-    // CRÍTICO: Usar método mais direto para copiar worksheets preservando TUDO
-    // Usar XLSX.utils.sheet_to_json e XLSX.utils.aoa_to_sheet pode perder formatações
-    // Vamos usar uma cópia direta célula por célula preservando todas as propriedades
-    for (const sheetName of modeloWorkbook.SheetNames) {
-        const originalSheet = modeloWorkbook.Sheets[sheetName];
-        
-        // Criar um novo worksheet copiando diretamente usando método que preserva melhor
-        // Copiar todas as propriedades usando Object.assign e clonagem profunda
-        const newSheet = {};
-        
-        // Passo 1: Copiar todas as propriedades do worksheet (!ref, !merges, !cols, !rows, etc)
-        for (const key in originalSheet) {
-            if (originalSheet.hasOwnProperty(key) && key.startsWith('!')) {
-                const prop = originalSheet[key];
-                if (prop !== null && prop !== undefined) {
-                    if (Array.isArray(prop)) {
-                        // Clonar arrays profundamente
-                        newSheet[key] = prop.map(item => {
-                            if (typeof item === 'object' && item !== null) {
-                                return JSON.parse(JSON.stringify(item));
-                            }
-                            return item;
-                        });
-                    } else if (typeof prop === 'object') {
-                        // Clonar objetos profundamente
-                        newSheet[key] = JSON.parse(JSON.stringify(prop));
-                    } else {
-                        // Copiar valores primitivos diretamente
-                        newSheet[key] = prop;
-                    }
-                } else {
-                    newSheet[key] = prop;
-                }
-            }
-        }
-        
-        // Passo 2: Copiar TODAS as células preservando COMPLETAMENTE cada uma
-        // Usar um loop sobre todas as chaves (células e propriedades)
-        for (const key in originalSheet) {
-            if (originalSheet.hasOwnProperty(key) && !key.startsWith('!')) {
-                // Esta é uma célula - clonar completamente
-                const cell = originalSheet[key];
-                if (cell && typeof cell === 'object') {
-                    // Clonar profundamente a célula preservando TODAS as propriedades
-                    newSheet[key] = cloneCell(cell);
-                }
-            }
-        }
-        
-        XLSX.utils.book_append_sheet(wb, newSheet, sheetName);
-    }
-    
-    console.log('✅ Estrutura da planilha modelo preservada (formatações, merges, colunas, linhas, fórmulas, estilos, cores)');
-    
-    // MAPEAMENTO DE ABAS conforme código Python
-    // MAPEAMENTO_ABAS_CELULAS = {
-    //     "1,54%.txt": ("Aliquota 1,54%", "D2"),
-    //     "4%.txt": ("Aliquota 4%", "D2"),
-    //     "7%.txt": ("Aliquota 7%", "D2"),
-    // }
+    // Mapeamento conforme Python: MAPEAMENTO_ABAS_CELULAS
     const MAPEAMENTO_ABAS = {
         "Aliquota 1,54%": "D2",
         "Aliquota 4%": "D2",
         "Aliquota 7%": "D2"
     };
-    
-    console.log(`\n=== CONFIGURAÇÃO DE PREENCHIMENTO ===`);
-    console.log(`Total de produtos por grupo:`);
-    for (const [grupo, produtos] of Object.entries(produtosPorGrupo)) {
-        console.log(`  - ${grupo}: ${produtos.length} produtos`);
-    }
-    
-    // Preencher cabeçalho na aba "ICMS ST 1104" (conforme código Python)
-    // aba_icms["C3"] = razao_social
-    // aba_icms["C5"] = datetime.strptime(periodo, "%m-%Y")
-    // aba_icms["C5"].number_format = "mmm-yy"
-    const abaPrincipal = workbook.getWorksheet(nomeAbaPrincipal);
-    if (abaPrincipal) {
-        console.log(`\n=== PREENCHENDO CABEÇALHO NA ABA "${nomeAbaPrincipal}" ===`);
-        
-        // C3 = Razão Social
-        const cellC3 = abaPrincipal.getCell('C3');
-        if (!cellC3.formula) { // CRÍTICO: Não alterar se tiver fórmula
-            // Preservar formatação original ANTES de alterar o valor
-            let styleCloneC3 = null;
-            if (cellC3.style) {
-                try {
-                    styleCloneC3 = JSON.parse(JSON.stringify(cellC3.style));
-                } catch (e) {
-                    styleCloneC3 = {
-                        fill: cellC3.fill ? JSON.parse(JSON.stringify(cellC3.fill)) : undefined,
-                        font: cellC3.font ? JSON.parse(JSON.stringify(cellC3.font)) : undefined,
-                        border: cellC3.border ? JSON.parse(JSON.stringify(cellC3.border)) : undefined,
-                        alignment: cellC3.alignment ? JSON.parse(JSON.stringify(cellC3.alignment)) : undefined
-                    };
-                }
-            }
-            
-            cellC3.value = razaoSocialFinal;
-            
-            // Restaurar estilo original se existia
-            if (styleCloneC3) {
-                try {
-                    if (styleCloneC3.fill) cellC3.fill = styleCloneC3.fill;
-                    if (styleCloneC3.font) cellC3.font = styleCloneC3.font;
-                    if (styleCloneC3.border) cellC3.border = styleCloneC3.border;
-                    if (styleCloneC3.alignment) cellC3.alignment = styleCloneC3.alignment;
-                } catch (e) {
-                    console.warn(`⚠️ Erro ao restaurar estilo da célula C3:`, e);
-                }
-            }
-            
-            console.log(`  C3 = "${razaoSocialFinal}"`);
-        } else {
-            console.warn(`  ⚠️ C3 tem fórmula, não foi alterado`);
-        }
-        
-        // C5 = Período (formato data)
-        const cellC5 = abaPrincipal.getCell('C5');
-        if (!cellC5.formula) { // CRÍTICO: Não alterar se tiver fórmula
-            // Preservar formatação original ANTES de alterar o valor
-            const numFmtOriginal = cellC5.numFmt;
-            const styleOriginal = cellC5.style ? JSON.parse(JSON.stringify(cellC5.style)) : null;
-            
-            // Converter período (MM-YYYY) para data
-            const [mes, ano] = periodo.split('-');
-            const dataPeriodo = new Date(parseInt(ano), parseInt(mes) - 1, 1);
-            cellC5.value = dataPeriodo;
-            
-            // Restaurar formatação original se existia (NÃO alterar se já tinha formatação)
-            if (numFmtOriginal) {
-                cellC5.numFmt = numFmtOriginal;
-            }
-            // NÃO definir numFmt se não existia - deixar como está no modelo
-            
-            // Restaurar estilo original se existia
-            if (styleOriginal) {
-                Object.assign(cellC5.style, styleOriginal);
-            }
-            
-            console.log(`  C5 = ${periodo} (formato preservado: ${cellC5.numFmt || 'original'})`);
-        } else {
-            console.warn(`  ⚠️ C5 tem fórmula, não foi alterado`);
-        }
-    } else {
-        console.warn(`⚠️ Aba principal "${nomeAbaPrincipal}" não encontrada para preencher cabeçalho`);
-    }
-    
-    // Preencher produtos em cada aba específica (conforme código Python)
-    console.log(`\n=== PREENCHENDO PRODUTOS NAS ABAS ===`);
-    
-    for (const [nomeGrupo, produtos] of Object.entries(produtosPorGrupo)) {
-        if (!produtos || produtos.length === 0) {
-            console.log(`  ⚠️ Nenhum produto para ${nomeGrupo}, pulando...`);
-            continue;
-        }
-        
-        // Buscar aba correspondente
-        let worksheet = workbook.getWorksheet(nomeGrupo);
-        if (!worksheet) {
-            // Tentar encontrar aba com nome similar
-            const allSheets = workbook.worksheets;
-            for (const sheet of allSheets) {
-                if (sheet.name.includes('1,54') || (nomeGrupo === "Aliquota 1,54%" && sheet.name.toLowerCase().includes('1'))) {
-                    worksheet = sheet;
-                    break;
-                } else if (sheet.name.includes('4%') || (nomeGrupo === "Aliquota 4%" && sheet.name.toLowerCase().includes('4'))) {
-                    worksheet = sheet;
-                    break;
-                } else if (sheet.name.includes('7%') || (nomeGrupo === "Aliquota 7%" && sheet.name.toLowerCase().includes('7'))) {
-                    worksheet = sheet;
-                    break;
-                }
-            }
-        }
-        
-        if (!worksheet) {
-            console.warn(`⚠️ Aba "${nomeGrupo}" não encontrada no workbook. Pulando...`);
-            continue;
-        }
-        
-        console.log(`\n=== PREENCHENDO ABA: "${worksheet.name}" (Grupo: ${nomeGrupo}) ===`);
-        console.log(`Preenchendo ${produtos.length} produtos a partir de D2`);
-        
-        // Converter "D2" para linha e coluna (ExcelJS usa 1-based)
-        const celulaInicial = MAPEAMENTO_ABAS[nomeGrupo] || "D2";
-        const colunaLetra = celulaInicial.match(/[A-Z]+/)[0];
-        const linhaBase = parseInt(celulaInicial.match(/\d+/)[0]);
-        const colunaIndex = colunaLetra.charCodeAt(0) - 64; // A=1, B=2, C=3, D=4
-        
-        let produtosPreenchidos = 0;
-        
-        // Preencher produtos usando ExcelJS
-        produtos.forEach((produto, indexProduto) => {
-            if (!Array.isArray(produto)) {
-                console.warn(`⚠️ Produto ${indexProduto} não é um array:`, produto);
-                return;
-            }
-            
-            produto.forEach((valor, indexColuna) => {
-                const linha = linhaBase + indexProduto;
-                const coluna = colunaIndex + indexColuna;
-                
-                const cell = worksheet.getCell(linha, coluna);
-                
-                // CRÍTICO: Se a célula tem fórmula, NÃO alterar - preservar fórmula
-                if (cell.formula) {
-                    // Célula tem fórmula - NÃO TOCAR, preservar completamente
-                    return; // Pular células com fórmulas
-                }
-                
-                // CRÍTICO: Preservar TODAS as formatações existentes ANTES de alterar o valor
-                // Salvar todas as propriedades de formatação
-                const numFmtOriginal = cell.numFmt;
-                const typeOriginal = cell.type;
-                
-                // Salvar estilo completo (deep clone)
-                let styleClone = null;
-                if (cell.style) {
+
+    // Função para escrever dados (conforme Python: escrever_dados_na_planilha)
+    function escreverDadosNaPlanilha(worksheet, dados, celulaInicial) {
+        const colLetra = celulaInicial.match(/[A-Z]+/)[0];
+        const linBase = parseInt(celulaInicial.match(/\d+/)[0]);
+        const colIndex = colLetra.charCodeAt(0) - 64; // A=1, B=2, C=3, D=4
+
+        dados.forEach((linha, i) => {
+            linha.forEach((valor, j) => {
+                const row = linBase + i;
+                const col = colIndex + j;
+                const cell = worksheet.getCell(row, col);
+
+                // Ignorar células mescladas (conforme Python)
+                if (cell.isMerged) return;
+
+                // Conforme Python: if j in (8, 9, 10, 11):
+                // Python linhas 136-143: para j in (8,9,10,11): cell.value = float(valor) e cell.number_format = 'R$ #,##0.00'
+                // Para outras colunas: cell.value = valor (sem formatação específica)
+                if (j >= 8 && j <= 11) {
                     try {
-                        styleClone = JSON.parse(JSON.stringify(cell.style));
-                    } catch (e) {
-                        // Se falhar, tentar copiar propriedades principais
-                        styleClone = {
-                            fill: cell.fill ? JSON.parse(JSON.stringify(cell.fill)) : undefined,
-                            font: cell.font ? JSON.parse(JSON.stringify(cell.font)) : undefined,
-                            border: cell.border ? JSON.parse(JSON.stringify(cell.border)) : undefined,
-                            alignment: cell.alignment ? JSON.parse(JSON.stringify(cell.alignment)) : undefined,
-                            numFmt: cell.numFmt,
-                            protection: cell.protection ? JSON.parse(JSON.stringify(cell.protection)) : undefined
-                        };
-                    }
-                }
-                
-                // Campos numéricos (Frete, Outras, IPI, Valor Produto) - índices 8, 9, 10, 11
-                if (indexColuna >= 8 && indexColuna <= 11) {
-                    const numVal = parseFloat(String(valor || '0').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
-                    
-                    // Apenas alterar o valor - ExcelJS preserva formatações automaticamente
-                    cell.value = numVal;
-                    
-                    // CRÍTICO: Restaurar formatação numérica original se existia
-                    // NÃO definir nova formatação se não existia
-                    if (numFmtOriginal) {
-                        cell.numFmt = numFmtOriginal;
-                    }
-                    
-                    // Restaurar estilo completo se existia
-                    if (styleClone) {
-                        try {
-                            // Restaurar propriedades individuais para garantir preservação
-                            if (styleClone.fill) cell.fill = styleClone.fill;
-                            if (styleClone.font) cell.font = styleClone.font;
-                            if (styleClone.border) cell.border = styleClone.border;
-                            if (styleClone.alignment) cell.alignment = styleClone.alignment;
-                            if (styleClone.protection) cell.protection = styleClone.protection;
-                        } catch (e) {
-                            console.warn(`⚠️ Erro ao restaurar estilo da célula ${linha},${coluna}:`, e);
-                        }
+                        const numVal = parseFloat(String(valor || '0').replace(',', '.'));
+                        cell.value = numVal;
+                        cell.numFmt = 'R$ #,##0.00'; // Conforme Python linha 139
+                    } catch {
+                        cell.value = valor; // Conforme Python linha 141
                     }
                 } else {
-                    // Campos de texto - apenas alterar o valor
-                    cell.value = String(valor || '');
-                    
-                    // Restaurar estilo completo se existia
-                    if (styleClone) {
-                        try {
-                            if (styleClone.fill) cell.fill = styleClone.fill;
-                            if (styleClone.font) cell.font = styleClone.font;
-                            if (styleClone.border) cell.border = styleClone.border;
-                            if (styleClone.alignment) cell.alignment = styleClone.alignment;
-                            if (styleClone.protection) cell.protection = styleClone.protection;
-                        } catch (e) {
-                            console.warn(`⚠️ Erro ao restaurar estilo da célula ${linha},${coluna}:`, e);
-                        }
+                    // Conforme Python linha 143: para outras colunas, apenas cell.value = valor
+                    // Mas aplicamos formatações específicas solicitadas pelo usuário:
+                    // - NCM (j=5): texto formatado como texto
+                    // - Números (j=1,2,6,7): converter para número
+                    if (j === 5) {
+                        // NCM - texto (número formatado como texto)
+                        cell.value = String(valor || '');
+                        cell.numFmt = '@';
+                    } else if (j === 1 || j === 2 || j === 6 || j === 7) {
+                        // Números simples (UF, Nº NF-e, CFOP, CST/CSOSN)
+                        const numVal = parseFloat(String(valor || '0').replace(/[^\d.-]/g, '')) || 0;
+                        cell.value = numVal;
+                    } else {
+                        // Texto (Chave, Fornecedor, Produto)
+                        cell.value = String(valor || '');
                     }
                 }
             });
-            produtosPreenchidos++;
-            
-            // Log a cada 100 produtos
-            if ((indexProduto + 1) % 100 === 0) {
-                console.log(`  Processados ${indexProduto + 1}/${produtos.length} produtos...`);
-            }
         });
-        
-        console.log(`✅ Aba "${worksheet.name}": ${produtosPreenchidos} produtos preenchidos`);
-        console.log(`   Formatações, estilos, cores e fórmulas preservadas automaticamente pelo ExcelJS`);
     }
-    
-    console.log(`\n✅ PREENCHIMENTO CONCLUÍDO`);
-    console.log(`Total de produtos preenchidos por grupo:`);
-    for (const [grupo, produtos] of Object.entries(produtosPorGrupo)) {
-        console.log(`  - ${grupo}: ${produtos.length} produtos`);
+
+    // Preencher produtos em cada aba (conforme Python)
+    for (const [nomeGrupo, produtos] of Object.entries(produtosPorGrupo)) {
+        if (!produtos || produtos.length === 0) continue;
+        
+        const worksheet = workbook.getWorksheet(nomeGrupo);
+        if (!worksheet) continue;
+        
+        const celulaInicial = MAPEAMENTO_ABAS[nomeGrupo] || "D2";
+        escreverDadosNaPlanilha(worksheet, produtos, celulaInicial);
     }
 
     statusText.textContent = 'Gerando arquivo...';
-    
-    // Gerar nome do arquivo (conforme código Python)
-    // nome_planilha = f"ICMS ST {periodo}_{razao_social}.xlsx"
-    const cnpjSemFormatacao = cnpjFinal ? cnpjFinal.replace(/\D/g, '') : 'N/A';
+
+    // #region agent log - HYPOTHESIS Q, R, S, T - Verificar fórmulas e tabelas ANTES de modificar/remover autoFilter
+    let formulasAntes = [];
+    let tablesAntes = [];
+    let formulasComTabela = [];
+    workbook.worksheets.forEach(ws => {
+        ws.eachRow((row, rowNumber) => {
+            row.eachCell((cell, colNumber) => {
+                if (cell.formula) {
+                    formulasAntes.push({
+                        sheet: ws.name,
+                        cell: `${rowNumber},${colNumber}`,
+                        formula: cell.formula
+                    });
+                    // Verificar se fórmula referencia tabelas
+                    if (cell.formula.match(/Tabela\d+/i) || cell.formula.match(/Table\d+/i)) {
+                        formulasComTabela.push({
+                            sheet: ws.name,
+                            cell: `${rowNumber},${colNumber}`,
+                            formula: cell.formula
+                        });
+                    }
+                }
+            });
+        });
+        // Verificar tabelas no modelo interno
+        if (ws.model?.tables) {
+            ws.model.tables.forEach((table, idx) => {
+                tablesAntes.push({
+                    sheet: ws.name,
+                    index: idx,
+                    name: table.name || `Table${idx}`,
+                    ref: table.ref || 'N/A',
+                    displayName: table.displayName || 'N/A',
+                    hasAutoFilter: !!table.autoFilter
+                });
+            });
+        }
+    });
+    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2711',message:'FORMULAS_TABELAS_ANTES_WRITEBUFFER',data:{totalFormulas:formulasAntes.length,formulasComTabela:formulasComTabela.length,sampleFormulasComTabela:formulasComTabela.slice(0,10),totalTables:tablesAntes.length,tables:tablesAntes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q,R,S,T'})}).catch(()=>{});
+    // #endregion
+
+    // CRÍTICO: Python (openpyxl) NÃO modifica autoFilter - apenas salva o workbook
+    // Mas ExcelJS tem bug conhecido que corrompe o XML quando autoFilter está presente
+    // Tentativa: NÃO remover autoFilter, deixar ExcelJS lidar com isso
+    // Se ainda corromper, tentaremos outra abordagem
+    // workbook.worksheets.forEach(ws => {
+    //     if (ws.model?.tables) {
+    //         ws.model.tables.forEach(table => {
+    //             if (table?.autoFilter) {
+    //                 table.autoFilter = undefined;
+    //             }
+    //         });
+    //     }
+    // });
+
+    // Salvar (conforme Python: wb.save(caminho_saida))
     const nomePlanilha = `ICMS ST ${periodo}_${razaoSocialFinal}.xlsx`;
     
-    // CRÍTICO: Salvar usando ExcelJS para preservar todas as formatações
+    // #region agent log - HYPOTHESIS Q, R, S, T - Verificar fórmulas e tabelas IMEDIATAMENTE ANTES do writeBuffer
+    let formulasAntesWrite = [];
+    workbook.worksheets.forEach(ws => {
+        ws.eachRow((row, rowNumber) => {
+            row.eachCell((cell, colNumber) => {
+                if (cell.formula) {
+                    formulasAntesWrite.push({
+                        sheet: ws.name,
+                        cell: `${rowNumber},${colNumber}`,
+                        formula: cell.formula
+                    });
+                }
+            });
+        });
+    });
+    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2743',message:'FORMULAS_IMEDIATAMENTE_ANTES_WRITEBUFFER',data:{totalFormulas:formulasAntesWrite.length,sampleFormulas:formulasAntesWrite.slice(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q,R,S,T'})}).catch(()=>{});
+    // #endregion
+    
     const buffer = await workbook.xlsx.writeBuffer();
+    
+    // #region agent log - HYPOTHESIS Q, R, S, T - Verificar buffer gerado (não podemos verificar fórmulas depois pois buffer já foi criado)
+    // Mas podemos verificar o tamanho e tipo do buffer
+    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2756',message:'DEPOIS_WRITEBUFFER',data:{bufferSize:buffer?.byteLength||0,bufferType:buffer?.constructor?.name||'N/A',fileName:nomePlanilha,note:'Buffer criado - fórmulas e tabelas devem estar preservadas no XML se ExcelJS funcionou corretamente'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q,R,S,T'})}).catch(()=>{});
+    // #endregion
+    
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -3204,10 +3116,34 @@ function extrairDadosFiltrados(xmlText) {
         let infNFe = null;
         
         // Primeiro, verificar se é um XML de evento (procEventoNFe) - esses não têm infNFe
+        // Verificação mais precisa: eventos têm procEventoNFe ou evento como root, mas NÃO têm infNFe
         const rootName = rootElement?.localName || rootElement?.nodeName || '';
-        if (rootName.includes('Evento') || rootName.includes('evento')) {
-            console.warn('XML é um evento, não uma NF-e. Pulando...');
-            return { cnpj: "", periodo: "", resultados: { todos: [] } };
+        const rootNameLower = rootName.toLowerCase().trim();
+        
+        // Verificar se é especificamente um XML de evento conhecido
+        // Apenas considerar como evento se for EXATAMENTE um dos elementos raiz de evento conhecidos
+        // Isso evita falsos positivos com XMLs que têm "evento" em algum lugar do nome mas são NF-e válidas
+        const isEventoXML = (rootNameLower === 'proceventonfe' || 
+                            rootNameLower === 'evento' || 
+                            rootNameLower === 'procevento' ||
+                            rootNameLower === 'eventoinfe');
+        
+        // Se for evento, verificar se realmente não tem infNFe antes de descartar
+        // IMPORTANTE: Mesmo que seja um evento, se tiver infNFe, é uma NF-e válida que deve ser processada
+        if (isEventoXML) {
+            // Tentar buscar infNFe para confirmar que não é uma NF-e
+            // Se tiver infNFe, mesmo que o root seja "evento", ainda é uma NF-e válida
+            const hasInfNFe = findElementByLocalName(rootElement, 'infNFe');
+            if (!hasInfNFe) {
+                // Verificar também se tem infEvento (elemento típico de eventos)
+                const hasInfEvento = findElementByLocalName(rootElement, 'infEvento');
+                if (hasInfEvento) {
+                    console.warn('XML é um evento, não uma NF-e. Pulando...');
+                    return { cnpj: "", periodo: "", razaoSocial: "", resultados: {} };
+                }
+                // Se não tem nem infNFe nem infEvento, pode ser uma estrutura desconhecida - tentar processar
+            }
+            // Se tem infNFe, não é evento puro, continuar processamento
         }
         
         // Tentar buscar infNFe diretamente (busca recursiva em toda a árvore)
