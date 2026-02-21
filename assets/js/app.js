@@ -1747,8 +1747,12 @@
         
         document.body.appendChild(modal);
         
-        // Carregar dados salvos
-        loadCestData();
+        // Sincronizar CEST do Supabase e carregar dados
+        if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+            window.supabaseSync.syncAll(['cest_0300300', 'cest_2899900']).then(() => loadCestData()).catch(() => loadCestData());
+        } else {
+            loadCestData();
+        }
         
         // Adicionar evento para fechar ao clicar fora
         modal.addEventListener('click', (e) => {
@@ -1911,24 +1915,29 @@ function loadCestData() {
     }
 }
 
-// Função para salvar dados CEST
-function saveCestData() {
-    // Salvar CEST 0300300
+// Função para salvar dados CEST (localStorage + Supabase)
+async function saveCestData() {
+    let products0300300 = [];
+    let products2899900 = [];
     const list0300300 = document.getElementById('cest-0300300-list');
     if (list0300300) {
-        const products0300300 = Array.from(list0300300.querySelectorAll('.product-name')).map(item => item.textContent);
+        products0300300 = Array.from(list0300300.querySelectorAll('.product-name')).map(item => item.textContent);
         localStorage.setItem('cest_0300300', JSON.stringify(products0300300));
     }
-    
-    // Salvar CEST 2899900
     const list2899900 = document.getElementById('cest-2899900-list');
     if (list2899900) {
-        const products2899900 = Array.from(list2899900.querySelectorAll('.product-name')).map(item => item.textContent);
+        products2899900 = Array.from(list2899900.querySelectorAll('.product-name')).map(item => item.textContent);
         localStorage.setItem('cest_2899900', JSON.stringify(products2899900));
     }
-    
-    // Atualizar arrays globais para uso no SPED
     updateCestArrays();
+    if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+        try {
+            await saveDataSync('cest_0300300', products0300300);
+            await saveDataSync('cest_2899900', products2899900);
+        } catch (e) {
+            console.warn('Erro ao sincronizar CEST com Supabase:', e);
+        }
+    }
 }
 
 // Função para atualizar arrays globais de CEST
@@ -2013,9 +2022,13 @@ function importCestBackup() {
                 const finalCest0300300 = [...existingCest0300300, ...newCest0300300];
                 const finalCest2899900 = [...existingCest2899900, ...newCest2899900];
                 
-                // Salvar no localStorage
+                // Salvar no localStorage e Supabase
                 localStorage.setItem('cest_0300300', JSON.stringify(finalCest0300300));
                 localStorage.setItem('cest_2899900', JSON.stringify(finalCest2899900));
+                if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+                    saveDataSync('cest_0300300', finalCest0300300).catch(() => {});
+                    saveDataSync('cest_2899900', finalCest2899900).catch(() => {});
+                }
                 
                 // Atualizar arrays globais
                 updateCestArrays();
@@ -2210,7 +2223,7 @@ async function initializeSync() {
             console.log(`📥 Carregados ${registeredUsers.length} usuários na inicialização`);
             
             // Sincronizar dados principais (bidirecional)
-            await window.supabaseSync.syncAll(['users', 'registeredUsers', 'contributorContacts']);
+            await window.supabaseSync.syncAll(['users', 'registeredUsers', 'contributorContacts', 'cest_0300300', 'cest_2899900', 'pythonFilesList']);
             console.log('✅ Sincronização inicial concluída!');
             
             // Verificar novamente após sincronização
@@ -3572,6 +3585,39 @@ async function loadIcmsModelo() {
 //------------------------------------------- FIM DAE -------------------------------------------//
 //--------------------------------------------- SPED --------------------------------------------//
 
+// Ler arquivo SPED com detecção automática de encoding
+function readSpedFileWithEncoding(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const binary = e.target.result;
+            let encoding = 'ISO-8859-1';
+            if (typeof jschardet !== 'undefined' && binary) {
+                try {
+                    const detected = jschardet.detect(binary);
+                    if (detected && detected.encoding) {
+                        const enc = (detected.encoding || '').toUpperCase();
+                        if (enc === 'UTF-8' || enc === 'UTF8') encoding = 'UTF-8';
+                        else if (enc.includes('WINDOWS-1252') || enc.includes('CP1252')) encoding = 'windows-1252';
+                        else if (enc.includes('ISO-8859-1') || enc.includes('LATIN1')) encoding = 'ISO-8859-1';
+                    }
+                } catch (err) {
+                    console.warn('Erro ao detectar encoding, usando ISO-8859-1:', err);
+                }
+            }
+            try {
+                const bytes = new Uint8Array([...binary].map(c => c.charCodeAt(0) & 0xFF));
+                const decoder = new TextDecoder(encoding, { fatal: false });
+                resolve(decoder.decode(bytes));
+            } catch (err) {
+                resolve(binary);
+            }
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsBinaryString(file);
+    });
+}
+
 // Função para abrir IndexedDB
 function openDB() {
     return new Promise((resolve, reject) => {
@@ -3611,6 +3657,9 @@ async function getHandle(name) {
 
 function createSpedPage(mainContent) {
     console.log('createSpedPage chamado');
+    
+    // Garantir que CEST inicial esteja carregado (primeira execução)
+    ensureCestInitialData();
     
     // Limpar dados salvos anteriores
     localStorage.removeItem('sped_paths');
@@ -3804,27 +3853,56 @@ function setupSpedDropZone(dropArea, resultsList, box, progressBar, progressPerc
     });
 }
 
-// Função para carregar produtos CEST do localStorage
-function getCestProducts() {
-    const cest0300300 = JSON.parse(localStorage.getItem('cest_0300300') || '[]');
-    const cest2899900 = JSON.parse(localStorage.getItem('cest_2899900') || '[]');
-    
+// Função para carregar produtos CEST (localStorage + Supabase)
+async function getCestProducts() {
+    const cest0300300 = await loadDataSync('cest_0300300', []);
+    const cest2899900 = await loadDataSync('cest_2899900', []);
+    const arr1 = Array.isArray(cest0300300) ? cest0300300 : [];
+    const arr2 = Array.isArray(cest2899900) ? cest2899900 : [];
     return {
-        cests1: cest0300300.map(item => item.trim().toUpperCase()),
-        cests2: cest2899900.map(item => item.trim().toUpperCase())
+        cests1: arr1.map(item => String(item).trim().toUpperCase()),
+        cests2: arr2.map(item => String(item).trim().toUpperCase())
     };
 }
 
+// Carregar CEST inicial (sincronizar do Supabase + backup se vazio)
+async function ensureCestInitialData() {
+    if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+        try {
+            await window.supabaseSync.syncAll(['cest_0300300', 'cest_2899900']);
+        } catch (e) {
+            console.warn('Erro ao sincronizar CEST do Supabase:', e);
+        }
+    }
+    const has0300300 = localStorage.getItem('cest_0300300');
+    const has2899900 = localStorage.getItem('cest_2899900');
+    const isEmpty = (!has0300300 || has0300300 === '[]') && (!has2899900 || has2899900 === '[]');
+    if (!isEmpty) return;
+    try {
+        const r = await fetch('cest_backup_inicial.json');
+        const data = r.ok ? await r.json() : null;
+        if (!data) return;
+        const arr1 = data.cest0300300 && data.cest0300300.length ? data.cest0300300 : [];
+        const arr2 = data.cest2899900 && data.cest2899900.length ? data.cest2899900 : [];
+        if (arr1.length) {
+            localStorage.setItem('cest_0300300', JSON.stringify(arr1));
+            await saveDataSync('cest_0300300', arr1);
+        }
+        if (arr2.length) {
+            localStorage.setItem('cest_2899900', JSON.stringify(arr2));
+            await saveDataSync('cest_2899900', arr2);
+        }
+        if (typeof updateCestArrays === 'function') updateCestArrays();
+        console.log('CEST inicial carregado do backup e sincronizado');
+    } catch (e) {}
+}
+
 async function processSpedFiscal(file, resultsList, progressBar, progressPercentage, totalLines, incrementProcessedLines, handle) {
-    return new Promise(async (resolve) => {
+    try {
         console.log(`Iniciando processamento de ${file.name}`);
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                // Carregar produtos CEST do localStorage
-                const { cests1, cests2 } = getCestProducts();
-                
-                const lines = e.target.result.split('\n');
+        const fileContent = await readSpedFileWithEncoding(file);
+        const { cests1, cests2 } = await getCestProducts();
+        const lines = fileContent.split('\n');
                 const hasEmptyLastLine = lines[lines.length - 1] === '';
                 const fileLines = lines.length;
                 const produtos = {};
@@ -3839,7 +3917,7 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
                         progressPercentage.textContent = `${Math.round(progress)}%`;
                         continue;
                     }
-                    const fields = rawLine.split('|');
+                    const fields = rawLine.split('|').map(f => f.trim());
                     const tag = fields[1] || '';
 
                     if (tag === '0150') {
@@ -3921,34 +3999,19 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
                     resultsList.appendChild(li);
                     console.log(`Processamento de ${file.name} concluído com download`);
                 }
-
-                resolve();
-            } catch (error) {
-                console.warn(`Erro ao processar ${file.name}: ${error.message}`);
-                const li = document.createElement('li');
-                li.textContent = `[ERRO] ${file.name}: ${error.message}`;
-                resultsList.appendChild(li);
-                resolve();
-            }
-        };
-        reader.onerror = () => {
-            console.warn(`Erro ao ler ${file.name}`);
-            const li = document.createElement('li');
-            li.textContent = `[ERRO] ${file.name}: Erro de leitura`;
-            resultsList.appendChild(li);
-            resolve();
-        };
-        reader.readAsText(file, 'latin1');
-    });
+    } catch (error) {
+        console.warn(`Erro ao processar ${file.name}:`, error);
+        const li = document.createElement('li');
+        li.textContent = `[ERRO] ${file.name}: ${error.message}`;
+        resultsList.appendChild(li);
+    }
 }
 
 async function processSpedContribuicao(file, resultsList, progressBar, progressPercentage, totalLines, incrementProcessedLines, handle) {
-    return new Promise(async (resolve) => {
+    try {
         console.log(`Iniciando processamento de ${file.name}`);
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                const lines = e.target.result.split('\n');
+        const fileContent = await readSpedFileWithEncoding(file);
+        const lines = fileContent.split('\n');
                 const hasEmptyLastLine = lines[lines.length - 1] === '';
                 const fileLines = lines.length;
                 const produtos = {};
@@ -3963,7 +4026,7 @@ async function processSpedContribuicao(file, resultsList, progressBar, progressP
                         progressPercentage.textContent = `${Math.round(progress)}%`;
                         continue;
                     }
-                    const fields = rawLine.split('|');
+                    const fields = rawLine.split('|').map(f => f.trim());
                     const tag = fields[1] || '';
 
                     if (tag === '0150') {
@@ -4022,25 +4085,12 @@ async function processSpedContribuicao(file, resultsList, progressBar, progressP
                     resultsList.appendChild(li);
                     console.log(`Processamento de ${file.name} concluído com download`);
                 }
-
-                resolve();
-            } catch (error) {
-                console.warn(`Erro ao processar ${file.name}: ${error.message}`);
-                const li = document.createElement('li');
-                li.textContent = `[ERRO] ${file.name}: ${error.message}`;
-                resultsList.appendChild(li);
-                resolve();
-            }
-        };
-        reader.onerror = () => {
-            console.warn(`Erro ao ler ${file.name}`);
-            const li = document.createElement('li');
-            li.textContent = `[ERRO] ${file.name}: Erro de leitura`;
-            resultsList.appendChild(li);
-            resolve();
-        };
-        reader.readAsText(file, 'latin1');
-    });
+    } catch (error) {
+        console.warn(`Erro ao processar ${file.name}:`, error);
+        const li = document.createElement('li');
+        li.textContent = `[ERRO] ${file.name}: ${error.message}`;
+        resultsList.appendChild(li);
+    }
 }
 
 //------------------------------------------- FIM SPED ------------------------------------------
@@ -8872,87 +8922,40 @@ async function handleContributorRegistration(e) {
 
 // ==================== BIBLIOTECA PYTHON ====================
 
-// Lista de arquivos Python disponíveis (será carregada dinamicamente)
 let pythonFilesList = [];
 
-// Função para carregar lista de arquivos Python
 async function loadPythonFilesList() {
     try {
-        // Tentar carregar lista de arquivos do localStorage
-        const savedList = localStorage.getItem('pythonFilesList');
-        if (savedList) {
-            pythonFilesList = JSON.parse(savedList);
-            return pythonFilesList;
-        }
-        
-        // Se não houver lista salva, criar lista vazia
-        // Os arquivos serão adicionados manualmente ou via interface admin
-        pythonFilesList = [];
+        const data = await loadDataSync('pythonFilesList', []);
+        pythonFilesList = Array.isArray(data) ? data : [];
         return pythonFilesList;
-    } catch (error) {
-        console.error('Erro ao carregar lista de arquivos Python:', error);
+    } catch (e) {
+        pythonFilesList = [];
         return [];
     }
 }
 
-// Função para salvar lista de arquivos Python
-function savePythonFilesList() {
+async function savePythonFilesList() {
     try {
         localStorage.setItem('pythonFilesList', JSON.stringify(pythonFilesList));
-        // Sincronizar com Supabase se disponível
         if (window.supabaseSync && window.supabaseSync.isConfigured()) {
-            window.supabaseSync.save('pythonFilesList', pythonFilesList).catch(e => {
-                console.warn('Erro ao sincronizar lista de arquivos Python:', e);
-            });
+            await saveDataSync('pythonFilesList', pythonFilesList);
         }
-    } catch (error) {
-        console.error('Erro ao salvar lista de arquivos Python:', error);
+    } catch (e) {
+        console.error('Erro ao salvar lista Python:', e);
     }
 }
 
-// Função para mostrar modal da biblioteca Python
-function showPythonLibraryModal() {
-    // Verificar se o usuário atual é administrador
+async function showPythonLibraryModal() {
     const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
     const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
     
     const modal = document.createElement('div');
     modal.className = 'python-library-modal';
-    
-    // Adicionar classe de modo escuro se aplicável
     if (document.body.classList.contains('dark-mode-variables')) {
         modal.classList.add('dark-mode-variables');
     }
-    
-    // Carregar e detectar arquivos Python automaticamente
-    initializePythonFilesList().then(() => {
-        // Configurar seção de adicionar arquivo manualmente (apenas para ambiente file://)
-        if (isAdmin) {
-            const addFileSection = modal.querySelector('#python-add-file-section');
-            if (addFileSection) {
-                const isFileProtocol = window.location.protocol === 'file:';
-                if (isFileProtocol) {
-                    // Mostrar seção de adicionar arquivo manualmente em ambiente file://
-                    addFileSection.style.display = 'block';
-                } else {
-                    // Ocultar seção de adicionar manualmente em servidor HTTP
-                    addFileSection.style.display = 'none';
-                }
-            }
-        }
-        renderPythonLibrary(modal, isAdmin);
-    }).catch(error => {
-        console.error('Erro ao carregar arquivos Python:', error);
-        const listContainer = modal.querySelector('#python-library-list');
-        if (listContainer) {
-            listContainer.innerHTML = `
-                <p style="text-align: center; color: var(--color-danger); padding: 2rem;">
-                    Erro ao carregar arquivos Python. ${isAdmin ? 'Verifique se o arquivo index.json existe em assets/py/' : 'Tente novamente mais tarde.'}
-                </p>
-            `;
-        }
-    });
     
     modal.innerHTML = `
         <div class="python-library-modal-content">
@@ -8965,30 +8968,19 @@ function showPythonLibraryModal() {
             <div class="modal-body">
                 ${isAdmin ? `
                     <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--color-light); border-radius: var(--border-radius-1);">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <h3 style="margin: 0; color: var(--color-dark); font-size: 1.1rem;">Gerenciar Biblioteca Python</h3>
-                            <button id="refresh-python-list-btn" style="padding: 0.5rem 1rem; background: var(--color-info); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-size: 0.9rem; display: flex; align-items: center; gap: 0.25rem;">
-                                <span class="material-icons-sharp" style="font-size: 1.2rem;">refresh</span>
-                                Atualizar Lista
+                        <h3 style="margin: 0 0 1rem 0; color: var(--color-dark); font-size: 1.1rem;">Upload de Arquivo (apenas .py)</h3>
+                        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                            <input type="file" id="python-upload-input" accept=".py" style="display: none;">
+                            <button id="python-upload-btn" style="padding: 0.75rem 1.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="material-icons-sharp">cloud_upload</span>
+                                Selecionar e Enviar
                             </button>
-                        </div>
-                        <div id="python-add-file-section" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-primary);">
-                            <h4 style="margin: 0 0 0.75rem 0; color: var(--color-dark); font-size: 1rem;">Adicionar Arquivo Manualmente</h4>
-                            <div style="display: flex; gap: 0.5rem; align-items: end;">
-                                <div style="flex: 1;">
-                                    <label style="display: block; margin-bottom: 0.5rem; color: var(--color-dark-variant); font-size: 0.9rem;">Nome do arquivo (ex: script.py)</label>
-                                    <input type="text" id="new-python-filename" placeholder="exemplo.py" style="width: 100%; padding: 0.75rem; border: 1px solid var(--color-primary); border-radius: var(--border-radius-1); font-size: 1rem; font-family: 'Poppins', sans-serif;">
-                                </div>
-                                <button id="add-python-file-btn" style="padding: 0.75rem 1.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-weight: 600; white-space: nowrap;">
-                                    <span class="material-icons-sharp" style="vertical-align: middle; margin-right: 0.25rem;">add</span>
-                                    Adicionar
-                                </button>
-                            </div>
+                            <span id="python-upload-status" style="font-size: 0.9rem; color: var(--color-dark-variant);"></span>
                         </div>
                     </div>
                 ` : ''}
                 <div id="python-library-list" style="display: flex; flex-direction: column; gap: 1rem;">
-                    <p style="text-align: center; color: var(--color-dark-variant);">Carregando arquivos...</p>
+                    <p style="text-align: center; color: var(--color-dark-variant);">Carregando...</p>
                 </div>
             </div>
         </div>
@@ -8996,124 +8988,67 @@ function showPythonLibraryModal() {
     
     document.body.appendChild(modal);
     
-    // Fechar modal
-    const closeBtn = modal.querySelector('.python-library-close-btn');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', () => {
-            modal.remove();
+    modal.querySelector('.python-library-close-btn')?.addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    
+    if (isAdmin) {
+        const uploadBtn = modal.querySelector('#python-upload-btn');
+        const uploadInput = modal.querySelector('#python-upload-input');
+        const uploadStatus = modal.querySelector('#python-upload-status');
+        uploadBtn?.addEventListener('click', () => uploadInput?.click());
+        uploadInput?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file || !file.name.toLowerCase().endsWith('.py')) {
+                alert('Selecione um arquivo .py');
+                return;
+            }
+            if (pythonFilesList.find(f => f.name.toLowerCase() === file.name.toLowerCase())) {
+                alert('Já existe um arquivo com este nome.');
+                return;
+            }
+            uploadBtn.disabled = true;
+            uploadStatus.textContent = 'Enviando...';
+            if (window.supabaseSync?.isConfigured()) {
+                const result = await window.supabaseSync.uploadPythonFile(file);
+                if (result.error) {
+                    uploadStatus.textContent = 'Erro: ' + result.error;
+                    alert('Erro ao enviar: ' + result.error + '. Verifique se o bucket python-library existe no Supabase.');
+                } else {
+                    pythonFilesList.push({ name: result.fileName || file.name, description: '' });
+                    await savePythonFilesList();
+                    renderPythonLibrary(modal, isAdmin);
+                    uploadStatus.textContent = 'Enviado com sucesso!';
+                }
+            } else {
+                uploadStatus.textContent = 'Supabase não configurado';
+                alert('Configure o Supabase para usar upload.');
+            }
+            uploadInput.value = '';
+            uploadBtn.disabled = false;
         });
     }
     
-    // Fechar ao clicar fora do modal
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            modal.remove();
+    try {
+        if (window.supabaseSync?.isConfigured()) {
+            await window.supabaseSync.syncAll(['pythonFilesList']);
         }
-    });
-    
-    // Adicionar eventos (apenas para admins)
-    if (isAdmin) {
-        const refreshBtn = modal.querySelector('#refresh-python-list-btn');
-        const addFileBtn = modal.querySelector('#add-python-file-btn');
-        const filenameInput = modal.querySelector('#new-python-filename');
-        
-        // Botão de atualizar lista (detecta novos arquivos automaticamente)
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', async () => {
-                refreshBtn.disabled = true;
-                refreshBtn.innerHTML = '<span class="material-icons-sharp" style="font-size: 1.2rem; animation: spin 1s linear infinite;">refresh</span> Detectando...';
-                
-                // Salvar descrições existentes antes de atualizar
-                const currentDescriptions = new Map();
-                pythonFilesList.forEach(file => {
-                    if (file.description) {
-                        currentDescriptions.set(file.name, file.description);
-                    }
-                });
-                
-                // Detectar novos arquivos
-                await initializePythonFilesList();
-                
-                // Restaurar descrições existentes
-                pythonFilesList.forEach(file => {
-                    if (currentDescriptions.has(file.name)) {
-                        file.description = currentDescriptions.get(file.name);
-                    }
-                });
-                savePythonFilesList();
-                
-                // Recarregar interface
-                renderPythonLibrary(modal, isAdmin);
-                
-                refreshBtn.disabled = false;
-                refreshBtn.innerHTML = '<span class="material-icons-sharp" style="font-size: 1.2rem;">refresh</span> Atualizar Lista';
-            });
-        }
-        
-        // Botão de adicionar arquivo manualmente (para ambiente file://)
-        if (addFileBtn && filenameInput) {
-            addFileBtn.addEventListener('click', () => {
-                const fileName = filenameInput.value.trim();
-                if (!fileName) {
-                    alert('Por favor, informe o nome do arquivo.');
-                    return;
-                }
-                
-                // Verificar se termina com .py
-                if (!fileName.toLowerCase().endsWith('.py')) {
-                    alert('O arquivo deve ter extensão .py');
-                    return;
-                }
-                
-                // Verificar se o arquivo já existe
-                if (pythonFilesList.find(f => f.name === fileName)) {
-                    alert('Este arquivo já está na lista.');
-                    return;
-                }
-                
-                // Adicionar à lista
-                pythonFilesList.push({ name: fileName, description: '' });
-                savePythonFilesList();
-                
-                // Limpar input e recarregar lista
-                filenameInput.value = '';
-                renderPythonLibrary(modal, isAdmin);
-                
-                console.log(`Arquivo ${fileName} adicionado manualmente à biblioteca Python.`);
-            });
-            
-            // Permitir adicionar com Enter
-            filenameInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    addFileBtn.click();
-                }
-            });
-        }
+        await loadPythonFilesList();
+        renderPythonLibrary(modal, isAdmin);
+    } catch (e) {
+        console.error('Erro ao carregar Biblioteca Python:', e);
+        modal.querySelector('#python-library-list').innerHTML = '<p style="text-align: center; color: var(--color-danger); padding: 2rem;">Erro ao carregar. Tente novamente.</p>';
     }
 }
 
-// Função para renderizar a lista de arquivos Python
 function renderPythonLibrary(modal, isAdmin) {
     const listContainer = modal.querySelector('#python-library-list');
-    
     if (!listContainer) return;
     
     if (pythonFilesList.length === 0) {
         listContainer.innerHTML = `
             <p style="text-align: center; color: var(--color-dark-variant); padding: 2rem;">
-                Nenhum arquivo Python detectado na pasta assets/py/.
-                ${isAdmin ? `
-                    <br><br>
-                    <div style="background: var(--color-light); padding: 1rem; border-radius: var(--border-radius-1); margin-top: 1rem; text-align: left;">
-                        <strong style="display: block; margin-bottom: 0.5rem;">Como adicionar arquivos:</strong>
-                        <ol style="margin: 0; padding-left: 1.5rem; font-size: 0.9rem;">
-                            <li>Adicione arquivos .py na pasta <code>assets/py/</code></li>
-                            <li>Execute o script <code>generate_index.py</code> para gerar/atualizar o index.json</li>
-                            <li>Clique em "Atualizar Lista" para detectar os novos arquivos</li>
-                            <li>Edite as descrições dos arquivos para informar aos usuários</li>
-                        </ol>
-                    </div>
-                ` : ''}
+                Nenhum arquivo na biblioteca.
+                ${isAdmin ? '<br><br>Use o botão "Selecionar e Enviar" acima para adicionar arquivos .py' : ''}
             </p>
         `;
         return;
@@ -9122,8 +9057,6 @@ function renderPythonLibrary(modal, isAdmin) {
     listContainer.innerHTML = pythonFilesList.map((file, index) => {
         const fileName = file.name || 'arquivo.py';
         const description = file.description || '';
-        const filePath = `assets/py/${fileName}`;
-        
         return `
             <div class="python-file-item" style="background: var(--color-white); border-radius: var(--card-border-radius); padding: 1.5rem; box-shadow: var(--box-shadow); display: flex; flex-direction: column; gap: 1rem;">
                 <div style="display: flex; justify-content: space-between; align-items: start; gap: 1rem;">
@@ -9138,171 +9071,88 @@ function renderPythonLibrary(modal, isAdmin) {
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: start;">
                         ${isAdmin ? `
-                            <button class="edit-description-btn" data-index="${index}" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Editar descrição">
+                            <button class="edit-description-btn" data-index="${index}" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer;" title="Editar descrição">
                                 <span class="material-icons-sharp" style="font-size: 1.2rem;">edit</span>
                             </button>
+                            <button class="delete-python-btn" data-index="${index}" style="padding: 0.5rem; background: var(--color-danger); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer;" title="Remover">
+                                <span class="material-icons-sharp" style="font-size: 1.2rem;">delete</span>
+                            </button>
                         ` : ''}
-                        <a href="${filePath}" download="${fileName}" class="download-python-btn" style="padding: 0.5rem; background: var(--color-success); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; display: flex; align-items: center; gap: 0.25rem; text-decoration: none;" title="Baixar arquivo">
+                        <button class="download-python-btn" data-index="${index}" style="padding: 0.5rem; background: var(--color-success); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Baixar arquivo">
                             <span class="material-icons-sharp" style="font-size: 1.2rem;">download</span>
-                        </a>
+                        </button>
                     </div>
                 </div>
             </div>
         `;
     }).join('');
     
-    // Adicionar eventos de edição de descrição e remoção (apenas para admins)
-    if (isAdmin) {
-        const editButtons = listContainer.querySelectorAll('.edit-description-btn');
-        editButtons.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const index = parseInt(e.currentTarget.getAttribute('data-index'));
-                editPythonFileDescription(index, modal);
-            });
+    listContainer.querySelectorAll('.edit-description-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => editPythonFileDescription(parseInt(e.currentTarget.getAttribute('data-index')), modal));
+    });
+    listContainer.querySelectorAll('.delete-python-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => deletePythonFile(parseInt(e.currentTarget.getAttribute('data-index')), modal));
+    });
+    listContainer.querySelectorAll('.download-python-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const idx = parseInt(e.currentTarget.getAttribute('data-index'));
+            const f = pythonFilesList[idx];
+            if (f) doPythonFileDownload(f.name);
         });
-        
-    }
+    });
 }
 
-// Função para editar descrição de arquivo Python
-function editPythonFileDescription(index, modal) {
-    // Verificar se o usuário atual é administrador
+async function editPythonFileDescription(index, modal) {
     const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
     const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
     const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
-    
-    if (!isAdmin) {
-        alert('Apenas administradores podem editar descrições dos arquivos Python.');
-        return;
-    }
-    
+    if (!isAdmin) return;
     const file = pythonFilesList[index];
     if (!file) return;
-    
-    const currentDescription = file.description || '';
-    
-    const newDescription = prompt(`Editar descrição do arquivo "${file.name}":`, currentDescription);
-    
+    const newDescription = prompt(`Editar descrição do arquivo "${file.name}":`, file.description || '');
     if (newDescription !== null) {
         file.description = newDescription.trim();
-        savePythonFilesList();
-        
-        // Recarregar lista
-        renderPythonLibrary(modal, isAdmin);
-        
-        console.log(`Descrição do arquivo ${file.name} atualizada.`);
+        await savePythonFilesList();
+        renderPythonLibrary(modal, true);
     }
 }
 
-// Função para detectar arquivos Python na pasta assets/py/ automaticamente
-async function detectPythonFiles() {
-    const detectedFiles = [];
-    
-    // Carregar descrições salvas
-    const savedList = localStorage.getItem('pythonFilesList');
-    const savedFiles = savedList ? JSON.parse(savedList) : [];
-    const savedFilesMap = new Map(savedFiles.map(f => [f.name, f.description]));
-    
-    // Verificar se estamos em ambiente file:// (CORS bloqueado)
-    const isFileProtocol = window.location.protocol === 'file:';
-    
-    // PRIMEIRO: Tentar carregar arquivo de índice (index.json) se existir
-    // Este arquivo é gerado automaticamente pelo script generate_index.py
-    if (!isFileProtocol) {
-        try {
-            const indexResponse = await fetch('assets/py/index.json');
-            if (indexResponse.ok) {
-                const indexData = await indexResponse.json();
-                if (Array.isArray(indexData.files) && indexData.files.length > 0) {
-                    console.log(`📋 Carregados ${indexData.files.length} arquivos do index.json`);
-                    // Verificar se cada arquivo realmente existe e adicionar à lista
-                    for (const fileName of indexData.files) {
-                        try {
-                            const fileResponse = await fetch(`assets/py/${fileName}`, { method: 'HEAD' });
-                            if (fileResponse.ok) {
-                                detectedFiles.push({
-                                    name: fileName,
-                                    description: savedFilesMap.get(fileName) || ''
-                                });
-                            } else {
-                                console.warn(`Arquivo ${fileName} listado no index.json mas não encontrado (404)`);
-                            }
-                        } catch (error) {
-                            console.warn(`Erro ao verificar arquivo ${fileName}:`, error);
-                        }
-                    }
-                    if (detectedFiles.length > 0) {
-                        return detectedFiles;
-                    }
-                }
-            }
-        } catch (error) {
-            if (error.name === 'TypeError' && error.message.includes('CORS')) {
-                console.log('ℹ️ CORS bloqueado (ambiente file://), usando lista salva');
-            } else {
-                console.log('ℹ️ index.json não encontrado ou erro ao carregar:', error.message);
-            }
+async function deletePythonFile(index, modal) {
+    const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
+    const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
+    if (!isAdmin) return;
+    const file = pythonFilesList[index];
+    if (!file || !confirm(`Remover "${file.name}" da biblioteca?`)) return;
+    if (window.supabaseSync?.isConfigured()) {
+        const r = await window.supabaseSync.removePythonFile(file.name);
+        if (r?.error) {
+            alert('Erro ao remover do storage: ' + r.error);
+            return;
         }
-    } else {
-        console.log('ℹ️ Ambiente file:// detectado, usando lista salva do localStorage');
     }
-    
-    // SEGUNDO: Se não houver index.json ou estiver em file://, usar lista salva
-    // Verificar arquivos já conhecidos da lista salva
-    const filesToCheck = new Set();
-    savedFiles.forEach(f => filesToCheck.add(f.name));
-    
-    // Se não estiver em file://, verificar se os arquivos ainda existem
-    if (!isFileProtocol) {
-        for (const fileName of filesToCheck) {
-            try {
-                const response = await fetch(`assets/py/${fileName}`, { method: 'HEAD' });
-                if (response.ok) {
-                    detectedFiles.push({
-                        name: fileName,
-                        description: savedFilesMap.get(fileName) || ''
-                    });
-                } else {
-                    // Arquivo foi removido, não adicionar à lista
-                    console.log(`Arquivo ${fileName} não encontrado mais na pasta`);
-                }
-            } catch (error) {
-                // Erro ao verificar, manter na lista se já estava salvo
-                if (savedFilesMap.has(fileName)) {
-                    detectedFiles.push({
-                        name: fileName,
-                        description: savedFilesMap.get(fileName) || ''
-                    });
-                }
-            }
-        }
-    } else {
-        // Em ambiente file://, usar lista salva diretamente (não podemos verificar)
-        savedFiles.forEach(file => {
-            detectedFiles.push({
-                name: file.name,
-                description: file.description || ''
-            });
-        });
-    }
-    
-    return detectedFiles;
+    pythonFilesList.splice(index, 1);
+    await savePythonFilesList();
+    renderPythonLibrary(modal, true);
 }
 
-// Função para inicializar lista de arquivos Python (será chamada quando necessário)
-async function initializePythonFilesList() {
-    console.log('🔍 Detectando arquivos Python na pasta assets/py/...');
-    
-    // Detectar arquivos automaticamente
-    const detectedFiles = await detectPythonFiles();
-    
-    // Atualizar lista mantendo descrições existentes
-    pythonFilesList = detectedFiles;
-    savePythonFilesList();
-    
-    console.log(`✅ ${detectedFiles.length} arquivo(s) Python detectado(s):`, detectedFiles.map(f => f.name));
-    
-    return detectedFiles;
+async function doPythonFileDownload(fileName) {
+    if (!window.supabaseSync?.isConfigured()) {
+        alert('Supabase não configurado. Não é possível baixar arquivos.');
+        return;
+    }
+    const blob = await window.supabaseSync.downloadPythonFile(fileName);
+    if (blob) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    } else {
+        const url = window.supabaseSync.getPythonFileUrl(fileName);
+        if (url) window.open(url, '_blank');
+        else alert('Não foi possível baixar o arquivo.');
+    }
 }
 
 // Tornar funções de contribuintes globalmente acessíveis
@@ -9313,9 +9163,7 @@ window.cancelEditContributor = cancelEditContributor;
 window.closeContributorRegistrationModal = closeContributorRegistrationModal;
 window.clearAllContributors = clearAllContributors;
 
-// Tornar funções da biblioteca Python globalmente acessíveis
 window.showPythonLibraryModal = showPythonLibraryModal;
-window.initializePythonFilesList = initializePythonFilesList;
 
 // Configurar eventos
 document.addEventListener('DOMContentLoaded', async () => {

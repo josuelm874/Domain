@@ -45,6 +45,13 @@ SerconProgamming/
 
 ## 🛠️ Desenvolvimento
 
+### Biblioteca Python (Supabase Storage)
+
+Para a Biblioteca Python funcionar, crie um bucket no Supabase Dashboard:
+1. Storage → New bucket → nome: `python-library`
+2. Marque como **público** (Public bucket) para permitir download
+3. Políticas: permitir INSERT/SELECT/DELETE para o anon key conforme necessário
+
 ### Estrutura de Dados
 
 Os dados são armazenados no Supabase na tabela `system_data`:

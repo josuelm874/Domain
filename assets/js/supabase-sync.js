@@ -13,6 +13,9 @@ const SUPABASE_CONFIG = {
 // Nome da tabela onde os dados serão armazenados
 const TABLE_NAME = 'system_data';
 
+// Bucket do Storage para Biblioteca Python (crie no Supabase Dashboard como público)
+const PYTHON_LIBRARY_BUCKET = 'python-library';
+
 // ==================== INICIALIZAÇÃO ====================
 let supabaseClient = null;
 let isSupabaseConfigured = false;
@@ -232,7 +235,7 @@ async function syncData(key) {
 /**
  * Sincronizar múltiplas chaves de uma vez
  */
-async function syncAllData(keys = ['users', 'registeredUsers', 'contributorContacts', 'contributors']) {
+async function syncAllData(keys = ['users', 'registeredUsers', 'contributorContacts', 'contributors', 'cest_0300300', 'cest_2899900', 'pythonFilesList']) {
     const results = {};
     for (const key of keys) {
         results[key] = await syncData(key);
@@ -270,6 +273,48 @@ async function forceRefreshFromCloud(key) {
     }
 }
 
+// ==================== STORAGE - BIBLIOTECA PYTHON ====================
+
+async function uploadPythonFile(file) {
+    if (!supabaseClient) return { error: 'Supabase não configurado' };
+    const fileName = file.name.toLowerCase().endsWith('.py') ? file.name : file.name + '.py';
+    try {
+        const { error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).upload(fileName, file, { upsert: true });
+        if (error) return { error: error.message };
+        return { success: true, fileName };
+    } catch (e) {
+        return { error: e.message || 'Erro ao fazer upload' };
+    }
+}
+
+function getPythonFileUrl(fileName) {
+    if (!supabaseClient) return null;
+    const { data } = supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).getPublicUrl(fileName);
+    return data?.publicUrl || null;
+}
+
+async function downloadPythonFile(fileName) {
+    if (!supabaseClient) return null;
+    try {
+        const { data, error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).download(fileName);
+        if (error) return null;
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function removePythonFile(fileName) {
+    if (!supabaseClient) return { error: 'Supabase não configurado' };
+    try {
+        const { error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).remove([fileName]);
+        if (error) return { error: error.message };
+        return { success: true };
+    } catch (e) {
+        return { error: e.message || 'Erro ao remover' };
+    }
+}
+
 // ==================== EXPORTAR FUNÇÕES ====================
 window.supabaseSync = {
     init: initSupabase,
@@ -278,7 +323,11 @@ window.supabaseSync = {
     sync: syncData,
     syncAll: syncAllData,
     refresh: forceRefreshFromCloud,
-    isConfigured: () => isSupabaseConfigured
+    isConfigured: () => isSupabaseConfigured,
+    uploadPythonFile,
+    getPythonFileUrl,
+    downloadPythonFile,
+    removePythonFile
 };
 
 // Inicializar automaticamente quando o arquivo for carregado
