@@ -277,7 +277,7 @@ async function forceRefreshFromCloud(key) {
 
 async function uploadPythonFile(file) {
     if (!supabaseClient) return { error: 'Supabase não configurado' };
-    const fileName = file.name.toLowerCase().endsWith('.py') ? file.name : file.name + '.py';
+    const fileName = file.name;
     try {
         const { error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).upload(fileName, file, { upsert: true });
         if (error) return { error: error.message };

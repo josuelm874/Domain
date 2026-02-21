@@ -8968,9 +8968,9 @@ async function showPythonLibraryModal() {
             <div class="modal-body">
                 ${isAdmin ? `
                     <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--color-light); border-radius: var(--border-radius-1);">
-                        <h3 style="margin: 0 0 1rem 0; color: var(--color-dark); font-size: 1.1rem;">Upload de Arquivo (apenas .py)</h3>
+                        <h3 style="margin: 0 0 1rem 0; color: var(--color-dark); font-size: 1.1rem;">Upload de Arquivo</h3>
                         <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-                            <input type="file" id="python-upload-input" accept=".py" style="display: none;">
+                            <input type="file" id="python-upload-input" style="display: none;">
                             <button id="python-upload-btn" style="padding: 0.75rem 1.5rem; background: var(--color-primary); color: white; border: none; border-radius: var(--border-radius-1); cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
                                 <span class="material-icons-sharp">cloud_upload</span>
                                 Selecionar e Enviar
@@ -8998,8 +8998,8 @@ async function showPythonLibraryModal() {
         uploadBtn?.addEventListener('click', () => uploadInput?.click());
         uploadInput?.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
-            if (!file || !file.name.toLowerCase().endsWith('.py')) {
-                alert('Selecione um arquivo .py');
+            if (!file) {
+                alert('Selecione um arquivo.');
                 return;
             }
             if (pythonFilesList.find(f => f.name.toLowerCase() === file.name.toLowerCase())) {
@@ -9048,14 +9048,14 @@ function renderPythonLibrary(modal, isAdmin) {
         listContainer.innerHTML = `
             <p style="text-align: center; color: var(--color-dark-variant); padding: 2rem;">
                 Nenhum arquivo na biblioteca.
-                ${isAdmin ? '<br><br>Use o botão "Selecionar e Enviar" acima para adicionar arquivos .py' : ''}
+                ${isAdmin ? '<br><br>Use o botão "Selecionar e Enviar" acima para adicionar arquivos.' : ''}
             </p>
         `;
         return;
     }
     
     listContainer.innerHTML = pythonFilesList.map((file, index) => {
-        const fileName = file.name || 'arquivo.py';
+        const fileName = file.name || 'arquivo';
         const description = file.description || '';
         return `
             <div class="python-file-item" style="background: var(--color-white); border-radius: var(--card-border-radius); padding: 1.5rem; box-shadow: var(--box-shadow); display: flex; flex-direction: column; gap: 1rem;">
