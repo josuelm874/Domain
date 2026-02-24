@@ -722,6 +722,11 @@ html {
     -webkit-mask-size: cover;
     mask-size: cover;
 }
+/* Logo por tema: escuro = logo.gif, claro = logo-light.gif (classe no body) */
+body:not(.dark-mode-variables) .dashboard-container .logo-dark { display: none !important; }
+body:not(.dark-mode-variables) .dashboard-container .logo-light { display: block !important; }
+body.dark-mode-variables .dashboard-container .logo-dark { display: block !important; }
+body.dark-mode-variables .dashboard-container .logo-light { display: none !important; }
 .dashboard-container aside .toggle .close {
     padding-right: 1rem;
     display: none;

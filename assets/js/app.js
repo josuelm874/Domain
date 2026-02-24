@@ -979,6 +979,10 @@
             if (currentUser) {
                 localStorage.setItem(`theme_${currentUser}`, document.body.classList.contains('dark-mode-variables') ? 'dark' : 'light');
             }
+            // Atualizar logos da sidebar e user-profile conforme o tema
+            const isDark = document.body.classList.contains('dark-mode-variables');
+            document.querySelectorAll('.dashboard-container .logo-dark').forEach(el => { el.style.display = isDark ? 'block' : 'none'; });
+            document.querySelectorAll('.dashboard-container .logo-light').forEach(el => { el.style.display = isDark ? 'none' : 'block'; });
         });
     }
 
