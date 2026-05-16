@@ -13,6 +13,8 @@
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Credenciais do Supabase (arquivo local, não versionado) -->
+    <script src="assets/js/config.js"></script>
     <!-- Sistema de Sincronização com Supabase para compartilhamento entre PCs -->
     <script src="assets/js/supabase-sync.js"></script>
     <!-- Detecção de encoding para arquivos SPED -->
@@ -207,7 +209,7 @@
                         <div class="content">
                             <div class="info">
                                 <h3>Envio de Impostos</h3>
-                                <small class="text_muted">Vencimento: {envio_impostos_due_date}</small>
+                                <small class="text_muted">Vencimento: Calculando...</small>
                             </div>
                             <span class="material-icons-sharp">more_vert</span>
                         </div>
@@ -219,7 +221,7 @@
                         <div class="content">
                             <div class="info">
                                 <h3>ICMS ST</h3>
-                                <small class="text_muted">Vencimento: {icms_due_date}</small>
+                                <small class="text_muted">Vencimento: Calculando...</small>
                             </div>
                             <span class="material-icons-sharp">more_vert</span>
                         </div>
@@ -231,7 +233,7 @@
                         <div class="content">
                             <div class="info">
                                 <h3>DIRBI</h3>
-                                <small class="text_muted">Vencimento: {dirbi_due_date}</small>
+                                <small class="text_muted">Vencimento: Calculando...</small>
                             </div>
                             <span class="material-icons-sharp">more_vert</span>
                         </div>
@@ -243,7 +245,7 @@
                         <div class="content">
                             <div class="info">
                                 <h3>DCTFWeb</h3>
-                                <small class="text_muted">Vencimento: {dctfweb_due_date}</small>
+                                <small class="text_muted">Vencimento: Calculando...</small>
                             </div>
                             <span class="material-icons-sharp">more_vert</span>
                         </div>
@@ -266,12 +268,10 @@
     <script>
         // Handler global de erros para debug
         window.addEventListener('error', (e) => {
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Dominium.html:269',message:'GLOBAL ERROR',data:{filename:e.filename,message:e.message,lineno:e.lineno,colno:e.colno,error:e.error?e.error.toString():'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
             console.error('❌ Erro JavaScript global:', e.filename, e.message, e.lineno, e.colno);
         });
         
         window.addEventListener('unhandledrejection', (e) => {
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Dominium.html:275',message:'UNHANDLED REJECTION',data:{reason:e.reason?e.reason.toString():'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
             console.error('❌ Promise rejeitada:', e.reason);
         });
         

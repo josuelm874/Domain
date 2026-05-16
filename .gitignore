@@ -33,10 +33,10 @@ yarn.lock
 *.backup
 *_backup.json
 
-# Arquivos sensíveis (se tiver variáveis de ambiente)
+# Arquivos sensíveis
 .env
 .env.local
 .env.*.local
 
-# Nota: As credenciais do Supabase estão no código (anon key é pública por design)
-# Isso é seguro para chaves anon, mas se preferir, pode mover para variáveis de ambiente
+# Credenciais do Supabase — não commitar, use config.example.js como referência
+assets/js/config.js

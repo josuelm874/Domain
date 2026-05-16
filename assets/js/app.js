@@ -4,7 +4,6 @@
     // Tornar global para ser acessível em todas as funções
     window.debugLog = (location, message, data = {}) => {
         try {
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -464,7 +463,6 @@
             const hashedPassword = generateUltraSecureHash(password);
             if (user.password === hashedPassword) {
                 // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:393',message:'Login validated successfully',data:{username:username},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
                 // #endregion
                 // Salvar ou remover credenciais baseado no checkbox (igual ao Chat.html)
                 const rememberMe = rememberMeCheckbox?.checked || false;
@@ -481,7 +479,6 @@
                 window.currentUser = user.username;
                 
                 // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:410',message:'About to call showDashboardAfterLogin',data:{currentUser:currentUser,hasShowDashboardAfterLogin:typeof showDashboardAfterLogin==='function'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
                 // #endregion
                 // Usar função centralizada para mostrar dashboard
                 loadUserPreferences();
@@ -510,7 +507,6 @@
             }
         } else if (username === 'adm') {
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:442',message:'Validating admin login directly',data:{username:username},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
             // #endregion
             // Validar login de administrador diretamente no mesmo handle
             const hashedPassword = generateUltraSecureHash(password);
@@ -519,7 +515,6 @@
             // Verificar se a senha é a senha de administrador
             if (hashedPassword === adminHash) {
                 // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:446',message:'Admin password validated - calling showDashboardAfterLogin',data:{currentUser:'adm'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
                 // #endregion
                 currentUser = 'adm';
                 window.currentUser = 'adm';
@@ -560,7 +555,6 @@
                 
                 if (adminUser) {
                     // #region agent log
-                    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:476',message:'Admin user found and validated',data:{username:adminUser.username},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
                     // #endregion
                     currentUser = adminUser.username;
                     window.currentUser = adminUser.username;
@@ -668,7 +662,6 @@
 
     function handleAdminLogin() {
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:514',message:'handleAdminLogin called',data:{hasAdminPassword:!!adminPassword},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
         if (!adminPassword) return;
         
@@ -681,12 +674,10 @@
         const adminUser = registeredUsers.find(u => u.control === 'administrador' && u.password === hashedPassword);
         
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:522',message:'Admin password validation',data:{passwordLength:password.length,hashedMatchesAdminHash:hashedPassword===adminHash,hasAdminUser:!!adminUser},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
         
         if (hashedPassword === adminHash) {
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:525',message:'Admin password validated - calling showDashboardAfterLogin',data:{currentUser:'adm'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
             // #endregion
             currentUser = 'adm';
             window.currentUser = 'adm';
@@ -762,18 +753,18 @@
     }
 
     // Função auxiliar para criar conteúdo do dashboard manualmente
-    function createDashboardContentManually() {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:821',message:'createDashboardContentManually ENTRY',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
+    // Limita tentativas para evitar loop infinito se #main-content nunca aparecer
+    function createDashboardContentManually(attempt = 0) {
+        const MAX_ATTEMPTS = 10;
         console.log('🔧 Criando conteúdo do dashboard manualmente...');
         const mainContent = document.querySelector('#main-content');
         if (!mainContent) {
-            console.error('❌ #main-content não encontrado para criação manual');
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:826',message:'Main content not found in createDashboardContentManually',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-            // #endregion
-            setTimeout(() => createDashboardContentManually(), 100);
+            if (attempt >= MAX_ATTEMPTS) {
+                console.error('❌ #main-content não encontrado após ' + MAX_ATTEMPTS + ' tentativas. Abortando.');
+                return;
+            }
+            console.warn('⚠️ #main-content não encontrado, tentativa ' + (attempt + 1) + '/' + MAX_ATTEMPTS);
+            setTimeout(() => createDashboardContentManually(attempt + 1), 100);
             return;
         }
         
@@ -793,13 +784,11 @@
                 </div>
             `;
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:843',message:'Dashboard content created',data:{innerHTMLLength:mainContent.innerHTML.length,hasH1:mainContent.innerHTML.includes('<h1>'),hasGrid:mainContent.innerHTML.includes('dashboard-grid')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
             // #endregion
             console.log('✅ Conteúdo do dashboard criado manualmente com sucesso!');
         } catch (e) {
             console.error('❌ Erro ao criar conteúdo manualmente:', e);
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:848',message:'ERROR creating dashboard content',data:{errorMessage:e.message,errorStack:e.stack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
             // #endregion
         }
     }
@@ -807,7 +796,6 @@
     // FUNÇÃO CENTRALIZADA PARA MOSTRAR DASHBOARD APÓS LOGIN
     function showDashboardAfterLogin() {
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:640',message:'showDashboardAfterLogin ENTRY',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
         console.log('🚀 ========== INICIANDO showDashboardAfterLogin ==========');
         
@@ -816,7 +804,6 @@
         const adminLoginContainer = document.querySelector('#admin-login-container');
         
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:648',message:'Login containers found',data:{hasLoginContainer:!!loginContainer,hasAdminLoginContainer:!!adminLoginContainer,loginDisplay:loginContainer?loginContainer.style.display:'N/A',loginVisible:loginContainer?window.getComputedStyle(loginContainer).display:'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
         // #endregion
         
         if (loginContainer) {
@@ -828,7 +815,6 @@
             loginContainer.classList.add('hidden');
             console.log('✅ Login container escondido');
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:658',message:'Login container hidden',data:{display:loginContainer.style.display,visibility:loginContainer.style.visibility,computedDisplay:window.getComputedStyle(loginContainer).display},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
             // #endregion
         }
         
@@ -843,12 +829,10 @@
         // PASSO 2: Mostrar dashboard FORÇADAMENTE
         const dashboardContainer = document.querySelector('.dashboard-container');
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:672',message:'Dashboard container query',data:{found:!!dashboardContainer,display:dashboardContainer?dashboardContainer.style.display:'N/A',computedDisplay:dashboardContainer?window.getComputedStyle(dashboardContainer).display:'N/A',offsetParent:dashboardContainer?dashboardContainer.offsetParent:null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
         // #endregion
         if (!dashboardContainer) {
             console.error('❌ Dashboard container não encontrado!');
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:675',message:'Dashboard container NOT FOUND - RETRY',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
             // #endregion
             setTimeout(() => showDashboardAfterLogin(), 100);
             return;
@@ -868,7 +852,6 @@
         
         // #region agent log
         const computedStyle = window.getComputedStyle(dashboardContainer);
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:685',message:'Dashboard styles set',data:{inlineDisplay:dashboardContainer.style.display,computedDisplay:computedStyle.display,inlineVisibility:dashboardContainer.style.visibility,computedVisibility:computedStyle.visibility,opacity:computedStyle.opacity,zIndex:computedStyle.zIndex,offsetParent:!!dashboardContainer.offsetParent},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
         // #endregion
         
         console.log('✅ Dashboard container configurado:', {
@@ -881,13 +864,11 @@
         // PASSO 3: Criar conteúdo IMEDIATAMENTE
         const mainContent = document.querySelector('#main-content');
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:697',message:'Main content query',data:{found:!!mainContent,innerHTMLLength:mainContent?mainContent.innerHTML.length:0,innerHTMLPreview:mainContent?mainContent.innerHTML.substring(0,50):'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
         // #endregion
         if (mainContent) {
             if (!mainContent.innerHTML || mainContent.innerHTML.trim() === '' || mainContent.innerHTML.includes('<!-- Conteúdo será gerado')) {
                 console.log('📝 Criando conteúdo do dashboard imediatamente...');
                 // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:702',message:'Creating dashboard content manually',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
                 // #endregion
                 createDashboardContentManually();
             } else {
@@ -896,7 +877,6 @@
         } else {
             console.warn('⚠️ #main-content não encontrado, tentando novamente...');
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:708',message:'Main content NOT FOUND - retry',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
             // #endregion
             setTimeout(() => {
                 createDashboardContentManually();
@@ -1023,14 +1003,12 @@
 
     function navigateTo(page) {
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:801',message:'navigateTo called',data:{page:page},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
         // #endregion
         console.log('🧭 Navegando para:', page);
         
         // Verificar se o dashboard está visível
         const dashboardContainer = document.querySelector('.dashboard-container');
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:806',message:'navigateTo dashboard check',data:{found:!!dashboardContainer,display:dashboardContainer?dashboardContainer.style.display:'N/A',computedDisplay:dashboardContainer?window.getComputedStyle(dashboardContainer).display:'N/A'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
         // #endregion
         if (dashboardContainer && dashboardContainer.style.display === 'none') {
             console.warn('⚠️ Dashboard não está visível, forçando exibição...');
@@ -2399,7 +2377,6 @@ function createIcmsWithholdingPage(mainContent) {
                         });
                     }
                 });
-                fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2352',message:'TABELAS_AO_CARREGAR_MODELO',data:{tablesCount:tablesInfoOnLoad.length,tablesViaAPI:tablesInfoOnLoad,tablesInModelCount:tablesInModel.length,tablesInModel:tablesInModel},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
                 console.log(`📊 Tabelas encontradas (API: ${tablesInfoOnLoad.length}, Model: ${tablesInModel.length})`);
                 // #endregion
             }
@@ -2587,6 +2564,15 @@ function createIcmsWithholdingPage(mainContent) {
 const ICMS_API_URL = 'http://localhost:5000/api/icms';
 const USE_PYTHON_API = true; // Flag para habilitar/desabilitar API Python
 
+// Helper: fetch com timeout via AbortController
+// timeoutMs: 5000 para health checks, 120000 para processamento pesado
+function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...options, signal: controller.signal })
+        .finally(() => clearTimeout(timerId));
+}
+
 // Função para processar ICMS usando API Python (openpyxl - preserva fórmulas e tabelas)
 async function processIcmsXmlsWithPython() {
     const statusText = document.getElementById('icms-status-text');
@@ -2602,8 +2588,8 @@ async function processIcmsXmlsWithPython() {
     statusText.textContent = 'Enviando arquivos para processamento Python...';
     
     try {
-        // Verificar se API está disponível
-        const healthResponse = await fetch(`${ICMS_API_URL}/health`).catch(() => null);
+        // Verificar se API está disponível (timeout de 5s para não travar na espera)
+        const healthResponse = await fetchWithTimeout(`${ICMS_API_URL}/health`, {}, 5000).catch(() => null);
         if (!healthResponse || !healthResponse.ok) {
             const errorMsg = 'API Python não está disponível.\n\n' +
                 'Para usar o processamento Python (que preserva fórmulas e tabelas):\n' +
@@ -2624,11 +2610,11 @@ async function processIcmsXmlsWithPython() {
         
         statusText.textContent = 'Processando com Python (openpyxl)...';
         
-        // Enviar para API Python
-        const response = await fetch(`${ICMS_API_URL}/process`, {
+        // Enviar para API Python (timeout de 120s para processamentos pesados)
+        const response = await fetchWithTimeout(`${ICMS_API_URL}/process`, {
             method: 'POST',
             body: formData
-        });
+        }, 120000);
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
@@ -2884,7 +2870,6 @@ async function processIcmsXmls() {
             });
         }
     });
-    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2711',message:'FORMULAS_TABELAS_ANTES_WRITEBUFFER',data:{totalFormulas:formulasAntes.length,formulasComTabela:formulasComTabela.length,sampleFormulasComTabela:formulasComTabela.slice(0,10),totalTables:tablesAntes.length,tables:tablesAntes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q,R,S,T'})}).catch(()=>{});
     // #endregion
 
     // CRÍTICO: Python (openpyxl) NÃO modifica autoFilter - apenas salva o workbook
@@ -2919,14 +2904,12 @@ async function processIcmsXmls() {
             });
         });
     });
-    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2743',message:'FORMULAS_IMEDIATAMENTE_ANTES_WRITEBUFFER',data:{totalFormulas:formulasAntesWrite.length,sampleFormulas:formulasAntesWrite.slice(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q,R,S,T'})}).catch(()=>{});
     // #endregion
     
     const buffer = await workbook.xlsx.writeBuffer();
     
     // #region agent log - HYPOTHESIS Q, R, S, T - Verificar buffer gerado (não podemos verificar fórmulas depois pois buffer já foi criado)
     // Mas podemos verificar o tamanho e tipo do buffer
-    fetch('http://127.0.0.1:7242/ingest/a36192c5-06f5-4bd5-8eaf-728fb36035f1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:2756',message:'DEPOIS_WRITEBUFFER',data:{bufferSize:buffer?.byteLength||0,bufferType:buffer?.constructor?.name||'N/A',fileName:nomePlanilha,note:'Buffer criado - fórmulas e tabelas devem estar preservadas no XML se ExcelJS funcionou corretamente'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'Q,R,S,T'})}).catch(()=>{});
     // #endregion
     
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

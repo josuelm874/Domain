@@ -4,11 +4,10 @@
  */
 
 // ==================== CONFIGURAÇÃO SUPABASE ====================
-// Credenciais configuradas
-const SUPABASE_CONFIG = {
-    url: 'https://wbigfkxvrridtqpzvsil.supabase.co',
-    anonKey: 'sb_publishable_diWTtWyA5ZM99butbHbyvA_QWFtr4tV'
-};
+// Credenciais lidas de config.js (arquivo gitignored).
+// Se config.js não estiver presente, o sistema usa apenas localStorage.
+// Consulte config.example.js para instruções de setup.
+const SUPABASE_CONFIG = window.SUPABASE_CONFIG || { url: '', anonKey: '' };
 
 // Nome da tabela onde os dados serão armazenados
 const TABLE_NAME = 'system_data';
@@ -20,44 +19,57 @@ const PYTHON_LIBRARY_BUCKET = 'python-library';
 let supabaseClient = null;
 let isSupabaseConfigured = false;
 
+// Promise que resolve para true/false quando o cliente estiver pronto (ou falhar).
+// Garante que saveToCloud/loadFromCloud não corram na frente do onload do CDN.
+let supabaseReadyPromise = null;
+
 // Verificar se Supabase está configurado
 function initSupabase() {
-    if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey || 
+    if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey ||
         SUPABASE_CONFIG.url === 'SUA_URL_DO_SUPABASE_AQUI' ||
         SUPABASE_CONFIG.anonKey === 'SUA_ANON_KEY_AQUI') {
         console.warn('⚠️ Supabase não configurado. Usando apenas localStorage.');
+        supabaseReadyPromise = Promise.resolve(false);
         return false;
     }
 
-    try {
-        // Carregar biblioteca Supabase via CDN
-        if (typeof window.supabase === 'undefined') {
-            const script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
-            script.onload = () => {
-                if (window.supabase) {
-                    supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
-                    isSupabaseConfigured = true;
-                    console.log('✅ Supabase inicializado com sucesso!');
-                    // Criar tabela automaticamente se não existir
-                    ensureTableExists();
-                }
-            };
-            script.onerror = () => {
-                console.error('❌ Erro ao carregar biblioteca Supabase');
-            };
-            document.head.appendChild(script);
-        } else {
-            supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
-            isSupabaseConfigured = true;
-            console.log('✅ Supabase inicializado com sucesso!');
-            ensureTableExists();
+    supabaseReadyPromise = new Promise(resolve => {
+        try {
+            // Carregar biblioteca Supabase via CDN
+            if (typeof window.supabase === 'undefined') {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+                script.onload = () => {
+                    if (window.supabase) {
+                        supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+                        isSupabaseConfigured = true;
+                        console.log('✅ Supabase inicializado com sucesso!');
+                        ensureTableExists();
+                        resolve(true);
+                    } else {
+                        console.error('❌ window.supabase indisponível após carregamento do CDN');
+                        resolve(false);
+                    }
+                };
+                script.onerror = () => {
+                    console.error('❌ Erro ao carregar biblioteca Supabase');
+                    resolve(false);
+                };
+                document.head.appendChild(script);
+            } else {
+                supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+                isSupabaseConfigured = true;
+                console.log('✅ Supabase inicializado com sucesso!');
+                ensureTableExists();
+                resolve(true);
+            }
+        } catch (error) {
+            console.error('❌ Erro ao inicializar Supabase:', error);
+            resolve(false);
         }
-        return true;
-    } catch (error) {
-        console.error('❌ Erro ao inicializar Supabase:', error);
-        return false;
-    }
+    });
+
+    return true;
 }
 
 // Criar tabela automaticamente (via REST API, já que não temos permissões SQL diretas)
@@ -88,9 +100,8 @@ async function saveToCloud(key, data) {
     }
 
     // Tentar salvar na nuvem se Supabase estiver configurado
-    if (!isSupabaseConfigured) {
-        initSupabase();
-    }
+    if (!supabaseReadyPromise) initSupabase();
+    await supabaseReadyPromise; // aguarda CDN carregar antes de verificar o estado
 
     if (!isSupabaseConfigured || !supabaseClient) {
         console.warn(`⚠️ Supabase não disponível. Dados salvos apenas localmente: ${key}`);
@@ -126,9 +137,8 @@ async function saveToCloud(key, data) {
  */
 async function loadFromCloud(key, defaultValue = null) {
     // Primeiro, tentar carregar da nuvem
-    if (!isSupabaseConfigured) {
-        initSupabase();
-    }
+    if (!supabaseReadyPromise) initSupabase();
+    await supabaseReadyPromise; // aguarda CDN carregar antes de verificar o estado
 
     if (isSupabaseConfigured && supabaseClient) {
         try {

@@ -156,13 +156,21 @@ def process_icms():
         if not xml_files or len(xml_files) == 0:
             return jsonify({'error': 'Nenhum arquivo XML fornecido'}), 400
 
+        # Validar extensão do modelo antes de salvar
+        modelo_filename = secure_filename(modelo_file.filename)
+        if not modelo_filename.lower().endswith('.xlsx'):
+            return jsonify({'error': 'O arquivo modelo deve ser um arquivo Excel (.xlsx)'}), 400
+
         # Salvar arquivos temporariamente
-        modelo_path = session_dir / secure_filename(modelo_file.filename)
+        modelo_path = session_dir / modelo_filename
         modelo_file.save(str(modelo_path))
 
         xml_paths = []
         for xml_file in xml_files:
-            xml_path = session_dir / secure_filename(xml_file.filename)
+            xml_filename = secure_filename(xml_file.filename)
+            if not xml_filename.lower().endswith('.xml'):
+                return jsonify({'error': f'Arquivo inválido: "{xml_filename}". Apenas arquivos .xml são aceitos.'}), 400
+            xml_path = session_dir / xml_filename
             xml_file.save(str(xml_path))
             xml_paths.append(xml_path)
 
@@ -195,6 +203,11 @@ def process_icms():
 
         # Carregar e processar workbook (mesma lógica do Retencao_Autonoma.py)
         wb = load_workbook(str(modelo_path))
+        if "ICMS ST 1104" not in wb.sheetnames:
+            abas_disponiveis = ", ".join(wb.sheetnames)
+            return jsonify({
+                "error": f"Aba 'ICMS ST 1104' não encontrada na planilha modelo. Abas disponíveis: {abas_disponiveis}"
+            }), 400
         aba_icms = wb["ICMS ST 1104"]
 
         aba_icms["C3"] = razao_social
