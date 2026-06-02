@@ -23,6 +23,13 @@ node_modules/
 package-lock.json
 yarn.lock
 
+# Python (API ICMS)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
 # Arquivos temporários
 *.tmp
 *.temp

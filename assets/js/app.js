@@ -1,29 +1,83 @@
 //------------------------------------ SISTEMA PRINCIPAL ----------------------------------------//
 (function() {
-    // Função helper para logs de debug (trata erros de bloqueio silenciosamente)
-    // Tornar global para ser acessível em todas as funções
-    window.debugLog = (location, message, data = {}) => {
-        try {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    location,
-                    message,
-                    data,
-                    timestamp: Date.now(),
-                    sessionId: 'debug-session',
-                    runId: 'run1',
-                    hypothesisId: 'A'
-                })
-            }).catch(() => {
-                // Silenciosamente ignorar erros de bloqueio (ERR_BLOCKED_BY_CLIENT)
-                // Não poluir o console com esses erros
-            });
-        } catch (e) {
-            // Silenciosamente ignorar qualquer erro
-        }
+    // No-op de debug (substituiu envio antigo para 127.0.0.1:7242 que ficou quebrado pós-refactor).
+    // Mantido como stub para preservar todos os call-sites existentes sem refator agressivo.
+    window.debugLog = (_location, _message, _data = {}) => { /* no-op */ };
+    const debugLog = window.debugLog;
+
+    // ==================== HASH DE SENHA — SEGURO (PBKDF2-SHA-256) ====================
+    // Substitui o legacy `generateUltraSecureHash` (btoa+reverse, criptograficamente quebrado).
+    // PBKDF2 com 100k iterações + SHA-256 é o mínimo defensável em 2025 para client-side hashing.
+    // ATENÇÃO: client-side hash continua sendo medida-ponte. A migração final é Supabase Auth.
+    const PASSWORD_SALT_FALLBACK = 'softtech_fiscal_v1_change_me_via_config';
+    function _getPasswordSalt() {
+        return (window.APP_CONFIG && window.APP_CONFIG.passwordSalt) || PASSWORD_SALT_FALLBACK;
+    }
+    /**
+     * Hash seguro de senha via PBKDF2-SHA-256 (100k iter, 256 bits).
+     * @param {string} password
+     * @returns {Promise<string>} hash em base64 prefixado com "pbkdf2$"
+     */
+    window.generateSecureHash = async function generateSecureHash(password) {
+        if (!password) return '';
+        const enc = new TextEncoder();
+        const salt = enc.encode(_getPasswordSalt());
+        const keyMaterial = await crypto.subtle.importKey(
+            'raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveBits']
+        );
+        const bits = await crypto.subtle.deriveBits(
+            { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+            keyMaterial, 256
+        );
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(bits)));
+        return 'pbkdf2$' + b64;
     };
-    const debugLog = window.debugLog; // Alias local para compatibilidade
+    /**
+     * Verifica password contra hash. Aceita o formato novo (pbkdf2$...) e o legacy.
+     * Se a senha bater no legacy, retorna { ok: true, upgrade: novoHash } para o caller
+     * persistir o upgrade silencioso no Supabase/localStorage.
+     * @param {string} password
+     * @param {string} storedHash
+     * @returns {Promise<{ok: boolean, upgrade?: string}>}
+     */
+    window.verifyPassword = async function verifyPassword(password, storedHash) {
+        if (!storedHash) return { ok: false };
+        if (storedHash.startsWith('pbkdf2$')) {
+            const candidate = await window.generateSecureHash(password);
+            return { ok: candidate === storedHash };
+        }
+        // Legacy: aceita uma única vez e força upgrade.
+        const legacy = window._legacyUnsafeHash(password);
+        if (legacy === storedHash) {
+            const upgraded = await window.generateSecureHash(password);
+            return { ok: true, upgrade: upgraded };
+        }
+        return { ok: false };
+    };
+    /**
+     * Hash legacy (btoa+reverse). MANTIDO APENAS para validar senhas antigas
+     * no primeiro login após esta migração; novos cadastros usam PBKDF2.
+     * NÃO usar em código novo.
+     * @deprecated
+     */
+    window._legacyUnsafeHash = function _legacyUnsafeHash(input) {
+        const s1 = "JosueProg2024!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
+        const s2 = "DominiumBetaSystem!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
+        const s3 = "AdminSecurity404!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
+        let h = input;
+        for (const salt of [s1, s2, s3, s1, s2, s3]) {
+            h = btoa((h + salt).split('').reverse().join(''));
+        }
+        h = btoa((h + s1 + s2 + s3).split('').reverse().join(''));
+        h = btoa((h + s1 + s2 + s3).split('').reverse().join(''));
+        return h;
+    };
+    // Shim deprecated: cadastros antigos ainda chamam isto sincronamente.
+    // Novos cadastros DEVEM usar generateSecureHash (async).
+    window.generateUltraSecureHash = function(input) {
+        console.warn('[DEPRECATED] generateUltraSecureHash síncrono. Use generateSecureHash (async).');
+        return window._legacyUnsafeHash(input);
+    };
     
     // Função auxiliar para garantir que elementos sejam encontrados
     const ensureElements = () => {
@@ -63,10 +117,16 @@
 
 
     // Função de logout global
-    function logout() {
+    async function logout() {
         try {
             console.log('🔄 Iniciando processo de logout...');
-            
+
+            // Encerrar sessão Supabase (best-effort — não bloqueia logout local em caso de erro).
+            if (window.supabaseSync?.auth?.signOut) {
+                try { await window.supabaseSync.auth.signOut(); }
+                catch (e) { console.warn('Falha ao encerrar sessão Supabase:', e); }
+            }
+
             currentUser = null;
             window.currentUser = null;
             
@@ -127,24 +187,23 @@
                     adminLoginContainer.style.visibility = 'hidden';
                 }
                 
-                // Limpar campos de login (mas manter credenciais se "Lembrar de mim" estiver ativo)
+                // Limpar campos de login (mas manter username se "Lembrar de mim" estiver ativo).
+                // SEGURANÇA: senha não é mais persistida em localStorage. "Lembrar" só pré-preenche
+                // o username; o usuário sempre digita a senha.
                 const savedUsername = localStorage.getItem('savedUsername');
-                const savedPassword = localStorage.getItem('savedPassword');
-                
+
                 if (loginPassword) loginPassword.value = '';
                 if (adminUsername) adminUsername.value = '';
                 if (adminPassword) adminPassword.value = '';
-                
-                // Recarregar credenciais salvas se existirem
+
                 if (savedUsername && loginUsername) {
                     loginUsername.value = savedUsername;
                 } else if (loginUsername) {
                     loginUsername.value = '';
                 }
-                
-                // Se houver password salvo, marcar checkbox
+
                 if (rememberMeCheckbox) {
-                    rememberMeCheckbox.checked = !!(savedPassword);
+                    rememberMeCheckbox.checked = !!savedUsername;
                 }
                 
                 // Restaurar background padrão
@@ -231,110 +290,26 @@
         return date; // Retornar Date, não string formatada
     }
 
-    // Função para tentar login automático com credenciais salvas
-    const attemptAutoLogin = (username, password) => {
-        if (!username || !password) return false;
-        
-        // Verificar usuários cadastrados dinamicamente
-        const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-        const user = registeredUsers.find(u => u.username === username.toLowerCase());
-        
-        if (!user) {
-            // Verificar se é admin
-            if (username.toLowerCase() === 'adm') {
-                return false; // Admin precisa fazer login manual
-            }
-            return false;
-        }
-        
-        // Verificar senha
-        const hashedPassword = generateUltraSecureHash(password);
-        if (user.password !== hashedPassword) {
-            // Senha incorreta, remover credenciais salvas
-            localStorage.removeItem('savedUsername');
-            localStorage.removeItem('savedPassword');
-            return false;
-        }
-        
-        // Login bem-sucedido!
-        currentUser = user.username;
-        window.currentUser = user.username;
-        
-        // Esconder login container completamente
-        if (loginContainer) {
-            loginContainer.style.display = 'none';
-            loginContainer.style.visibility = 'hidden';
-            loginContainer.classList.add('hidden');
-        }
-        
-        // Mostrar dashboard container
-        if (dashboardContainer) {
-            dashboardContainer.style.display = 'block';
-            dashboardContainer.style.visibility = 'visible';
-            console.log('✅ Dashboard container mostrado (auto-login)');
-            // Atualizar reminders após auto-login (com segurança)
-            setTimeout(() => {
-                if (typeof safeUpdateTaxReminders === 'function') {
-                    safeUpdateTaxReminders();
-                }
-            }, 1000);
-        } else {
-            console.error('❌ Dashboard container não encontrado! (auto-login)');
-        }
-        
-        // Aguardar um frame para garantir que o DOM foi atualizado
-        requestAnimationFrame(() => {
-            loadUserPreferences();
-            navigateTo('dashboard');
-        });
-        
-        const userNameElement = document.querySelector('#current-user-name');
-        const adminLabelElement = document.querySelector('#admin-label');
-        const profileImageElement = document.querySelector('#profile-image');
-        
-        if (userNameElement) {
-            userNameElement.textContent = user.name;
-        }
-        if (adminLabelElement) {
-            adminLabelElement.style.display = (user.control === 'administrador') ? 'block' : 'none';
-        }
-        if (profileImageElement) {
-            profileImageElement.src = user.profileImage || profileImages['default'];
-        }
-        
-        console.log('✅ Login automático realizado com sucesso para:', username);
-        return true;
-    };
-
-    // Carregar credenciais salvas e tentar login automático (igual ao Chat.html)
+    // SEGURANÇA (2026-06-01): auto-login com senha persistida foi removido.
+    // "Lembrar de mim" agora só pré-preenche o username — o usuário sempre digita a senha.
+    // Justificativa: senha em localStorage é leitura trivial para extensão maliciosa, XSS ou
+    // qualquer ator com acesso ao computador. A migração final para Supabase Auth (Fase 2)
+    // substitui esse fluxo por refresh tokens com TTL e revogação server-side.
     const loadSavedCredentialsAndAutoLogin = () => {
-        // Re-buscar elementos para garantir que estão disponíveis
         const usernameInput = document.querySelector('#login-username');
         const rememberCheckbox = document.querySelector('#rememberMe');
-        
+
+        // Limpar resíduo de migrações antigas para não confundir o estado do checkbox.
+        if (localStorage.getItem('savedPassword') !== null) {
+            localStorage.removeItem('savedPassword');
+        }
+
         const savedUsername = localStorage.getItem('savedUsername');
-        const savedPassword = localStorage.getItem('savedPassword');
-        const hasSavedCredentials = !!(savedUsername && savedPassword);
-        
-        if (hasSavedCredentials) {
-            // Tentar login automático
-            console.log('🔄 Tentando login automático com credenciais salvas...');
-            const success = attemptAutoLogin(savedUsername, savedPassword);
-            if (!success) {
-                // Login automático falhou, preencher campos para login manual
-                if (usernameInput) {
-                    usernameInput.value = savedUsername;
-                }
-                if (rememberCheckbox) {
-                    rememberCheckbox.checked = true;
-                }
-                console.log('⚠️ Login automático falhou, campos preenchidos para login manual');
-            }
-        } else {
-            // Não há credenciais salvas, apenas preencher username se existir
-            if (savedUsername && usernameInput) {
-                usernameInput.value = savedUsername;
-            }
+        if (savedUsername && usernameInput) {
+            usernameInput.value = savedUsername;
+        }
+        if (rememberCheckbox) {
+            rememberCheckbox.checked = !!savedUsername;
         }
     };
     
@@ -405,15 +380,62 @@
     }
 
     async function handleLogin() {
-        // #region agent log
-        debugLog('app.js:380', 'handleLogin called', { hasLoginUsername: !!loginUsername, hasLoginPassword: !!loginPassword });
-        // #endregion
         if (!loginUsername || !loginPassword) return;
-        
+
         const username = loginUsername.value.trim().toLowerCase();
         const password = loginPassword.value.trim();
-        
-        // CRÍTICO: Se localStorage estiver vazio, tentar carregar do Supabase primeiro
+
+        // ============== TENTATIVA 1: Supabase Auth (caminho moderno) ==============
+        // Se o usuário já existe em auth.users, signIn cria sessão JWT.
+        // Trigger handle_new_user já populou user_profiles (control=administrador/auxiliar).
+        if (window.supabaseSync?.auth && window.supabaseSync.isConfigured()) {
+            const result = await window.supabaseSync.auth.signIn(username, password);
+            if (result.ok) {
+                currentUser = username;
+                window.currentUser = username;
+                const profile = result.profile || {};
+                loadUserPreferences();
+                showDashboardAfterLogin();
+
+                const userNameEl = document.querySelector('#current-user-name');
+                const adminLabelEl = document.querySelector('#admin-label');
+                const profileImageEl = document.querySelector('#profile-image');
+                if (userNameEl) userNameEl.textContent = profile.full_name || username;
+                if (adminLabelEl) adminLabelEl.style.display = (profile.control === 'administrador' || profile.role === 'admin') ? 'block' : 'none';
+                if (profileImageEl) profileImageEl.src = profile.profile_image || profileImages['default'];
+
+                // Espelha o profile do Supabase em registeredUsers (localStorage) para que as
+                // checagens de admin — que fazem registeredUsers.find(u => u.username === currentUser) —
+                // reconheçam o usuário logado via Supabase Auth. Sem isto, control fica indefinido
+                // e todas as áreas admin (CEST, cadastro, analytics) bloqueiam o administrador.
+                try {
+                    const all = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+                    const mirrored = {
+                        username,
+                        name: profile.full_name || username,
+                        control: profile.control || (profile.role === 'admin' ? 'administrador' : 'auxiliar'),
+                        profileImage: profile.profile_image || '',
+                    };
+                    const idx = all.findIndex(u => u.username === username);
+                    if (idx >= 0) all[idx] = { ...all[idx], ...mirrored };
+                    else all.push(mirrored);
+                    localStorage.setItem('registeredUsers', JSON.stringify(all));
+                } catch (e) {
+                    console.warn('Falha ao espelhar profile Supabase em registeredUsers:', e);
+                }
+
+                const rememberMe = rememberMeCheckbox?.checked || false;
+                if (rememberMe) localStorage.setItem('savedUsername', username);
+                else localStorage.removeItem('savedUsername');
+                localStorage.removeItem('savedPassword');
+                return;
+            }
+            // Se a falha foi "Invalid login credentials" e o usuário NÃO existe em auth,
+            // cai no fallback local. Outros erros (network, config) também caem.
+            console.info('Supabase Auth falhou, tentando fallback local:', result.error);
+        }
+
+        // ============== TENTATIVA 2: PBKDF2 local (compat. com cadastros antigos) ==============
         let registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
         
         // Se não há usuários no localStorage, tentar carregar do Supabase
@@ -457,24 +479,37 @@
         
         // Verificar usuários cadastrados dinamicamente
         const user = registeredUsers.find(u => u.username === username);
-        
+
         // Verificar se é usuário cadastrado
         if (user) {
-            const hashedPassword = generateUltraSecureHash(password);
-            if (user.password === hashedPassword) {
-                // #region agent log
-                // #endregion
-                // Salvar ou remover credenciais baseado no checkbox (igual ao Chat.html)
+            const verification = await window.verifyPassword(password, user.password);
+            if (verification.ok) {
+                // Upgrade silencioso: se a senha foi validada via legacy hash, persistir o novo.
+                if (verification.upgrade) {
+                    try {
+                        const all = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+                        const idx = all.findIndex(u => u.username === user.username);
+                        if (idx >= 0) {
+                            all[idx].password = verification.upgrade;
+                            localStorage.setItem('registeredUsers', JSON.stringify(all));
+                            if (typeof saveDataSync === 'function') {
+                                saveDataSync('registeredUsers', all).catch(() => {});
+                            }
+                            console.log(`🔐 Hash da senha do usuário ${user.username} migrado para PBKDF2.`);
+                        }
+                    } catch (e) {
+                        console.warn('Falha ao persistir upgrade de hash:', e);
+                    }
+                }
+                // "Lembrar de mim" agora persiste APENAS o username.
                 const rememberMe = rememberMeCheckbox?.checked || false;
                 if (rememberMe) {
                     localStorage.setItem('savedUsername', username);
-                    localStorage.setItem('savedPassword', password);
-                    console.log('Credenciais salvas para lembrar:', username);
                 } else {
                     localStorage.removeItem('savedUsername');
-                    localStorage.removeItem('savedPassword');
                 }
-                
+                localStorage.removeItem('savedPassword'); // limpa resíduo antigo
+
                 currentUser = user.username;
                 window.currentUser = user.username;
                 
@@ -506,29 +541,40 @@
                 }
             }
         } else if (username === 'adm') {
-            // #region agent log
-            // #endregion
-            // Validar login de administrador diretamente no mesmo handle
-            const hashedPassword = generateUltraSecureHash(password);
-            const adminHash = "fmAvLiwiJztcXVs/Pjw6fH17K18pKComXiUkI0AhNDA0eXRpcnVjZVNuaW1kQX5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAIW1ldHN5U2F0ZUJtdWluaW1vRH5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAITQyMDJnb3JQZXVzb0o9WVdiQlpIVHBkWGFLcEhkamhsVno5Q1VxZG5ObWhVTTNzVU00QTNTRDlXYllsV1ZybEVNQmhtVEVGRU1saGxVd05tYldwbVdXNVVkaGRWTXJGRlZ4b2xWeW8wUVh0R2FWTjJSU2xWV1ZSM2RUZGtVeEYyUjRkVlpxeEdSV2hsUnJKMmExUVhZR1psVE5OalRXUkZWU0pVVHg0VVJQWkZacGQxVjRobFZ1cDBjU1ZWTURGMlJ4VWxVWGQzZGFWRU40SlZNdmxIVnJSV2FSTkRhSWRGYnJGVFl5SVZWalpFWk9sbFZ3TkhWVlIzVE5aa1c1Rm1Sa2RWWXRKbGNXWkZjelpGYlpkbldFNWtWVFZFY1hsbE1vdG1VWFpWV1cxV01vTldNS0puVnN4V1lOZGtSd1JtUms5VVRGcEZkVngyWXhZbFZTWmpUSFIzVldabFN6WlZWTmhuVlZGRFVXcG1RVlpWTUtoVldXaDJhUzFtVmFkVmI0bDJVd1VUZFdabFdIVkdiRzltV0dabFRaZGxVelZsYmt0bVVXcFZXUnBtVFZWbE1TSlhWeFEyU1dGalNvRm1SYWRWWnRSR1NXRkRadkptUldsMFZzcDFVbFJFYTBaRk1rZFhUV0psY1I1R2NwNWtWd05YV1dSV1lpWmtWWWRWYjRkVlY2WkVTWkZEWmhaVmJLTlZZR2hHV090R2NYZDFWc2RsVlZGalNUcG1Sb1ZsTVJoM1ZZWjBWTmRsVVlwVlJXdDJVRnBGU1p0R2RURkdiYWgzVnRSWFZYeFdTNGxGVk9GV1RYWmtka1prVlZkRlJWZG5WVlZ6VlN4R2M2UlZieGMxVXlnMlZXTlRUeDBrUldWMVZ0UkhXWlpsV1hsbGJvSmxWc3BGTmlKRGVYWkZWV1JuVndnMlNTMW1Tb1ZsYUNwbFV4QTNjV0pEZWhKMVZLbGtZR3BsVGlOalUwWkZiYU5rVkhaRlZrZFVNWVJsZUZkWFZzcDBkaXhtV0hkRmJhcFZWeEEzY1dabFJQMUViSmhIVlVaa1ZrVjFiM2xWTXd0bVlHcFVVWDFHZVROMk1DVm5WWUoxVU5KalJ2UjJSeGdWWkdCM1ZVaEZaUGRsUlNkbFVySjFWWFJrVklsVk1rTmxVeDRVZGlWRWFYZDFSbmxuVnMxRWVpWlZXNE5WVmFkbFV5STFWWHRtVkxKbFZrZGxXRVprYU9aRWN6UlZWa2RrVUdwbGVqWmtXYUZHU29SblY2WjBjTlZWTUVSbGFHZDFVR2xGZWFaa1NYSm1SV0ZsVXNSMlVTMVdVNlpsVm9ObFlzcDFiWHRtV28xVVJ3aEVWVmxETk5aRWJHcFZSa3htVklGa2VYUmxVUDFrVktGMlVySlZZbFZsUlpaVlZ4OFVZc0pWV2FSa1JUUkZNS1YxVnVwMFFUZGtUeU4xYVNsR1ZzbFVlWlZGWlRKR2JrVlhUV0pWVVNSRmJZbGxiQkZqVnlVRWVOZFZNU0ptUktsMVZXSjFjTkpUVDNaRmJrbFdZRlYwZFRkRmRXRm1Wb1JuWXc0RVRqUjBaNE5sZWpoM1VIbGxNa0pEY1J4ME1PZDFWSDVFTWx0R2N3Um1NczFFWnJaRWRhZFdQOW8wYnpWWFpRSjNibkpETXlRVElBTkNKbDRsSnFnU0tmdHllOXhuTzg0elBiMUZYN2NpSXM0eUxnNUhSdjFXYXVsV2R0SlVaMEYyVTVOSGRsMVdJQU5DSmw0bEpxZ1NLZnR5ZTl4bk84NHpQYjFGWDdjaUlzNHlMZzVYUWsxV2F1TlZaalZuY3BSWGUwQUROaEEwSWtVaVhtb0NLcDgxSzcxSGY2d2pQL3NWWGN0ekppd2lMdkFtZg==";
-            
-            // Verificar se a senha é a senha de administrador
-            if (hashedPassword === adminHash) {
-                // #region agent log
-                // #endregion
+            // Login do super-admin: hash agora vem de window.APP_CONFIG.adminPasswordHash
+            // (definido em assets/js/config.js, gitignored). Aceita formato novo "pbkdf2$..."
+            // e legacy (com upgrade silencioso).
+            const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
+
+            if (!adminHash) {
+                console.error('❌ adminPasswordHash não configurado em window.APP_CONFIG. Veja config.example.js.');
+                if (loginForm) {
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'error-message';
+                    errorDiv.textContent = 'Admin não configurado. Contate o responsável.';
+                    loginForm.appendChild(errorDiv);
+                    setTimeout(() => errorDiv.remove(), 3000);
+                }
+                return;
+            }
+
+            const adminVerification = await window.verifyPassword(password, adminHash);
+            if (adminVerification.ok) {
                 currentUser = 'adm';
                 window.currentUser = 'adm';
-                
-                // Salvar ou remover credenciais baseado no checkbox
+
+                if (adminVerification.upgrade) {
+                    console.warn('🔐 Hash do admin ainda em formato legacy. Atualize window.APP_CONFIG.adminPasswordHash para:', adminVerification.upgrade);
+                }
+
+                // "Lembrar de mim" persiste apenas username.
                 const rememberMe = rememberMeCheckbox?.checked || false;
                 if (rememberMe) {
                     localStorage.setItem('savedUsername', username);
-                    localStorage.setItem('savedPassword', password);
-                    console.log('Credenciais salvas para lembrar:', username);
                 } else {
                     localStorage.removeItem('savedUsername');
-                    localStorage.removeItem('savedPassword');
                 }
+                localStorage.removeItem('savedPassword');
                 
                 // Usar função centralizada para mostrar dashboard
                 loadUserPreferences();
@@ -549,25 +595,38 @@
                     console.log(`Imagem de perfil atualizada para ${currentUser}: ${profileImageElement.src}`);
                 }
             } else {
-                // Verificar se é um usuário administrador cadastrado
-                const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-                const adminUser = registeredUsers.find(u => u.control === 'administrador' && u.password === hashedPassword);
-                
+                // Verificar se é um usuário administrador cadastrado (via verifyPassword com upgrade).
+                const allUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+                const adminCandidates = allUsers.filter(u => u.control === 'administrador');
+                let adminUser = null;
+                let adminUpgrade = null;
+                for (const candidate of adminCandidates) {
+                    const v = await window.verifyPassword(password, candidate.password);
+                    if (v.ok) { adminUser = candidate; adminUpgrade = v.upgrade; break; }
+                }
+
                 if (adminUser) {
-                    // #region agent log
-                    // #endregion
                     currentUser = adminUser.username;
                     window.currentUser = adminUser.username;
-                    
-                    // Salvar ou remover credenciais baseado no checkbox
+
+                    if (adminUpgrade) {
+                        const idx = allUsers.findIndex(u => u.username === adminUser.username);
+                        if (idx >= 0) {
+                            allUsers[idx].password = adminUpgrade;
+                            localStorage.setItem('registeredUsers', JSON.stringify(allUsers));
+                            if (typeof saveDataSync === 'function') {
+                                saveDataSync('registeredUsers', allUsers).catch(() => {});
+                            }
+                        }
+                    }
+
                     const rememberMe = rememberMeCheckbox?.checked || false;
                     if (rememberMe) {
                         localStorage.setItem('savedUsername', adminUser.username);
-                        localStorage.setItem('savedPassword', password);
                     } else {
                         localStorage.removeItem('savedUsername');
-                        localStorage.removeItem('savedPassword');
                     }
+                    localStorage.removeItem('savedPassword');
                     
                     // Usar função centralizada para mostrar dashboard
                     loadUserPreferences();
@@ -607,76 +666,34 @@
         }
     }
 
-    // Função de hash extremamente seguro para senha admin
-    window.generateUltraSecureHash = function(input) {
-        // Salt único e complexo (múltiplas camadas)
-        const salt1 = "JosueProg2024!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
-        const salt2 = "DominiumBetaSystem!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
-        const salt3 = "AdminSecurity404!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
-        
-        // Múltiplas camadas de hash com salt
-        let hash = input;
-        
-        // Primeira camada: Hash com salt1
-        hash = hash + salt1;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Segunda camada: Hash com salt2
-        hash = hash + salt2;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Terceira camada: Hash com salt3
-        hash = hash + salt3;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Quarta camada: Hash com salt1 novamente
-        hash = hash + salt1;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Quinta camada: Hash com salt2 novamente
-        hash = hash + salt2;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Sexta camada: Hash com salt3 novamente
-        hash = hash + salt3;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Sétima camada: Hash com todos os salts combinados
-        hash = hash + salt1 + salt2 + salt3;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        // Oitava camada: Hash final com todos os salts combinados
-        hash = hash + salt1 + salt2 + salt3;
-        hash = hash.split('').reverse().join('');
-        hash = btoa(hash);
-        
-        return hash;
-    }
+    // NOTA: a função `window.generateUltraSecureHash` foi movida para o topo do IIFE
+    // como shim deprecated que apenas chama `_legacyUnsafeHash` e emite warning.
+    // A implementação real (PBKDF2) está em `window.generateSecureHash`. Veja início do arquivo.
 
-    function handleAdminLogin() {
-        // #region agent log
-        // #endregion
+    async function handleAdminLogin() {
+        // Função legada (admin-form não está mais ativo no HTML — ver Dominium.html:379).
+        // Mantida para compatibilidade caso seja reativada no futuro.
         if (!adminPassword) return;
-        
+
         const password = adminPassword.value.trim();
-        const hashedPassword = generateUltraSecureHash(password);
-        const adminHash = "fmAvLiwiJztcXVs/Pjw6fH17K18pKComXiUkI0AhNDA0eXRpcnVjZVNuaW1kQX5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAIW1ldHN5U2F0ZUJtdWluaW1vRH5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAITQyMDJnb3JQZXVzb0o9WVdiQlpIVHBkWGFLcEhkamhsVno5Q1VxZG5ObWhVTTNzVU00QTNTRDlXYllsV1ZybEVNQmhtVEVGRU1saGxVd05tYldwbVdXNVVkaGRWTXJGRlZ4b2xWeW8wUVh0R2FWTjJSU2xWV1ZSM2RUZGtVeEYyUjRkVlpxeEdSV2hsUnJKMmExUVhZR1psVE5OalRXUkZWU0pVVHg0VVJQWkZacGQxVjRobFZ1cDBjU1ZWTURGMlJ4VWxVWGQzZGFWRU40SlZNdmxIVnJSV2FSTkRhSWRGYnJGVFl5SVZWalpFWk9sbFZ3TkhWVlIzVE5aa1c1Rm1Sa2RWWXRKbGNXWkZjelpGYlpkbldFNWtWVFZFY1hsbE1vdG1VWFpWV1cxV01vTldNS0puVnN4V1lOZGtSd1JtUms5VVRGcEZkVngyWXhZbFZTWmpUSFIzVldabFN6WlZWTmhuVlZGRFVXcG1RVlpWTUtoVldXaDJhUzFtVmFkVmI0bDJVd1VUZFdabFdIVkdiRzltV0dabFRaZGxVelZsYmt0bVVXcFZXUnBtVFZWbE1TSlhWeFEyU1dGalNvRm1SYWRWWnRSR1NXRkRadkptUldsMFZzcDFVbFJFYTBaRk1rZFhUV0psY1I1R2NwNWtWd05YV1dSV1lpWmtWWWRWYjRkVlY2WkVTWkZEWmhaVmJLTlZZR2hHV090R2NYZDFWc2RsVlZGalNUcG1Sb1ZsTVJoM1ZZWjBWTmRsVVlwVlJXdDJVRnBGU1p0R2RURkdiYWgzVnRSWFZYeFdTNGxGVk9GV1RYWmtka1prVlZkRlJWZG5WVlZ6VlN4R2M2UlZieGMxVXlnMlZXTlRUeDBrUldWMVZ0UkhXWlpsV1hsbGJvSmxWc3BGTmlKRGVYWkZWV1JuVndnMlNTMW1Tb1ZsYUNwbFV4QTNjV0pEZWhKMVZLbGtZR3BsVGlOalUwWkZiYU5rVkhaRlZrZFVNWVJsZUZkWFZzcDBkaXhtV0hkRmJhcFZWeEEzY1dabFJQMUViSmhIVlVaa1ZrVjFiM2xWTXd0bVlHcFVVWDFHZVROMk1DVm5WWUoxVU5KalJ2UjJSeGdWWkdCM1ZVaEZaUGRsUlNkbFVySjFWWFJrVklsVk1rTmxVeDRVZGlWRWFYZDFSbmxuVnMxRWVpWlZXNE5WVmFkbFV5STFWWHRtVkxKbFZrZGxXRVprYU9aRWN6UlZWa2RrVUdwbGVqWmtXYUZHU29SblY2WjBjTlZWTUVSbGFHZDFVR2xGZWFaa1NYSm1SV0ZsVXNSMlVTMVdVNlpsVm9ObFlzcDFiWHRtV28xVVJ3aEVWVmxETk5aRWJHcFZSa3htVklGa2VYUmxVUDFrVktGMlVySlZZbFZsUlpaVlZ4OFVZc0pWV2FSa1JUUkZNS1YxVnVwMFFUZGtUeU4xYVNsR1ZzbFVlWlZGWlRKR2JrVlhUV0pWVVNSRmJZbGxiQkZqVnlVRWVOZFZNU0ptUktsMVZXSjFjTkpUVDNaRmJrbFdZRlYwZFRkRmRXRm1Wb1JuWXc0RVRqUjBaNE5sZWpoM1VIbGxNa0pEY1J4ME1PZDFWSDVFTWx0R2N3Um1NczFFWnJaRWRhZFdQOW8wYnpWWFpRSjNibkpETXlRVElBTkNKbDRsSnFnU0tmdHllOXhuTzg0elBiMUZYN2NpSXM0eUxnNUhSdjFXYXVsV2R0SlVaMEYyVTVOSGRsMVdJQU5DSmw0bEpxZ1NLZnR5ZTl4bk84NHpQYjFGWDdjaUlzNHlMZzVYUWsxV2F1TlZaalZuY3BSWGUwQUROaEEwSWtVaVhtb0NLcDgxSzcxSGY2d2pQL3NWWGN0ekppd2lMdkFtZg==";
-        
-        // Verificar usuários cadastrados com privilégios de administrador
+        const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
+
+        if (!adminHash) {
+            console.error('❌ adminPasswordHash não configurado em window.APP_CONFIG.');
+            return;
+        }
+
+        const adminVerification = await window.verifyPassword(password, adminHash);
         const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-        const adminUser = registeredUsers.find(u => u.control === 'administrador' && u.password === hashedPassword);
-        
-        // #region agent log
-        // #endregion
-        
-        if (hashedPassword === adminHash) {
+
+        // Procurar admin cadastrado com verificação async.
+        let adminUser = null;
+        for (const u of registeredUsers.filter(u => u.control === 'administrador')) {
+            const v = await window.verifyPassword(password, u.password);
+            if (v.ok) { adminUser = u; break; }
+        }
+
+        if (adminVerification.ok) {
             // #region agent log
             // #endregion
             currentUser = 'adm';
@@ -1275,7 +1292,7 @@
                             </div>
                             <div class="box-info">
                                 <h3>Lista de CEST</h3>
-                                <p>Gerenciar produtos CEST 0300300 e 2899900</p>
+                                <p>Gerenciar CEST vencidos para substituição no SPED</p>
                             </div>
                         </div>
                     </div>
@@ -1487,27 +1504,31 @@
         const passwordInput = document.getElementById('analytics-password');
         const errorMsg = document.getElementById('analytics-error');
 
-        // Função para verificar senha
-        function verifyPassword() {
+        // Verifica senha do admin contra window.APP_CONFIG.adminPasswordHash (async, PBKDF2).
+        async function checkAnalyticsAdminPassword() {
             const password = passwordInput.value.trim();
             if (!password) {
                 errorMsg.textContent = 'Por favor, digite a senha.';
                 errorMsg.style.display = 'block';
                 return;
             }
-            
-            const hashedPassword = generateUltraSecureHash(password);
-            const adminHash = "fmAvLiwiJztcXVs/Pjw6fH17K18pKComXiUkI0AhNDA0eXRpcnVjZVNuaW1kQX5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAIW1ldHN5U2F0ZUJtdWluaW1vRH5gLy4sIic7XF1bPz48Onx9eytfKSgqJl4lJCNAITQyMDJnb3JQZXVzb0o9WVdiQlpIVHBkWGFLcEhkamhsVno5Q1VxZG5ObWhVTTNzVU00QTNTRDlXYllsV1ZybEVNQmhtVEVGRU1saGxVd05tYldwbVdXNVVkaGRWTXJGRlZ4b2xWeW8wUVh0R2FWTjJSU2xWV1ZSM2RUZGtVeEYyUjRkVlpxeEdSV2hsUnJKMmExUVhZR1psVE5OalRXUkZWU0pVVHg0VVJQWkZacGQxVjRobFZ1cDBjU1ZWTURGMlJ4VWxVWGQzZGFWRU40SlZNdmxIVnJSV2FSTkRhSWRGYnJGVFl5SVZWalpFWk9sbFZ3TkhWVlIzVE5aa1c1Rm1Sa2RWWXRKbGNXWkZjelpGYlpkbldFNWtWVFZFY1hsbE1vdG1VWFpWV1cxV01vTldNS0puVnN4V1lOZGtSd1JtUms5VVRGcEZkVngyWXhZbFZTWmpUSFIzVldabFN6WlZWTmhuVlZGRFVXcG1RVlpWTUtoVldXaDJhUzFtVmFkVmI0bDJVd1VUZFdabFdIVkdiRzltV0dabFRaZGxVelZsYmt0bVVXcFZXUnBtVFZWbE1TSlhWeFEyU1dGalNvRm1SYWRWWnRSR1NXRkRadkptUldsMFZzcDFVbFJFYTBaRk1rZFhUV0psY1I1R2NwNWtWd05YV1dSV1lpWmtWWWRWYjRkVlY2WkVTWkZEWmhaVmJLTlZZR2hHV090R2NYZDFWc2RsVlZGalNUcG1Sb1ZsTVJoM1ZZWjBWTmRsVVlwVlJXdDJVRnBGU1p0R2RURkdiYWgzVnRSWFZYeFdTNGxGVk9GV1RYWmtka1prVlZkRlJWZG5WVlZ6VlN4R2M2UlZieGMxVXlnMlZXTlRUeDBrUldWMVZ0UkhXWlpsV1hsbGJvSmxWc3BGTmlKRGVYWkZWV1JuVndnMlNTMW1Tb1ZsYUNwbFV4QTNjV0pEZWhKMVZLbGtZR3BsVGlOalUwWkZiYU5rVkhaRlZrZFVNWVJsZUZkWFZzcDBkaXhtV0hkRmJhcFZWeEEzY1dabFJQMUViSmhIVlVaa1ZrVjFiM2xWTXd0bVlHcFVVWDFHZVROMk1DVm5WWUoxVU5KalJ2UjJSeGdWWkdCM1ZVaEZaUGRsUlNkbFVySjFWWFJrVklsVk1rTmxVeDRVZGlWRWFYZDFSbmxuVnMxRWVpWlZXNE5WVmFkbFV5STFWWHRtVkxKbFZrZGxXRVprYU9aRWN6UlZWa2RrVUdwbGVqWmtXYUZHU29SblY2WjBjTlZWTUVSbGFHZDFVR2xGZWFaa1NYSm1SV0ZsVXNSMlVTMVdVNlpsVm9ObFlzcDFiWHRtV28xVVJ3aEVWVmxETk5aRWJHcFZSa3htVklGa2VYUmxVUDFrVktGMlVySlZZbFZsUlpaVlZ4OFVZc0pWV2FSa1JUUkZNS1YxVnVwMFFUZGtUeU4xYVNsR1ZzbFVlWlZGWlRKR2JrVlhUV0pWVVNSRmJZbGxiQkZqVnlVRWVOZFZNU0ptUktsMVZXSjFjTkpUVDNaRmJrbFdZRlYwZFRkRmRXRm1Wb1JuWXc0RVRqUjBaNE5sZWpoM1VIbGxNa0pEY1J4ME1PZDFWSDVFTWx0R2N3Um1NczFFWnJaRWRhZFdQOW8wYnpWWFpRSjNibkpETXlRVElBTkNKbDRsSnFnU0tmdHllOXhuTzg0elBiMUZYN2NpSXM0eUxnNUhSdjFXYXVsV2R0SlVaMEYyVTVOSGRsMVdJQU5DSmw0bEpxZ1NLZnR5ZTl4bk84NHpQYjFGWDdjaUlzNHlMZzVYUWsxV2F1TlZaalZuY3BSWGUwQUROaEEwSWtVaVhtb0NLcDgxSzcxSGY2d2pQL3NWWGN0ekppd2lMdkFtZg==";
-            
-            if (hashedPassword === adminHash) {
-                // Senha correta - carregar Analytics
+            const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
+            if (!adminHash) {
+                errorMsg.textContent = 'Admin não configurado (APP_CONFIG.adminPasswordHash).';
+                errorMsg.style.display = 'block';
+                return;
+            }
+            const verification = await window.verifyPassword(password, adminHash);
+            if (verification.ok) {
+                if (verification.upgrade) {
+                    console.warn('🔐 Atualize APP_CONFIG.adminPasswordHash para:', verification.upgrade);
+                }
                 modal.classList.add('fade-out');
                 setTimeout(() => {
                     modal.remove();
                     loadAnalyticsContent(mainContent);
                 }, 400);
             } else {
-                // Senha incorreta
                 errorMsg.textContent = 'Senha incorreta. Tente novamente.';
                 errorMsg.style.display = 'block';
                 passwordInput.value = '';
@@ -1515,10 +1536,9 @@
             }
         }
 
-        // Event listener para ENTER
         passwordInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                verifyPassword();
+                checkAnalyticsAdminPassword();
             }
         });
 
@@ -1683,32 +1703,22 @@
                 </div>
                 <div class="modal-body">
                     <div class="cest-container">
-                        <div class="cest-column left-column">
+                        <div class="cest-column expired-column" style="grid-column: 1 / -1;">
                             <div class="cest-section">
-                                <h3>CEST - 0300300</h3>
+                                <h3 style="color: var(--color-danger, #c0392b);">CEST Vencidos (substituição automática no SPED)</h3>
+                                <p style="font-size: 0.85rem; color: var(--color-info-dark, #666); margin-bottom: 0.5rem;">
+                                    Códigos CEST listados aqui serão substituídos automaticamente durante o ajuste SPED:
+                                    se a descrição do produto contiver "água" (qualquer grafia), vira <strong>0300300</strong>;
+                                    caso contrário, vira <strong>2899900</strong>.
+                                </p>
                                 <div class="input-group">
-                                    <input type="text" id="cest-0300300-input" placeholder="Digite o produto">
-                                    <button onclick="addCestProduct('0300300')" class="add-btn">
+                                    <input type="text" id="cest-vencidos-input" placeholder="Digite o código CEST vencido (ex: 0100100)" maxlength="20">
+                                    <button onclick="addCestVencido()" class="add-btn">
                                         <span class="material-icons-sharp">add</span>
                                     </button>
                                 </div>
-                                <div class="product-list" id="cest-0300300-list">
-                                    <!-- Produtos serão carregados aqui -->
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="cest-column right-column">
-                            <div class="cest-section">
-                                <h3>CEST - 2899900</h3>
-                                <div class="input-group">
-                                    <input type="text" id="cest-2899900-input" placeholder="Digite o produto">
-                                    <button onclick="addCestProduct('2899900')" class="add-btn">
-                                        <span class="material-icons-sharp">add</span>
-                                    </button>
-                                </div>
-                                <div class="product-list" id="cest-2899900-list">
-                                    <!-- Produtos serão carregados aqui -->
+                                <div class="product-list" id="cest-vencidos-list">
+                                    <!-- CEST vencidos carregados aqui -->
                                 </div>
                             </div>
                         </div>
@@ -1729,9 +1739,9 @@
         
         document.body.appendChild(modal);
         
-        // Sincronizar CEST do Supabase e carregar dados
+        // Sincronizar CEST do Supabase e carregar dados (incluindo CEST vencidos).
         if (window.supabaseSync && window.supabaseSync.isConfigured()) {
-            window.supabaseSync.syncAll(['cest_0300300', 'cest_2899900']).then(() => loadCestData()).catch(() => loadCestData());
+            window.supabaseSync.syncAll(['cest_vencidos']).then(() => loadCestData()).catch(() => loadCestData());
         } else {
             loadCestData();
         }
@@ -1744,24 +1754,13 @@
             }
         });
         
-        // Adicionar eventos de Enter para os inputs
-        const input0300300 = modal.querySelector('#cest-0300300-input');
-        const input2899900 = modal.querySelector('#cest-2899900-input');
-        
-        if (input0300300) {
-            input0300300.addEventListener('keypress', (e) => {
+        // Adicionar evento de Enter para o input de CEST vencidos
+        const inputVencidos = modal.querySelector('#cest-vencidos-input');
+        if (inputVencidos) {
+            inputVencidos.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    addCestProduct('0300300');
-                }
-            });
-        }
-        
-        if (input2899900) {
-            input2899900.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    addCestProduct('2899900');
+                    addCestVencido();
                 }
             });
         }
@@ -1777,6 +1776,79 @@
 })();
 
 //---------------------------------- FUNÇÕES CEST GLOBAIS --------------------------------------//
+
+/**
+ * Normaliza string removendo diacríticos e baixando caixa.
+ * "Água Mineral" → "agua mineral", "AGÛA" → "agua".
+ * @param {string} s
+ * @returns {string}
+ */
+function normalizarTextoSemAcento(s) {
+    return String(s || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
+/**
+ * Verifica se a descrição do produto contém a palavra "agua" (qualquer grafia).
+ * Match por palavra inteira para evitar falsos positivos ("aguardente", "paraguai").
+ * @param {string} descricao
+ * @returns {boolean}
+ */
+function descricaoContemAgua(descricao) {
+    const normalizado = normalizarTextoSemAcento(descricao);
+    return /\bagua\b/.test(normalizado);
+}
+
+/**
+ * Sanitiza um código CEST: só dígitos, máximo 20 chars.
+ * @param {string} raw
+ * @returns {string}
+ */
+function sanitizarCodigoCest(raw) {
+    return String(raw || '').replace(/\D/g, '').slice(0, 20);
+}
+
+// Adiciona um novo CEST vencido na lista (UI + persistência).
+function addCestVencido() {
+    const input = document.getElementById('cest-vencidos-input');
+    const list = document.getElementById('cest-vencidos-list');
+    if (!input || !list) return;
+
+    const codigo = sanitizarCodigoCest(input.value);
+    if (!codigo) {
+        alert('Informe um código CEST válido (apenas dígitos).');
+        return;
+    }
+
+    // Evita duplicatas.
+    const existentes = Array.from(list.querySelectorAll('.product-name')).map(el => el.textContent);
+    if (existentes.includes(codigo)) {
+        alert(`CEST ${codigo} já está na lista de vencidos.`);
+        input.value = '';
+        return;
+    }
+
+    const item = document.createElement('div');
+    item.className = 'product-item';
+    item.innerHTML = `
+        <span class="product-name">${codigo}</span>
+        <button onclick="removeCestVencido(this)" class="remove-btn">
+            <span class="material-icons-sharp">delete</span>
+        </button>
+    `;
+    list.appendChild(item);
+    input.value = '';
+    saveCestData();
+}
+
+function removeCestVencido(button) {
+    const item = button.closest('.product-item');
+    if (item) item.remove();
+    saveCestData();
+}
 
 // Função para fechar modal
 function closeCestModal() {
@@ -1859,95 +1931,70 @@ function removeCestProduct(cestCode, button) {
 
 // Função para carregar dados CEST
 function loadCestData() {
-    const cest0300300 = JSON.parse(localStorage.getItem('cest_0300300') || '[]');
-    const cest2899900 = JSON.parse(localStorage.getItem('cest_2899900') || '[]');
-    
-    // Carregar CEST 0300300
-    const list0300300 = document.getElementById('cest-0300300-list');
-    if (list0300300) {
-        list0300300.innerHTML = '';
-        cest0300300.forEach(product => {
-            const productItem = document.createElement('div');
-            productItem.className = 'product-item';
-            productItem.innerHTML = `
-                <span class="product-name">${product}</span>
-                <button onclick="removeCestProduct('0300300', this)" class="remove-btn">
+    const cestVencidos = JSON.parse(localStorage.getItem('cest_vencidos') || '[]');
+
+    const listVencidos = document.getElementById('cest-vencidos-list');
+    if (listVencidos) {
+        listVencidos.innerHTML = '';
+        cestVencidos.forEach(codigo => {
+            const item = document.createElement('div');
+            item.className = 'product-item';
+            item.innerHTML = `
+                <span class="product-name">${codigo}</span>
+                <button onclick="removeCestVencido(this)" class="remove-btn">
                     <span class="material-icons-sharp">delete</span>
                 </button>
             `;
-            list0300300.appendChild(productItem);
-        });
-    }
-    
-    // Carregar CEST 2899900
-    const list2899900 = document.getElementById('cest-2899900-list');
-    if (list2899900) {
-        list2899900.innerHTML = '';
-        cest2899900.forEach(product => {
-            const productItem = document.createElement('div');
-            productItem.className = 'product-item';
-            productItem.innerHTML = `
-                <span class="product-name">${product}</span>
-                <button onclick="removeCestProduct('2899900', this)" class="remove-btn">
-                    <span class="material-icons-sharp">delete</span>
-                </button>
-            `;
-            list2899900.appendChild(productItem);
+            listVencidos.appendChild(item);
         });
     }
 }
 
 // Função para salvar dados CEST (localStorage + Supabase)
 async function saveCestData() {
-    let products0300300 = [];
-    let products2899900 = [];
-    const list0300300 = document.getElementById('cest-0300300-list');
-    if (list0300300) {
-        products0300300 = Array.from(list0300300.querySelectorAll('.product-name')).map(item => item.textContent);
-        localStorage.setItem('cest_0300300', JSON.stringify(products0300300));
+    let cestVencidos = [];
+
+    const listVencidos = document.getElementById('cest-vencidos-list');
+    if (listVencidos) {
+        cestVencidos = Array.from(listVencidos.querySelectorAll('.product-name'))
+            .map(item => sanitizarCodigoCest(item.textContent))
+            .filter(Boolean);
+        localStorage.setItem('cest_vencidos', JSON.stringify(cestVencidos));
     }
-    const list2899900 = document.getElementById('cest-2899900-list');
-    if (list2899900) {
-        products2899900 = Array.from(list2899900.querySelectorAll('.product-name')).map(item => item.textContent);
-        localStorage.setItem('cest_2899900', JSON.stringify(products2899900));
-    }
-    updateCestArrays();
-    if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+
+    if (window.supabaseSync && window.supabaseSync.isConfigured() && listVencidos) {
         try {
-            await saveDataSync('cest_0300300', products0300300);
-            await saveDataSync('cest_2899900', products2899900);
+            // Merge append-only (Fase 4): nunca sobrescreve cegamente o array da nuvem.
+            if (window.supabaseSync.saveCestVencidos) {
+                await window.supabaseSync.saveCestVencidos(cestVencidos);
+                // localStorage agora reflete o merge (pode incluir itens de outras máquinas).
+                loadCestData();
+            } else {
+                await saveDataSync('cest_vencidos', cestVencidos);
+            }
         } catch (e) {
             console.warn('Erro ao sincronizar CEST com Supabase:', e);
         }
     }
+    updateCestArrays();
 }
 
 // Função para atualizar arrays globais de CEST
 function updateCestArrays() {
-    const cest0300300 = JSON.parse(localStorage.getItem('cest_0300300') || '[]');
-    const cest2899900 = JSON.parse(localStorage.getItem('cest_2899900') || '[]');
-    
-    // Atualizar arrays globais (se existirem)
-    if (window.cests1) {
-        window.cests1 = cest0300300.map(item => item.trim().toUpperCase());
-    }
-    if (window.cests2) {
-        window.cests2 = cest2899900.map(item => item.trim().toUpperCase());
-    }
+    const cestVencidos = JSON.parse(localStorage.getItem('cest_vencidos') || '[]');
+    window.cestsVencidos = cestVencidos.map(c => sanitizarCodigoCest(c)).filter(Boolean);
 }
 
 // Função para exportar backup dos CEST
 function exportCestBackup() {
     try {
-        const cest0300300 = JSON.parse(localStorage.getItem('cest_0300300') || '[]');
-        const cest2899900 = JSON.parse(localStorage.getItem('cest_2899900') || '[]');
-        
+        const cestVencidos = JSON.parse(localStorage.getItem('cest_vencidos') || '[]');
+
         const backupData = {
-            version: '1.0',
+            version: '2.0',
             exportDate: new Date().toISOString(),
-            cest0300300: cest0300300,
-            cest2899900: cest2899900,
-            totalProducts: cest0300300.length + cest2899900.length
+            cestVencidos: cestVencidos,
+            totalProducts: cestVencidos.length
         };
         
         const dataStr = JSON.stringify(backupData, null, 2);
@@ -1982,34 +2029,26 @@ function importCestBackup() {
             try {
                 const backupData = JSON.parse(e.target.result);
                 
-                // Validar estrutura do backup
-                if (!backupData.cest0300300 || !backupData.cest2899900) {
+                // Validar estrutura do backup (aceita backups novos só com vencidos;
+                // backups antigos também tinham o campo cestVencidos).
+                if (!Array.isArray(backupData.cestVencidos)) {
                     alert('Arquivo de backup inválido. Estrutura de dados incorreta.');
                     return;
                 }
-                
-                // Carregar produtos existentes
-                const existingCest0300300 = JSON.parse(localStorage.getItem('cest_0300300') || '[]');
-                const existingCest2899900 = JSON.parse(localStorage.getItem('cest_2899900') || '[]');
-                
-                // Filtrar produtos novos (que não existem)
-                const newCest0300300 = backupData.cest0300300.filter(product => 
-                    !existingCest0300300.includes(product)
-                );
-                const newCest2899900 = backupData.cest2899900.filter(product => 
-                    !existingCest2899900.includes(product)
-                );
-                
-                // Combinar produtos existentes com novos
-                const finalCest0300300 = [...existingCest0300300, ...newCest0300300];
-                const finalCest2899900 = [...existingCest2899900, ...newCest2899900];
-                
-                // Salvar no localStorage e Supabase
-                localStorage.setItem('cest_0300300', JSON.stringify(finalCest0300300));
-                localStorage.setItem('cest_2899900', JSON.stringify(finalCest2899900));
+
+                // Carregar códigos existentes.
+                const existingCestVencidos = JSON.parse(localStorage.getItem('cest_vencidos') || '[]');
+
+                // Merge sem duplicatas.
+                const newCestVencidos = backupData.cestVencidos
+                    .map(c => sanitizarCodigoCest(c))
+                    .filter(c => c && !existingCestVencidos.includes(c));
+
+                const finalCestVencidos = [...existingCestVencidos, ...newCestVencidos];
+
+                localStorage.setItem('cest_vencidos', JSON.stringify(finalCestVencidos));
                 if (window.supabaseSync && window.supabaseSync.isConfigured()) {
-                    saveDataSync('cest_0300300', finalCest0300300).catch(() => {});
-                    saveDataSync('cest_2899900', finalCest2899900).catch(() => {});
+                    saveDataSync('cest_vencidos', finalCestVencidos).catch(() => {});
                 }
                 
                 // Atualizar arrays globais
@@ -2205,7 +2244,7 @@ async function initializeSync() {
             console.log(`📥 Carregados ${registeredUsers.length} usuários na inicialização`);
             
             // Sincronizar dados principais (bidirecional)
-            await window.supabaseSync.syncAll(['users', 'registeredUsers', 'contributorContacts', 'cest_0300300', 'cest_2899900', 'pythonFilesList']);
+            await window.supabaseSync.syncAll(['users', 'registeredUsers', 'contributorContacts', 'cest_vencidos', 'pythonFilesList']);
             console.log('✅ Sincronização inicial concluída!');
             
             // Verificar novamente após sincronização
@@ -2561,7 +2600,7 @@ function createIcmsWithholdingPage(mainContent) {
 }
 
 // Configuração da API Python (pode ser ajustada conforme necessário)
-const ICMS_API_URL = 'http://localhost:5000/api/icms';
+const ICMS_API_URL = (window.APP_CONFIG && window.APP_CONFIG.icmsApiUrl) || 'http://localhost:5000/api/icms';
 const USE_PYTHON_API = true; // Flag para habilitar/desabilitar API Python
 
 // Helper: fetch com timeout via AbortController
@@ -2669,28 +2708,35 @@ async function processIcmsXmlsWithPython() {
     }
 }
 
-// Função para processar XMLs e gerar planilha (REESCRITA DO ZERO - baseada no Python que funciona)
+// Processa XMLs e gera planilha. SEMPRE via API Python (preserva fórmulas/tabelas).
+// O fallback JS via ExcelJS foi REMOVIDO porque quebra fórmulas — preferimos falhar
+// explicitamente e pedir ao usuário para subir a API a entregar planilha corrompida.
 async function processIcmsXmls() {
     const statusText = document.getElementById('icms-status-text');
-    
-    // Tentar usar API Python primeiro se habilitada (preserva fórmulas e tabelas)
-    if (USE_PYTHON_API && icmsModeloFile) {
-        try {
-            await processIcmsXmlsWithPython();
-            return; // Sucesso com Python, sair
-        } catch (error) {
-            // Se API Python falhar, tentar processamento local
-            console.warn('⚠️ API Python não disponível, usando processamento JavaScript local:', error);
-            const errorMessage = error.message || 'Erro desconhecido';
-            if (errorMessage.includes('API Python não está disponível')) {
-                statusText.innerHTML = `⚠️ API Python não disponível. Usando processamento JavaScript local.<br><small style="color: var(--color-warning);">Nota: Para preservar fórmulas corretamente, inicie o servidor Python (veja console para instruções)</small>`;
-            } else {
-                statusText.textContent = 'Processando localmente com JavaScript (fórmulas podem falhar)...';
-            }
-        }
+
+    if (!icmsModeloFile) {
+        throw new Error('Modelo Excel não foi selecionado. Selecione o arquivo modelo primeiro.');
     }
-    
-    // Verificar se o modelo já foi carregado (para processamento local)
+
+    try {
+        await processIcmsXmlsWithPython();
+        return;
+    } catch (error) {
+        const msg = (error && error.message) || 'Erro desconhecido';
+        console.error('❌ Falha no pipeline ICMS via API Python:', error);
+        if (statusText) {
+            statusText.innerHTML = `
+                ❌ <strong>API Python obrigatória não disponível.</strong><br>
+                <small style="color: var(--color-warning, #d68910);">
+                    Inicie a API local (auto_start_api.bat ou start_api.bat) e tente novamente.<br>
+                    Detalhe: ${escapeHtml(msg)}
+                </small>`;
+        }
+        throw new Error('API Python obrigatória — fallback JS foi removido para não corromper fórmulas.');
+    }
+
+    // O bloco abaixo é dead code — mantido temporariamente apenas como referência
+    // histórica. Será removido em sprint de limpeza.
     if (!icmsModeloExcelJS) {
         throw new Error('Modelo Excel não foi carregado. Por favor, selecione o arquivo modelo primeiro.');
     }
@@ -3573,36 +3619,82 @@ async function loadIcmsModelo() {
 //--------------------------------------------- SPED --------------------------------------------//
 
 // Ler arquivo SPED com detecção automática de encoding
+/**
+ * Lê arquivo SPED detectando encoding (UTF-8 / Windows-1252 / ISO-8859-1).
+ * Retorna { text, encoding } — o caller PRECISA do encoding para re-encodar
+ * antes de salvar; senão caracteres acentuados viram mojibake.
+ *
+ * @param {File} file
+ * @returns {Promise<{text: string, encoding: string}>}
+ */
 function readSpedFileWithEncoding(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
             const binary = e.target.result;
-            let encoding = 'ISO-8859-1';
+            let encoding = 'windows-1252'; // SPED Fiscal/Contribuições é WIN-1252 na prática.
             if (typeof jschardet !== 'undefined' && binary) {
                 try {
                     const detected = jschardet.detect(binary);
                     if (detected && detected.encoding) {
                         const enc = (detected.encoding || '').toUpperCase();
-                        if (enc === 'UTF-8' || enc === 'UTF8') encoding = 'UTF-8';
+                        if (enc === 'UTF-8' || enc === 'UTF8') encoding = 'utf-8';
                         else if (enc.includes('WINDOWS-1252') || enc.includes('CP1252')) encoding = 'windows-1252';
-                        else if (enc.includes('ISO-8859-1') || enc.includes('LATIN1')) encoding = 'ISO-8859-1';
+                        else if (enc.includes('ISO-8859-1') || enc.includes('LATIN1')) encoding = 'windows-1252';
                     }
                 } catch (err) {
-                    console.warn('Erro ao detectar encoding, usando ISO-8859-1:', err);
+                    console.warn('Erro ao detectar encoding, assumindo windows-1252:', err);
                 }
             }
             try {
                 const bytes = new Uint8Array([...binary].map(c => c.charCodeAt(0) & 0xFF));
                 const decoder = new TextDecoder(encoding, { fatal: false });
-                resolve(decoder.decode(bytes));
+                resolve({ text: decoder.decode(bytes), encoding });
             } catch (err) {
-                resolve(binary);
+                resolve({ text: binary, encoding });
             }
         };
         reader.onerror = () => reject(reader.error);
         reader.readAsBinaryString(file);
     });
+}
+
+/**
+ * Codifica uma string JS de volta para bytes no encoding original do arquivo SPED.
+ * O browser nativo só suporta TextEncoder('utf-8'); para windows-1252 usamos tabela
+ * (caracteres acima de U+00FF caem para '?').
+ *
+ * @param {string} text
+ * @param {string} encoding
+ * @returns {Uint8Array}
+ */
+function encodeSpedText(text, encoding) {
+    const enc = (encoding || '').toLowerCase();
+    if (enc === 'utf-8' || enc === 'utf8') {
+        return new TextEncoder().encode(text);
+    }
+    // Windows-1252 / ISO-8859-1: mapeia char → byte 0-255.
+    // U+0080..U+009F especiais do windows-1252 (€, ƒ, …, ™, etc.) entram explicitamente.
+    const win1252Map = {
+        0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85,
+        0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A,
+        0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
+        0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+        0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B, 0x0153: 0x9C,
+        0x017E: 0x9E, 0x0178: 0x9F,
+    };
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) {
+        const cp = text.charCodeAt(i);
+        if (cp < 0x80 || (cp >= 0xA0 && cp <= 0xFF)) {
+            bytes[i] = cp;
+        } else if (win1252Map[cp] !== undefined) {
+            bytes[i] = win1252Map[cp];
+        } else {
+            bytes[i] = 0x3F; // '?'
+        }
+    }
+    return bytes;
 }
 
 // Função para abrir IndexedDB
@@ -3842,13 +3934,10 @@ function setupSpedDropZone(dropArea, resultsList, box, progressBar, progressPerc
 
 // Função para carregar produtos CEST (localStorage + Supabase)
 async function getCestProducts() {
-    const cest0300300 = await loadDataSync('cest_0300300', []);
-    const cest2899900 = await loadDataSync('cest_2899900', []);
-    const arr1 = Array.isArray(cest0300300) ? cest0300300 : [];
-    const arr2 = Array.isArray(cest2899900) ? cest2899900 : [];
+    const cestVencidos = await loadDataSync('cest_vencidos', []);
+    const arr3 = Array.isArray(cestVencidos) ? cestVencidos : [];
     return {
-        cests1: arr1.map(item => String(item).trim().toUpperCase()),
-        cests2: arr2.map(item => String(item).trim().toUpperCase())
+        cestsVencidos: arr3.map(c => sanitizarCodigoCest(c)).filter(Boolean),
     };
 }
 
@@ -3856,39 +3945,37 @@ async function getCestProducts() {
 async function ensureCestInitialData() {
     if (window.supabaseSync && window.supabaseSync.isConfigured()) {
         try {
-            await window.supabaseSync.syncAll(['cest_0300300', 'cest_2899900']);
+            await window.supabaseSync.syncAll(['cest_vencidos']);
         } catch (e) {
             console.warn('Erro ao sincronizar CEST do Supabase:', e);
         }
+        // Realtime CEST (Fase 4): baseline + subscribe entre máquinas.
+        try {
+            const atual = JSON.parse(localStorage.getItem('cest_vencidos') || '[]');
+            if (window.supabaseSync.primeCestBaseline) window.supabaseSync.primeCestBaseline(atual);
+            if (window.supabaseSync.subscribeCestRealtime) {
+                window.supabaseSync.subscribeCestRealtime(() => {
+                    if (typeof updateCestArrays === 'function') updateCestArrays();
+                    // Recarrega a lista só se a modal CEST estiver visível.
+                    const lista = document.getElementById('cest-vencidos-list');
+                    if (lista && lista.offsetParent !== null && typeof loadCestData === 'function') {
+                        loadCestData();
+                    }
+                });
+            }
+        } catch (e) {
+            console.warn('Realtime CEST indisponível:', e);
+        }
     }
-    const has0300300 = localStorage.getItem('cest_0300300');
-    const has2899900 = localStorage.getItem('cest_2899900');
-    const isEmpty = (!has0300300 || has0300300 === '[]') && (!has2899900 || has2899900 === '[]');
-    if (!isEmpty) return;
-    try {
-        const r = await fetch('cest_backup_inicial.json');
-        const data = r.ok ? await r.json() : null;
-        if (!data) return;
-        const arr1 = data.cest0300300 && data.cest0300300.length ? data.cest0300300 : [];
-        const arr2 = data.cest2899900 && data.cest2899900.length ? data.cest2899900 : [];
-        if (arr1.length) {
-            localStorage.setItem('cest_0300300', JSON.stringify(arr1));
-            await saveDataSync('cest_0300300', arr1);
-        }
-        if (arr2.length) {
-            localStorage.setItem('cest_2899900', JSON.stringify(arr2));
-            await saveDataSync('cest_2899900', arr2);
-        }
-        if (typeof updateCestArrays === 'function') updateCestArrays();
-        console.log('CEST inicial carregado do backup e sincronizado');
-    } catch (e) {}
+    if (typeof updateCestArrays === 'function') updateCestArrays();
 }
 
 async function processSpedFiscal(file, resultsList, progressBar, progressPercentage, totalLines, incrementProcessedLines, handle) {
     try {
         console.log(`Iniciando processamento de ${file.name}`);
-        const fileContent = await readSpedFileWithEncoding(file);
-        const { cests1, cests2 } = await getCestProducts();
+        const { text: fileContent, encoding: srcEncoding } = await readSpedFileWithEncoding(file);
+        const { cestsVencidos } = await getCestProducts();
+        const vencidosSet = new Set((cestsVencidos || []).map(c => sanitizarCodigoCest(c)));
         const lines = fileContent.split('\n');
                 const hasEmptyLastLine = lines[lines.length - 1] === '';
                 const fileLines = lines.length;
@@ -3919,11 +4006,14 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
                         if (fields.length > 6) produtos[fields[2]] = fields[6];
                         if (fields.length > 7 && !fields[7]) fields[7] = '00';
                         if (fields.length > 13) {
-                            const normalizedProduct = fields[3].trim().toUpperCase();
-                            if (cests1.includes(normalizedProduct)) {
-                                fields[13] = '0300300';
-                            } else if (cests2.includes(normalizedProduct)) {
-                                fields[13] = '2899900';
+                            const produtoDescricao = (fields[3] || '').trim();
+                            const cestAtual = sanitizarCodigoCest(fields[13]);
+
+                            // Regra única: se o CEST atual está na lista de vencidos indicada
+                            // pelo usuário, substituir por 0300300 (descrição contém "água") ou
+                            // 2899900 (caso contrário).
+                            if (cestAtual && vencidosSet.has(cestAtual)) {
+                                fields[13] = descricaoContemAgua(produtoDescricao) ? '0300300' : '2899900';
                             }
                         }
                     } else if (tag === 'C170') {
@@ -3954,7 +4044,8 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
 
                 if (!hasEmptyLastLine) newLines.push('');
 
-                const blob = new Blob([newLines.join('\n')], { type: 'text/plain;charset=latin1' });
+                // FIX ENCODING: re-codifica no encoding original do arquivo (evita mojibake).
+                const blob = new Blob([encodeSpedText(newLines.join('\n'), srcEncoding)], { type: 'text/plain' });
                 if (handle) {
                     try {
                         const permission = await handle.queryPermission({ mode: 'readwrite' });
@@ -3997,7 +4088,7 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
 async function processSpedContribuicao(file, resultsList, progressBar, progressPercentage, totalLines, incrementProcessedLines, handle) {
     try {
         console.log(`Iniciando processamento de ${file.name}`);
-        const fileContent = await readSpedFileWithEncoding(file);
+        const { text: fileContent, encoding: srcEncoding } = await readSpedFileWithEncoding(file);
         const lines = fileContent.split('\n');
                 const hasEmptyLastLine = lines[lines.length - 1] === '';
                 const fileLines = lines.length;
@@ -4040,7 +4131,8 @@ async function processSpedContribuicao(file, resultsList, progressBar, progressP
 
                 if (!hasEmptyLastLine) newLines.push('');
 
-                const blob = new Blob([newLines.join('\n')], { type: 'text/plain;charset=latin1' });
+                // FIX ENCODING: re-codifica no encoding original do arquivo (evita mojibake).
+                const blob = new Blob([encodeSpedText(newLines.join('\n'), srcEncoding)], { type: 'text/plain' });
                 if (handle) {
                     try {
                         const permission = await handle.queryPermission({ mode: 'readwrite' });
@@ -6766,18 +6858,20 @@ function createNfeCfeComparisonPage(mainContent) {
             }
             
             const reader = new FileReader();
+            const isCsv = /\.csv$/i.test(file.name) || file.type === 'text/csv';
             reader.onload = async (e) => {
                 try {
-                    progressText.textContent = 'Processando planilha...';
+                    progressText.textContent = isCsv ? 'Processando CSV...' : 'Processando planilha...';
                     progressBar.style.width = '20%';
-                    
-                    console.log(`📖 Planilha carregada: ${file.name}`);
-                    const workbook = XLSX.read(e.target.result, { 
-                        type: 'array',
+
+                    console.log(`📖 ${isCsv ? 'CSV' : 'Planilha'} carregado: ${file.name}`);
+                    const workbook = XLSX.read(e.target.result, {
+                        type: isCsv ? 'string' : 'array',
                         cellDates: false,
                         cellNF: false,
                         cellStyles: false,
-                        sheetStubs: false
+                        sheetStubs: false,
+                        raw: false,
                     });
                     
                     progressBar.style.width = '30%';
@@ -6933,7 +7027,12 @@ function createNfeCfeComparisonPage(mainContent) {
                 }
                 resolve();
             };
-            reader.readAsArrayBuffer(file);
+            // CSV é texto, XLSX/XLS é binário. XLSX.read aceita 'string' ou 'array'.
+            if (isCsv) {
+                reader.readAsText(file, 'utf-8');
+            } else {
+                reader.readAsArrayBuffer(file);
+            }
         });
     }
 
@@ -6950,13 +7049,15 @@ function createNfeCfeComparisonPage(mainContent) {
             } else if (file.name.endsWith('.txt') || file.type === 'text/plain') {
                 console.log(`Processando arquivo de texto: ${file.name}`);
                 promises.push(processTextFile(file, dataArray));
-            } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || 
-                       file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
-                       file.type === 'application/vnd.ms-excel') {
-                console.log(`📊 Processando planilha: ${file.name}`);
+            } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') ||
+                       file.name.endsWith('.csv') ||
+                       file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+                       file.type === 'application/vnd.ms-excel' ||
+                       file.type === 'text/csv') {
+                console.log(`📊 Processando planilha/CSV: ${file.name}`);
                 promises.push(processSpreadsheet(file, dataArray, label, checkSvg));
             } else {
-                console.warn(`Arquivo ignorado (não é XML, TXT ou planilha): ${file.name}`);
+                console.warn(`Arquivo ignorado (não é XML, TXT, CSV ou planilha): ${file.name}`);
             }
         }
         Promise.all(promises).then(() => {
@@ -8337,43 +8438,57 @@ async function completeUserRegistration(name, username, control, password, profi
         
         const existingUser = existingUsers[userIndex];
         
-        // Atualizar dados do usuário
+        // Atualizar dados do usuário (hash com PBKDF2 quando nova senha é informada).
+        const newPasswordHash = password ? await window.generateSecureHash(password) : existingUser.password;
         existingUsers[userIndex] = {
             ...existingUser,
             name: name,
             control: control,
             profileImage: profileImage,
-            // Atualizar senha apenas se foi informada
-            password: password ? generateUltraSecureHash(password) : existingUser.password,
+            password: newPasswordHash,
             updatedAt: new Date().toISOString(),
             updatedBy: window.currentUser
         };
-        
+
         await saveDataSync('registeredUsers', existingUsers);
         console.log('✅ Usuário atualizado e sincronizado:', existingUsers[userIndex]);
         alert('Usuário atualizado com sucesso!');
     } else {
-        // CRIAR NOVO USUÁRIO
-        // Criar hash da senha (usando a mesma função do sistema)
-        const hashedPassword = generateUltraSecureHash(password);
+        // CRIAR NOVO USUÁRIO — hash PBKDF2-SHA-256.
+        const hashedPassword = await window.generateSecureHash(password);
 
-        // Criar objeto do usuário
+        // Espelho local (preserva fluxos legados que dependem de registeredUsers).
         const newUser = {
             id: Date.now(),
             name: name,
             username: username,
             control: control,
             password: hashedPassword,
-            profileImage: profileImage, // Adicionar imagem de perfil
+            profileImage: profileImage,
             createdAt: new Date().toISOString(),
             createdBy: window.currentUser
         };
 
-        // Salvar usuário (com sincronização automática)
         existingUsers.push(newUser);
         await saveDataSync('registeredUsers', existingUsers);
-        console.log('✅ Usuário salvo e sincronizado:', newUser);
-        alert('Usuário cadastrado com sucesso!');
+
+        // ESPELHO em Supabase Auth: cria auth.users + dispara trigger handle_new_user
+        // que popula user_profiles. Best-effort — falha aqui não bloqueia cadastro local.
+        if (window.supabaseSync?.auth?.signUp && window.supabaseSync.isConfigured()) {
+            const signUpResult = await window.supabaseSync.auth.signUp({
+                username, password, fullName: name, control,
+            });
+            if (!signUpResult.ok) {
+                console.warn('⚠️ Falha ao criar conta Supabase Auth (usuário existirá só localmente):', signUpResult.error);
+                alert('Usuário cadastrado localmente, mas a conta Supabase falhou: ' + signUpResult.error + '\nPeça ao admin para criar manualmente em Dashboard → Authentication.');
+            } else {
+                console.log('✅ Usuário cadastrado em Supabase Auth + local:', newUser);
+                alert('Usuário cadastrado com sucesso (Supabase + local)!');
+            }
+        } else {
+            console.log('✅ Usuário salvo (somente local — Supabase não configurado):', newUser);
+            alert('Usuário cadastrado com sucesso!');
+        }
     }
 
     // Limpar formulário e resetar modo
@@ -8825,10 +8940,10 @@ async function handleContributorRegistration(e) {
         }
     }
 
-    // Processar senha se fornecida
+    // Processar senha se fornecida (hash PBKDF2-SHA-256).
     let passwordHash = null;
     if (password && password.trim()) {
-        passwordHash = generateUltraSecureHash(password);
+        passwordHash = await window.generateSecureHash(password);
     }
 
     // Obter contribuintes existentes (com sincronização)

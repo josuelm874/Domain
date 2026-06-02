@@ -1,97 +1,229 @@
 /**
- * Sistema de Sincronização com Supabase
- * Permite compartilhamento de dados entre múltiplos PCs
+ * Sistema de Sincronização + Auth com Supabase (softtech-fiscal).
+ *
+ * Mudanças nesta versão (Fase 2):
+ *   - Suporta publishable key (`sb_publishable_...`) além do anon JWT legado.
+ *   - Adiciona wrappers de auth: signIn / signUp / signOut / getUser / onAuthChange.
+ *   - Adiciona gate `requireAuth(fn)` para operações que dependem de sessão.
+ *   - `saveToCloud` / `loadFromCloud` agora aguardam sessão válida antes de tocar o banco
+ *     (RLS phase 2 — leitura/escrita exigem autenticação após migration 003).
+ *   - Email determinístico: `<username>@softtech-fiscal.local` (padrão single-tenant interno).
  */
 
-// ==================== CONFIGURAÇÃO SUPABASE ====================
-// Credenciais lidas de config.js (arquivo gitignored).
-// Se config.js não estiver presente, o sistema usa apenas localStorage.
-// Consulte config.example.js para instruções de setup.
-const SUPABASE_CONFIG = window.SUPABASE_CONFIG || { url: '', anonKey: '' };
-
-// Nome da tabela onde os dados serão armazenados
+// ==================== CONFIGURAÇÃO ====================
+const SUPABASE_CONFIG = window.SUPABASE_CONFIG || { url: '', anonKey: '', publishableKey: '' };
 const TABLE_NAME = 'system_data';
-
-// Bucket do Storage para Biblioteca Python (crie no Supabase Dashboard como público)
 const PYTHON_LIBRARY_BUCKET = 'python-library';
+const AUTH_EMAIL_DOMAIN = 'softtech-fiscal.local';
 
-// ==================== INICIALIZAÇÃO ====================
+// ==================== ESTADO ====================
 let supabaseClient = null;
 let isSupabaseConfigured = false;
-
-// Promise que resolve para true/false quando o cliente estiver pronto (ou falhar).
-// Garante que saveToCloud/loadFromCloud não corram na frente do onload do CDN.
 let supabaseReadyPromise = null;
+let currentSession = null;
+let currentProfile = null;
 
-// Verificar se Supabase está configurado
+/** @returns {string} key a usar (publishable nova > anon legada) */
+function _resolveApiKey() {
+    return SUPABASE_CONFIG.publishableKey || SUPABASE_CONFIG.anonKey || '';
+}
+
+function _isConfigPresent() {
+    const url = SUPABASE_CONFIG.url;
+    const key = _resolveApiKey();
+    if (!url || !key) return false;
+    if (url === 'SUA_URL_DO_SUPABASE_AQUI') return false;
+    if (key === 'SUA_ANON_KEY_AQUI' || key === 'SUA_PUBLISHABLE_KEY_AQUI') return false;
+    return true;
+}
+
+// ==================== INICIALIZAÇÃO ====================
 function initSupabase() {
-    if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey ||
-        SUPABASE_CONFIG.url === 'SUA_URL_DO_SUPABASE_AQUI' ||
-        SUPABASE_CONFIG.anonKey === 'SUA_ANON_KEY_AQUI') {
-        console.warn('⚠️ Supabase não configurado. Usando apenas localStorage.');
+    if (!_isConfigPresent()) {
+        console.warn('⚠️ Supabase não configurado. Sistema rodará só com localStorage.');
         supabaseReadyPromise = Promise.resolve(false);
         return false;
     }
 
-    supabaseReadyPromise = new Promise(resolve => {
-        try {
-            // Carregar biblioteca Supabase via CDN
-            if (typeof window.supabase === 'undefined') {
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
-                script.onload = () => {
-                    if (window.supabase) {
-                        supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
-                        isSupabaseConfigured = true;
-                        console.log('✅ Supabase inicializado com sucesso!');
-                        ensureTableExists();
-                        resolve(true);
-                    } else {
-                        console.error('❌ window.supabase indisponível após carregamento do CDN');
-                        resolve(false);
+    if (supabaseReadyPromise) return true;
+
+    supabaseReadyPromise = new Promise((resolve) => {
+        const _bootClient = () => {
+            try {
+                supabaseClient = window.supabase.createClient(
+                    SUPABASE_CONFIG.url,
+                    _resolveApiKey(),
+                    {
+                        auth: {
+                            autoRefreshToken: true,
+                            persistSession: true,
+                            detectSessionInUrl: false,
+                            storage: window.localStorage,
+                        },
                     }
-                };
-                script.onerror = () => {
-                    console.error('❌ Erro ao carregar biblioteca Supabase');
-                    resolve(false);
-                };
-                document.head.appendChild(script);
-            } else {
-                supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+                );
                 isSupabaseConfigured = true;
-                console.log('✅ Supabase inicializado com sucesso!');
-                ensureTableExists();
+
+                supabaseClient.auth.getSession().then(({ data }) => {
+                    currentSession = data?.session || null;
+                    if (currentSession?.user) {
+                        _loadProfile(currentSession.user.id).catch(() => {});
+                    }
+                });
+
+                supabaseClient.auth.onAuthStateChange((_event, session) => {
+                    currentSession = session;
+                    if (session?.user) {
+                        _loadProfile(session.user.id).catch(() => {});
+                    } else {
+                        currentProfile = null;
+                    }
+                });
+
+                console.log('✅ Supabase inicializado com sucesso.');
                 resolve(true);
+            } catch (error) {
+                console.error('❌ Erro ao inicializar Supabase:', error);
+                resolve(false);
             }
-        } catch (error) {
-            console.error('❌ Erro ao inicializar Supabase:', error);
-            resolve(false);
+        };
+
+        if (typeof window.supabase === 'undefined') {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+            script.crossOrigin = 'anonymous';
+            script.referrerPolicy = 'no-referrer';
+            script.onload = _bootClient;
+            script.onerror = () => {
+                console.error('❌ Falha ao carregar SDK Supabase.');
+                resolve(false);
+            };
+            document.head.appendChild(script);
+        } else {
+            _bootClient();
         }
     });
 
     return true;
 }
 
-// Criar tabela automaticamente (via REST API, já que não temos permissões SQL diretas)
-async function ensureTableExists() {
-    // A tabela deve ser criada manualmente no Supabase Dashboard
-    // SQL para criar a tabela:
-    // CREATE TABLE IF NOT EXISTS system_data (
-    //     id SERIAL PRIMARY KEY,
-    //     key TEXT UNIQUE NOT NULL,
-    //     value JSONB NOT NULL,
-    //     updated_at TIMESTAMP DEFAULT NOW()
-    // );
-    console.log('📝 Certifique-se de criar a tabela system_data no Supabase Dashboard');
+async function _loadProfile(userId) {
+    if (!supabaseClient || !userId) return null;
+    const { data, error } = await supabaseClient
+        .from('user_profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+    if (error) {
+        console.warn('⚠️ Falha ao carregar user_profile:', error.message);
+        return null;
+    }
+    currentProfile = data;
+    return data;
 }
 
-// ==================== FUNÇÕES DE SINCRONIZAÇÃO ====================
+// ==================== AUTH WRAPPERS ====================
+
+/** @param {string} username @returns {string} */
+function _usernameToEmail(username) {
+    return `${String(username).trim().toLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
+}
 
 /**
- * Salvar dados no Supabase (com fallback para localStorage)
+ * Login via Supabase Auth.
+ * @returns {Promise<{ok: boolean, user?: object, profile?: object, error?: string}>}
  */
+async function authSignIn(username, password) {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+
+    const email = _usernameToEmail(username);
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) return { ok: false, error: error.message };
+
+    const profile = await _loadProfile(data.user.id);
+    // Audit log (best-effort).
+    supabaseClient.rpc('registrar_acao', {
+        p_action: 'login',
+        p_target: 'web',
+        p_details: { username },
+    }).then(() => {}, () => {});
+
+    return { ok: true, user: data.user, profile };
+}
+
+/**
+ * Cria conta. Admin-only — proteção fica na UI.
+ * Email Confirmation deve estar OFF em Authentication → Providers → Email para que
+ * signIn funcione imediatamente após signUp.
+ */
+async function authSignUp({ username, password, fullName, control }) {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+
+    const email = _usernameToEmail(username);
+    const { data, error } = await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+            data: { username, full_name: fullName, control },
+        },
+    });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, user: data.user };
+}
+
+async function authSignOut() {
+    if (!supabaseClient) return { ok: true };
+    await supabaseClient.rpc('registrar_acao', {
+        p_action: 'logout',
+        p_target: 'web',
+        p_details: null,
+    }).catch(() => {});
+
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) return { ok: false, error: error.message };
+    currentSession = null;
+    currentProfile = null;
+    return { ok: true };
+}
+
+async function authGetUser() {
+    if (!supabaseClient) return null;
+    const { data } = await supabaseClient.auth.getUser();
+    return data?.user || null;
+}
+
+function authGetCurrentSession() { return currentSession; }
+function authGetCurrentProfile() { return currentProfile; }
+
+function authOnChange(callback) {
+    if (!supabaseClient) return () => {};
+    const { data } = supabaseClient.auth.onAuthStateChange((event, session) => {
+        callback(event, session);
+    });
+    return () => data?.subscription?.unsubscribe?.();
+}
+
+/** Aguarda sessão antes de chamar fn. Retorna null se nunca houver. */
+async function requireAuth(fn, { timeoutMs = 0 } = {}) {
+    if (!supabaseReadyPromise) initSupabase();
+    await supabaseReadyPromise;
+    if (currentSession) return fn();
+    if (timeoutMs === 0) return null;
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => { unsub(); resolve(null); }, timeoutMs);
+        const unsub = authOnChange((_event, session) => {
+            if (session) { clearTimeout(timer); unsub(); resolve(fn()); }
+        });
+    });
+}
+
+// ==================== SYNC (KV em system_data) ====================
+
 async function saveToCloud(key, data) {
-    // Sempre salvar localmente primeiro (cache)
     try {
         localStorage.setItem(key, JSON.stringify(data));
         localStorage.setItem(`${key}_updated`, Date.now().toString());
@@ -99,48 +231,38 @@ async function saveToCloud(key, data) {
         console.error('Erro ao salvar no localStorage:', e);
     }
 
-    // Tentar salvar na nuvem se Supabase estiver configurado
     if (!supabaseReadyPromise) initSupabase();
-    await supabaseReadyPromise; // aguarda CDN carregar antes de verificar o estado
-
+    await supabaseReadyPromise;
     if (!isSupabaseConfigured || !supabaseClient) {
-        console.warn(`⚠️ Supabase não disponível. Dados salvos apenas localmente: ${key}`);
         return { success: true, local: true };
+    }
+    if (!currentSession) {
+        return { success: true, local: true, queued: true };
     }
 
     try {
-        const { data: result, error } = await supabaseClient
+        const { error } = await supabaseClient
             .from(TABLE_NAME)
-            .upsert({
-                key: key,
-                value: data,
-                updated_at: new Date().toISOString()
-            }, {
-                onConflict: 'key'
-            });
-
+            .upsert(
+                { key, value: data, updated_at: new Date().toISOString() },
+                { onConflict: 'key' }
+            );
         if (error) {
-            console.error(`❌ Erro ao salvar ${key} no Supabase:`, error);
+            console.error(`❌ Erro ao salvar ${key}:`, error);
             return { success: false, error: error.message, local: true };
         }
-
-        console.log(`✅ Dados sincronizados na nuvem: ${key}`);
         return { success: true, cloud: true, local: true };
     } catch (error) {
-        console.error(`❌ Erro ao salvar ${key} no Supabase:`, error);
+        console.error(`❌ Erro ao salvar ${key}:`, error);
         return { success: false, error: error.message, local: true };
     }
 }
 
-/**
- * Carregar dados do Supabase (com fallback para localStorage)
- */
 async function loadFromCloud(key, defaultValue = null) {
-    // Primeiro, tentar carregar da nuvem
     if (!supabaseReadyPromise) initSupabase();
-    await supabaseReadyPromise; // aguarda CDN carregar antes de verificar o estado
+    await supabaseReadyPromise;
 
-    if (isSupabaseConfigured && supabaseClient) {
+    if (isSupabaseConfigured && supabaseClient && currentSession) {
         try {
             const { data, error } = await supabaseClient
                 .from(TABLE_NAME)
@@ -149,66 +271,41 @@ async function loadFromCloud(key, defaultValue = null) {
                 .single();
 
             if (!error && data) {
-                // Atualizar localStorage com dados da nuvem
                 localStorage.setItem(key, JSON.stringify(data.value));
                 localStorage.setItem(`${key}_updated`, new Date(data.updated_at).getTime().toString());
-                console.log(`✅ Dados carregados da nuvem: ${key}`);
                 return data.value;
-            } else if (error) {
-                // PGRST116 = não encontrado (é normal se for primeira vez)
-                // 406 = Not Acceptable (pode ser problema de headers ou formato)
-                if (error.code === 'PGRST116') {
-                    // Não encontrado - usar defaultValue
-                    console.log(`ℹ️ Chave ${key} não encontrada na nuvem (primeira vez)`);
-                } else {
-                    console.warn(`⚠️ Erro ao carregar ${key} do Supabase (${error.code || error.message}):`, error.message || error);
-                }
+            }
+            if (error && error.code !== 'PGRST116') {
+                console.warn(`⚠️ Erro ao carregar ${key}:`, error.message || error);
             }
         } catch (error) {
-            console.error(`❌ Erro ao carregar ${key} do Supabase:`, error);
+            console.error(`❌ Erro ao carregar ${key}:`, error);
         }
     }
 
-    // Fallback: carregar do localStorage
     try {
         const localData = localStorage.getItem(key);
-        if (localData) {
-            console.log(`📦 Dados carregados do localStorage: ${key}`);
-            return JSON.parse(localData);
-        }
+        if (localData) return JSON.parse(localData);
     } catch (e) {
         console.error(`Erro ao carregar ${key} do localStorage:`, e);
     }
-
     return defaultValue;
 }
 
-/**
- * Sincronizar dados locais com a nuvem (comparar timestamps)
- */
 async function syncData(key) {
-    if (!isSupabaseConfigured || !supabaseClient) {
-        return { synced: false, reason: 'Supabase não configurado' };
+    if (!isSupabaseConfigured || !supabaseClient || !currentSession) {
+        return { synced: false, reason: 'Sem sessão' };
     }
-
     try {
-        // Buscar timestamp local
-        const localUpdated = parseInt(localStorage.getItem(`${key}_updated`) || '0');
-        
-        // Buscar timestamp da nuvem
+        const localUpdated = parseInt(localStorage.getItem(`${key}_updated`) || '0', 10);
         const { data: cloudData, error } = await supabaseClient
             .from(TABLE_NAME)
             .select('value, updated_at')
             .eq('key', key)
             .single();
-
-        if (error && error.code !== 'PGRST116') {
-            console.error(`Erro ao sincronizar ${key}:`, error);
-            return { synced: false, error: error.message };
-        }
+        if (error && error.code !== 'PGRST116') return { synced: false, error: error.message };
 
         if (!cloudData) {
-            // Não existe na nuvem, enviar local
             const localData = localStorage.getItem(key);
             if (localData) {
                 await saveToCloud(key, JSON.parse(localData));
@@ -218,82 +315,59 @@ async function syncData(key) {
         }
 
         const cloudUpdated = new Date(cloudData.updated_at).getTime();
-        
         if (cloudUpdated > localUpdated) {
-            // Nuvem é mais recente, atualizar local
             localStorage.setItem(key, JSON.stringify(cloudData.value));
             localStorage.setItem(`${key}_updated`, cloudUpdated.toString());
-            console.log(`⬇️ Dados atualizados do servidor: ${key}`);
             return { synced: true, action: 'downloaded', data: cloudData.value };
-        } else if (localUpdated > cloudUpdated) {
-            // Local é mais recente, atualizar nuvem
+        }
+        if (localUpdated > cloudUpdated) {
             const localData = localStorage.getItem(key);
             if (localData) {
                 await saveToCloud(key, JSON.parse(localData));
                 return { synced: true, action: 'uploaded' };
             }
-        } else {
-            // Já estão sincronizados
-            return { synced: true, action: 'already_synced' };
         }
+        return { synced: true, action: 'already_synced' };
     } catch (error) {
-        console.error(`Erro ao sincronizar ${key}:`, error);
         return { synced: false, error: error.message };
     }
 }
 
-/**
- * Sincronizar múltiplas chaves de uma vez
- */
-async function syncAllData(keys = ['users', 'registeredUsers', 'contributorContacts', 'contributors', 'cest_0300300', 'cest_2899900', 'pythonFilesList']) {
+async function syncAllData(keys = ['users', 'registeredUsers', 'contributorContacts', 'contributors', 'cest_vencidos', 'pythonFilesList']) {
     const results = {};
-    for (const key of keys) {
-        results[key] = await syncData(key);
-    }
+    for (const key of keys) results[key] = await syncData(key);
     return results;
 }
 
-/**
- * Limpar dados locais e recarregar da nuvem
- */
 async function forceRefreshFromCloud(key) {
-    if (!isSupabaseConfigured || !supabaseClient) {
-        return null;
-    }
-
+    if (!isSupabaseConfigured || !supabaseClient || !currentSession) return null;
     try {
         const { data, error } = await supabaseClient
             .from(TABLE_NAME)
             .select('value, updated_at')
             .eq('key', key)
             .single();
-
-        if (error || !data) {
-            console.error(`Erro ao forçar refresh de ${key}:`, error);
-            return null;
-        }
-
+        if (error || !data) return null;
         localStorage.setItem(key, JSON.stringify(data.value));
         localStorage.setItem(`${key}_updated`, new Date(data.updated_at).getTime().toString());
-        console.log(`🔄 Dados atualizados forçadamente da nuvem: ${key}`);
         return data.value;
-    } catch (error) {
-        console.error(`Erro ao forçar refresh de ${key}:`, error);
+    } catch {
         return null;
     }
 }
 
-// ==================== STORAGE - BIBLIOTECA PYTHON ====================
+// ==================== STORAGE — BIBLIOTECA PYTHON ====================
 
 async function uploadPythonFile(file) {
-    if (!supabaseClient) return { error: 'Supabase não configurado' };
-    const fileName = file.name;
+    if (!supabaseClient || !currentSession) return { error: 'Sem sessão autenticada' };
     try {
-        const { error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).upload(fileName, file, { upsert: true });
+        const { error } = await supabaseClient.storage
+            .from(PYTHON_LIBRARY_BUCKET)
+            .upload(file.name, file, { upsert: true });
         if (error) return { error: error.message };
-        return { success: true, fileName };
+        return { success: true, fileName: file.name };
     } catch (e) {
-        return { error: e.message || 'Erro ao fazer upload' };
+        return { error: e.message || 'Erro no upload' };
     }
 }
 
@@ -306,18 +380,22 @@ function getPythonFileUrl(fileName) {
 async function downloadPythonFile(fileName) {
     if (!supabaseClient) return null;
     try {
-        const { data, error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).download(fileName);
+        const { data, error } = await supabaseClient.storage
+            .from(PYTHON_LIBRARY_BUCKET)
+            .download(fileName);
         if (error) return null;
         return data;
-    } catch (e) {
+    } catch {
         return null;
     }
 }
 
 async function removePythonFile(fileName) {
-    if (!supabaseClient) return { error: 'Supabase não configurado' };
+    if (!supabaseClient || !currentSession) return { error: 'Sem sessão autenticada' };
     try {
-        const { error } = await supabaseClient.storage.from(PYTHON_LIBRARY_BUCKET).remove([fileName]);
+        const { error } = await supabaseClient.storage
+            .from(PYTHON_LIBRARY_BUCKET)
+            .remove([fileName]);
         if (error) return { error: error.message };
         return { success: true };
     } catch (e) {
@@ -325,7 +403,143 @@ async function removePythonFile(fileName) {
     }
 }
 
-// ==================== EXPORTAR FUNÇÕES ====================
+// ==================== REALTIME + MERGE — CEST VENCIDOS (Fase 4) ====================
+//
+// Sincronização em tempo real da chave `cest_vencidos` entre máquinas + merge
+// append-only para evitar last-write-wins (dois usuários editando simultaneamente).
+//
+// Anti-loop: guardamos o JSON do último valor que NÓS gravamos (`_cestLastSavedJson`).
+// Quando o postgres_changes ecoa nossa própria escrita, o payload bate com esse JSON
+// e é ignorado — não reprocessamos a alteração que nós mesmos fizemos.
+
+const CEST_KEY = 'cest_vencidos';
+let _cestBaseline = null;        // último snapshot conhecido da nuvem (array)
+let _cestLastSavedJson = null;   // JSON do último valor que gravamos (anti-eco)
+let _cestRealtimeChannel = null;
+
+/** Normaliza lista CEST: só dígitos, ≤20 chars, sem duplicatas, sem vazios. */
+function _normCestList(arr) {
+    const src = Array.isArray(arr) ? arr : [];
+    const seen = new Set();
+    const out = [];
+    for (const raw of src) {
+        const code = String(raw == null ? '' : raw).replace(/\D/g, '').slice(0, 20);
+        if (code && !seen.has(code)) { seen.add(code); out.push(code); }
+    }
+    return out;
+}
+
+function _persistCestLocal(arr) {
+    try {
+        localStorage.setItem(CEST_KEY, JSON.stringify(arr));
+        localStorage.setItem(`${CEST_KEY}_updated`, Date.now().toString());
+    } catch (e) {
+        console.error('Erro ao persistir cest_vencidos no localStorage:', e);
+    }
+}
+
+/** Define o baseline (estado conhecido da nuvem) — chamar após o sync inicial. */
+function primeCestBaseline(arr) {
+    _cestBaseline = _normCestList(arr);
+    _cestLastSavedJson = JSON.stringify(_cestBaseline);
+}
+
+async function _fetchCestCloud() {
+    if (!supabaseClient) return null;
+    const { data, error } = await supabaseClient
+        .from(TABLE_NAME)
+        .select('value')
+        .eq('key', CEST_KEY)
+        .single();
+    if (error && error.code !== 'PGRST116') {
+        console.warn('⚠️ Erro ao buscar cest_vencidos da nuvem:', error.message || error);
+        return null;
+    }
+    return data ? _normCestList(data.value) : [];
+}
+
+/**
+ * Salva cest_vencidos com merge append-only: nunca sobrescreve cegamente o array
+ * da nuvem. Aplica só o DIFF do usuário (itens adicionados/removidos relativos ao
+ * baseline carregado) sobre o valor ATUAL da nuvem:
+ *     merged = (cloud ∪ added) \ removed
+ * Assim, edição simultânea de duas máquinas não apaga o trabalho uma da outra.
+ */
+async function saveCestVencidosMerged(localArray) {
+    const local = _normCestList(localArray);
+    _persistCestLocal(local);
+
+    if (!supabaseReadyPromise) initSupabase();
+    await supabaseReadyPromise;
+    if (!isSupabaseConfigured || !supabaseClient || !currentSession) {
+        _cestBaseline = local;
+        _cestLastSavedJson = JSON.stringify(local);
+        return { success: true, local: true };
+    }
+
+    const baseline = _cestBaseline === null ? local : _normCestList(_cestBaseline);
+    const added = local.filter(c => !baseline.includes(c));
+    const removed = baseline.filter(c => !local.includes(c));
+
+    const cloud = (await _fetchCestCloud()) || [];
+    const removedSet = new Set(removed);
+    const merged = _normCestList([...cloud, ...added]).filter(c => !removedSet.has(c));
+
+    // Marca como nossa escrita ANTES do upsert para o eco do realtime ser ignorado.
+    _cestLastSavedJson = JSON.stringify(merged);
+
+    try {
+        const { error } = await supabaseClient
+            .from(TABLE_NAME)
+            .upsert(
+                { key: CEST_KEY, value: merged, updated_at: new Date().toISOString() },
+                { onConflict: 'key' }
+            );
+        if (error) {
+            console.error('❌ Erro ao salvar cest_vencidos:', error);
+            return { success: false, error: error.message, local: true };
+        }
+    } catch (error) {
+        console.error('❌ Erro ao salvar cest_vencidos:', error);
+        return { success: false, error: error.message, local: true };
+    }
+
+    _cestBaseline = merged;
+    _persistCestLocal(merged);
+    return { success: true, cloud: true, merged };
+}
+
+/**
+ * Subscreve realtime na chave cest_vencidos. `onRemoteUpdate(arr)` é chamado quando
+ * OUTRA máquina altera o valor (escritas próprias são filtradas via _cestLastSavedJson).
+ * Filtro por key é client-side (mais robusto que o filtro server-side do postgres_changes).
+ */
+function subscribeCestRealtime(onRemoteUpdate) {
+    if (!supabaseClient || _cestRealtimeChannel) return _cestRealtimeChannel;
+    _cestRealtimeChannel = supabaseClient
+        .channel('cest-vencidos-rt')
+        .on('postgres_changes',
+            { event: '*', schema: 'public', table: TABLE_NAME },
+            (payload) => {
+                const row = payload.new || {};
+                if (row.key !== CEST_KEY) return;                 // filtro client-side
+                const incoming = _normCestList(row.value);
+                const incomingJson = JSON.stringify(incoming);
+                if (incomingJson === _cestLastSavedJson) return;  // eco da nossa escrita
+                _cestBaseline = incoming;
+                _cestLastSavedJson = incomingJson;
+                _persistCestLocal(incoming);
+                if (typeof onRemoteUpdate === 'function') {
+                    try { onRemoteUpdate(incoming); } catch (e) { console.warn('onRemoteUpdate erro:', e); }
+                }
+            })
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') console.log('✅ Realtime cest_vencidos ativo.');
+        });
+    return _cestRealtimeChannel;
+}
+
+// ==================== EXPORT ====================
 window.supabaseSync = {
     init: initSupabase,
     save: saveToCloud,
@@ -333,14 +547,27 @@ window.supabaseSync = {
     sync: syncData,
     syncAll: syncAllData,
     refresh: forceRefreshFromCloud,
+    saveCestVencidos: saveCestVencidosMerged,
+    subscribeCestRealtime,
+    primeCestBaseline,
     isConfigured: () => isSupabaseConfigured,
+    requireAuth,
     uploadPythonFile,
     getPythonFileUrl,
     downloadPythonFile,
-    removePythonFile
+    removePythonFile,
+    auth: {
+        signIn: authSignIn,
+        signUp: authSignUp,
+        signOut: authSignOut,
+        getUser: authGetUser,
+        getSession: authGetCurrentSession,
+        getProfile: authGetCurrentProfile,
+        onChange: authOnChange,
+        usernameToEmail: _usernameToEmail,
+    },
 };
 
-// Inicializar automaticamente quando o arquivo for carregado
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initSupabase);
 } else {

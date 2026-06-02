@@ -1,0 +1,31 @@
+# Render Blueprint — API ICMS ST (Flask + waitress).
+#
+# Deploy:
+#   1. Render Dashboard → New → Blueprint → conectar o repo josuelm874/Domain.
+#   2. Render detecta este render.yaml e cria o serviço web `softtech-icms-api`.
+#   3. Após o primeiro deploy, definir a env var ICMS_API_CORS_ORIGINS no dashboard
+#      com a origin do frontend hospedado (ex.: https://softtech-fiscal.vercel.app).
+#      Sem isso, o navegador bloqueia as chamadas por CORS.
+#
+# Observações:
+#   - O start usa waitress (já em requirements.txt; o próprio módulo recomenda waitress
+#     em produção). $PORT é injetado pelo Render — NÃO setar ICMS_API_HOST/PORT aqui.
+#   - Plano free hiberna após ~15 min ocioso; primeira chamada tem cold start (~30-50s).
+#   - Health check em /api/icms/health (isento de X-API-Key por design).
+services:
+  - type: web
+    name: softtech-icms-api
+    runtime: python
+    rootDir: api_icms
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: waitress-serve --host=0.0.0.0 --port=$PORT api_icms:app
+    healthCheckPath: /api/icms/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+      - key: ICMS_API_LOG_LEVEL
+        value: INFO
+      # Definir no dashboard (sync:false) — origin(s) do frontend, separadas por vírgula.
+      - key: ICMS_API_CORS_ORIGINS
+        sync: false
