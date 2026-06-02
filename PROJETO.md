@@ -251,11 +251,10 @@ Armazena todos os dados do sistema de forma sincronizada.
 
 ### Configuração no código
 
-```javascript
-// assets/js/supabase-sync.js — altere para seu projeto
-const SUPABASE_URL = 'https://seu-projeto.supabase.co';
-const SUPABASE_KEY = 'sua_chave_anonima';
-```
+Preencha `assets/js/config.js` (copiado de `config.example.js`, gitignored):
+
+- **SUPABASE_CONFIG.url** — URL do projeto (Project Settings → API)
+- **SUPABASE_CONFIG.publishableKey** — publishable/anon key (pública, segura no frontend)
 
 ### Segurança
 
