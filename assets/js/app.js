@@ -8306,20 +8306,43 @@ function cancelEditUser() {
     document.getElementById('user-username').style.cursor = '';
 }
 
-// Função para deletar usuário
+// Função para deletar usuário (local + Supabase)
 async function deleteUser(userId) {
-    if (!confirm('Tem certeza que deseja deletar este usuário?')) {
+    const users = await loadDataSync('registeredUsers', []);
+    const target = users.find(user => user.id === userId);
+    if (!target) {
+        alert('Usuário não encontrado.');
         return;
     }
 
-    const users = await loadDataSync('registeredUsers', []);
+    if (!confirm(`Excluir DEFINITIVAMENTE o usuário "${target.name}" (${target.username})?\n\n` +
+                 `A conta será removida do Supabase e do sistema. Esta ação não pode ser desfeita.`)) {
+        return;
+    }
+
+    // 1) Exclusão definitiva no Supabase via Edge Function (hard-delete de auth.users
+    //    → ON DELETE CASCADE remove user_profiles). Idempotente para órfãos só-locais.
+    let supabaseAviso = '';
+    if (window.supabaseSync?.auth?.deleteUser && window.supabaseSync.isConfigured()) {
+        const del = await window.supabaseSync.auth.deleteUser({ username: target.username });
+        if (!del.ok) {
+            if (del.error === 'sem-sessao') {
+                supabaseAviso = '\n\n(Removido apenas localmente — não há sessão Supabase ativa. ' +
+                    'Para excluir a conta na nuvem, faça login no Supabase e exclua novamente, ou use o Dashboard.)';
+            } else {
+                console.warn('⚠️ Falha ao excluir no Supabase:', del.error);
+                supabaseAviso = '\n\n(Atenção: removido localmente, mas a exclusão no Supabase falhou: ' + del.error + ')';
+            }
+        }
+        // del.ok com status 'not-found' = órfão; segue com a remoção local normalmente.
+    }
+
+    // 2) Remove o espelho local (registeredUsers).
     const filteredUsers = users.filter(user => user.id !== userId);
     await saveDataSync('registeredUsers', filteredUsers);
-    
-    // Recarregar lista
+
     loadUsersList();
-    
-    alert('Usuário deletado com sucesso!');
+    alert('Usuário excluído.' + supabaseAviso);
 }
 
 // Função para fechar modal de cadastro de usuários
@@ -8361,11 +8384,21 @@ async function handleUserRegistration(e) {
             alert('As senhas não coincidem.');
             return;
         }
+        // Supabase Auth exige >= 6 caracteres. Falha aqui (antes de qualquer escrita)
+        // evita criar usuário órfão (local sem conta na nuvem).
+        if (password.length < 6) {
+            alert('A senha deve ter pelo menos 6 caracteres.');
+            return;
+        }
     } else {
-        // Editando: senha opcional, mas se informada, deve coincidir
+        // Editando: senha opcional, mas se informada, deve coincidir e respeitar o mínimo.
         if (password || confirmPassword) {
             if (password !== confirmPassword) {
                 alert('As senhas não coincidem.');
+                return;
+            }
+            if (password.length < 6) {
+                alert('A senha deve ter pelo menos 6 caracteres.');
                 return;
             }
         }
@@ -8452,12 +8485,57 @@ async function completeUserRegistration(name, username, control, password, profi
 
         await saveDataSync('registeredUsers', existingUsers);
         console.log('✅ Usuário atualizado e sincronizado:', existingUsers[userIndex]);
-        alert('Usuário atualizado com sucesso!');
-    } else {
-        // CRIAR NOVO USUÁRIO — hash PBKDF2-SHA-256.
-        const hashedPassword = await window.generateSecureHash(password);
 
-        // Espelho local (preserva fluxos legados que dependem de registeredUsers).
+        // Propaga metadados para o Supabase (user_profiles), casando por username.
+        // Best-effort: só funciona se houver sessão admin ativa (RLS). Não bloqueia o
+        // fluxo local. LIMITAÇÕES: (1) mudar `control` aqui NÃO altera a permissão
+        // efetiva no Supabase — current_user_is_admin() lê de auth.jwt().user_metadata,
+        // que só muda via admin API; (2) troca de senha de outro usuário não propaga ao
+        // auth.users (também exige admin API). Ambos ficam para a Edge Function admin.
+        let supabaseAviso = '';
+        if (window.supabaseSync?.auth?.updateProfile && window.supabaseSync.isConfigured()) {
+            const upd = await window.supabaseSync.auth.updateProfile({
+                username: existingUser.username,
+                fullName: name,
+                control: control,
+                profileImage: profileImage,
+            });
+            if (!upd.ok && upd.error !== 'sem-sessao') {
+                console.warn('⚠️ Falha ao propagar edição para user_profiles:', upd.error);
+                supabaseAviso = '\n\n(Atenção: os dados foram salvos localmente, mas a sincronização do perfil no Supabase falhou.)';
+            }
+        }
+
+        alert('Usuário atualizado com sucesso!' + supabaseAviso);
+    } else {
+        // CRIAR NOVO USUÁRIO — SUPABASE-FIRST.
+        // Defesa: senha mínima do Supabase Auth (caso completeUserRegistration seja
+        // chamado por um caminho que não passou por handleUserRegistration).
+        if (!password || password.length < 6) {
+            alert('A senha deve ter pelo menos 6 caracteres.');
+            return;
+        }
+
+        const supabaseAtivo = !!(window.supabaseSync?.auth?.signUp && window.supabaseSync.isConfigured());
+
+        // 1) Cria a conta no Supabase Auth ANTES de qualquer escrita local. Isso dispara
+        //    o trigger handle_new_user, que popula user_profiles. Se falhar, abortamos —
+        //    nada é gravado localmente, evitando usuário órfão (local sem conta na nuvem).
+        if (supabaseAtivo) {
+            const signUpResult = await window.supabaseSync.auth.signUp({
+                username, password, fullName: name, control,
+            });
+            if (!signUpResult.ok) {
+                console.warn('⚠️ Falha ao criar conta Supabase Auth — cadastro abortado:', signUpResult.error);
+                alert('Não foi possível criar a conta no Supabase: ' + signUpResult.error +
+                      '\n\nO usuário NÃO foi cadastrado. Verifique os dados e tente novamente.');
+                return; // aborta — nenhum espelho local é criado
+            }
+        }
+
+        // 2) Só agora grava o espelho local (preserva fluxos legados que dependem de
+        //    registeredUsers). Hash PBKDF2-SHA-256 da senha.
+        const hashedPassword = await window.generateSecureHash(password);
         const newUser = {
             id: Date.now(),
             name: name,
@@ -8472,22 +8550,12 @@ async function completeUserRegistration(name, username, control, password, profi
         existingUsers.push(newUser);
         await saveDataSync('registeredUsers', existingUsers);
 
-        // ESPELHO em Supabase Auth: cria auth.users + dispara trigger handle_new_user
-        // que popula user_profiles. Best-effort — falha aqui não bloqueia cadastro local.
-        if (window.supabaseSync?.auth?.signUp && window.supabaseSync.isConfigured()) {
-            const signUpResult = await window.supabaseSync.auth.signUp({
-                username, password, fullName: name, control,
-            });
-            if (!signUpResult.ok) {
-                console.warn('⚠️ Falha ao criar conta Supabase Auth (usuário existirá só localmente):', signUpResult.error);
-                alert('Usuário cadastrado localmente, mas a conta Supabase falhou: ' + signUpResult.error + '\nPeça ao admin para criar manualmente em Dashboard → Authentication.');
-            } else {
-                console.log('✅ Usuário cadastrado em Supabase Auth + local:', newUser);
-                alert('Usuário cadastrado com sucesso (Supabase + local)!');
-            }
+        if (supabaseAtivo) {
+            console.log('✅ Usuário cadastrado em Supabase Auth + local:', newUser);
+            alert('Usuário cadastrado com sucesso (Supabase + local)!');
         } else {
             console.log('✅ Usuário salvo (somente local — Supabase não configurado):', newUser);
-            alert('Usuário cadastrado com sucesso!');
+            alert('Usuário cadastrado com sucesso (somente local — Supabase não configurado).');
         }
     }
 
@@ -8496,8 +8564,6 @@ async function completeUserRegistration(name, username, control, password, profi
 
     // Recarregar lista de usuários
     await loadUsersList();
-
-    alert(`Usuário "${name}" cadastrado com sucesso!`);
 }
 
 // ==================== FUNÇÕES DE CADASTRO DE CONTRIBUINTES ====================

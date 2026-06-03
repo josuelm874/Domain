@@ -47,3 +47,4 @@ venv/
 
 # Credenciais do Supabase — não commitar, use config.example.js como referência
 assets/js/config.js
+.vercel

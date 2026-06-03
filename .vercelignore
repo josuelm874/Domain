@@ -1,0 +1,14 @@
+# Define explicitamente o que NÃO subir para o Vercel.
+# IMPORTANTE: a existência deste arquivo faz o Vercel ignorar o .gitignore.
+# Sem ele, config.js (gitignored) não subiria e o site quebraria em produção.
+
+.claude
+.git
+.py
+api_icms
+node_modules
+*.bat
+*.sh
+PROJETO.md
+cest_backup_inicial.json
+desktop.ini

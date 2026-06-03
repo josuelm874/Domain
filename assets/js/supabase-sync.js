@@ -207,6 +207,63 @@ function authOnChange(callback) {
     return () => data?.subscription?.unsubscribe?.();
 }
 
+/**
+ * Atualiza metadados do perfil no Supabase (user_profiles), casando por username.
+ * Best-effort: exige sessão admin (RLS UPDATE permite auth.uid()=id OR admin).
+ * NÃO altera auth.users nem user_metadata — logo, mudar `control` aqui não muda a
+ * permissão efetiva no Supabase (current_user_is_admin lê do JWT). Isso fica para a
+ * Edge Function admin, fora do escopo deste wrapper.
+ * @returns {Promise<{ok:boolean, error?:string}>}
+ */
+async function authUpdateProfile({ username, fullName, control, profileImage }) {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+    if (!currentSession) return { ok: false, error: 'sem-sessao' };
+
+    const patch = { updated_at: new Date().toISOString() };
+    if (fullName !== undefined) patch.full_name = fullName;
+    if (control !== undefined) {
+        patch.control = control;
+        patch.role = control === 'administrador' ? 'admin' : 'operator';
+    }
+    if (profileImage !== undefined) patch.profile_image = profileImage;
+
+    const { error } = await supabaseClient
+        .from('user_profiles')
+        .update(patch)
+        .eq('username', String(username).trim().toLowerCase());
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+}
+
+/**
+ * Exclui um usuário DEFINITIVAMENTE via Edge Function `delete-user`, que usa
+ * service_role no servidor (o front com publishable key não pode tocar auth.users).
+ * A função valida que o chamador é admin pelo próprio JWT. Idempotente: se o usuário
+ * não existir na nuvem (órfão só-local), retorna ok com status 'not-found'.
+ * @returns {Promise<{ok:boolean, status?:string, error?:string}>}
+ */
+async function authDeleteUser({ username }) {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+    if (!currentSession) return { ok: false, error: 'sem-sessao' };
+
+    const { data, error } = await supabaseClient.functions.invoke('delete-user', {
+        body: { username: String(username).trim().toLowerCase() },
+    });
+    if (error) {
+        let msg = error.message || 'Erro ao chamar delete-user';
+        try {
+            const ctx = await error.context?.json?.();
+            if (ctx?.error) msg = ctx.error;
+        } catch { /* corpo não-JSON */ }
+        return { ok: false, error: msg };
+    }
+    return { ok: true, status: data?.status };
+}
+
 /** Aguarda sessão antes de chamar fn. Retorna null se nunca houver. */
 async function requireAuth(fn, { timeoutMs = 0 } = {}) {
     if (!supabaseReadyPromise) initSupabase();
@@ -564,6 +621,8 @@ window.supabaseSync = {
         getSession: authGetCurrentSession,
         getProfile: authGetCurrentProfile,
         onChange: authOnChange,
+        updateProfile: authUpdateProfile,
+        deleteUser: authDeleteUser,
         usernameToEmail: _usernameToEmail,
     },
 };
