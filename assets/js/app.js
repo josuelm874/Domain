@@ -2461,19 +2461,29 @@ function createIcmsWithholdingPage(mainContent) {
             `;
             icmsModeloInfo.style.color = 'var(--color-dark-variant)';
             
-            // Caminho fixo da planilha modelo
-            const caminhoModelo = 'assets/js/ICMS ST.xlsx';
-            
+            // Modelos de retenção por tipo de empresa. Por enquanto FIXO em mercadinho,
+            // até o cadastro de empresas (com o tipo derivado do destinatário do XML) ficar
+            // pronto. TODO: substituir ICMS_TIPO_PADRAO pela leitura do tipo cadastrado da
+            // empresa (mercadinho | frigorifico | deposito) a partir do destinatário do XML.
+            const ICMS_MODELOS = {
+                mercadinho: 'assets/js/ICMS ST - Mercadinho.xlsx',
+                // frigorifico: 'assets/js/ICMS ST - Frigorifico.xlsx',  // a implementar
+                // deposito:    'assets/js/ICMS ST - Deposito.xlsx',      // a implementar
+            };
+            const ICMS_TIPO_PADRAO = 'mercadinho';
+            const caminhoModelo = ICMS_MODELOS[ICMS_TIPO_PADRAO];
+            const nomeModelo = caminhoModelo.split('/').pop();
+
             console.log('Carregando modelo Excel de:', caminhoModelo);
-            
+
             // Fazer fetch do arquivo
             const response = await fetch(caminhoModelo);
             if (!response.ok) {
                 throw new Error(`Erro ao carregar modelo: ${response.status} ${response.statusText}`);
             }
-            
+
             const arrayBuffer = await response.arrayBuffer();
-            await loadModeloFromBuffer(arrayBuffer, 'ICMS ST.xlsx');
+            await loadModeloFromBuffer(arrayBuffer, nomeModelo);
             
         } catch (error) {
             icmsModeloInfo.innerHTML = `
@@ -7036,6 +7046,78 @@ function createNfeCfeComparisonPage(mainContent) {
         });
     }
 
+    // Parser de uma linha CSV respeitando campos entre aspas (vírgula como separador,
+    // aspas duplicadas escapam aspas). Usado pelo relatório SIGA, que vem em CSV.
+    function parseCsvLine(line) {
+        const out = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (line[i + 1] === '"') { cur += '"'; i++; }
+                    else inQuotes = false;
+                } else cur += ch;
+            } else {
+                if (ch === '"') inQuotes = true;
+                else if (ch === ',') { out.push(cur); cur = ''; }
+                else cur += ch;
+            }
+        }
+        out.push(cur);
+        return out.map(s => s.trim());
+    }
+
+    // Parser dedicado do relatório SIGA (novo layout da SEFAZ, em CSV). Lê a chave como
+    // TEXTO — evitando a notação científica que o SheetJS aplicaria a 44 dígitos. Mantém
+    // o SIGET (formatos antigos) intacto: retorna false quando o cabeçalho não é do SIGA,
+    // deixando o arquivo seguir para o parser genérico (processSpreadsheet).
+    // Layout SIGA: CNPJ destinatário, Razão social, UF, Número da nota, Data de emissão,
+    // Indicadores selecionados (AUTORIZADA/CANCELADA), Valor R$, Chave NF-e.
+    function processSigaCsv(file, dataArray) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const lines = String(e.target.result).split(/\r?\n/).filter(l => l.trim() !== '');
+                    if (lines.length < 2) { resolve(false); return; }
+
+                    const header = parseCsvLine(lines[0]).map(h => h.toLowerCase());
+                    const idxChave = header.findIndex(h => h.includes('chave'));
+                    const idxValor = header.findIndex(h => h.includes('valor'));
+                    // Assinatura do SIGA: precisa ter colunas "Chave NF-e" e "Valor".
+                    if (idxChave === -1 || idxValor === -1) { resolve(false); return; }
+
+                    const idxCnpj = header.findIndex(h => h.includes('cnpj'));
+                    const idxNum = header.findIndex(h => h.includes('número') || h.includes('numero'));
+                    const idxData = header.findIndex(h => h.includes('data') || h.includes('emiss'));
+                    const idxStatus = header.findIndex(h => h.includes('indicador'));
+
+                    let count = 0;
+                    for (let i = 1; i < lines.length; i++) {
+                        const cols = parseCsvLine(lines[i]);
+                        const key = cleanKey(cols[idxChave] || '');
+                        if (!/^\d{44}$/.test(key)) continue;
+                        const value = formatSpreadsheetOrTextValue(cols[idxValor]) || '0,00';
+                        const cnpj = idxCnpj !== -1 ? cleanKey(cols[idxCnpj] || '') : '';
+                        const numeroNf = idxNum !== -1 ? (cols[idxNum] || '') : '';
+                        const dhEmi = idxData !== -1 ? formatFileDate(cols[idxData] || '') : '';
+                        const status = idxStatus !== -1 ? (cols[idxStatus] || '').toUpperCase() : '';
+                        dataArray.push({ key, numeroNf, dhEmi, cnpj, value, type: 'NFe', status });
+                        count++;
+                    }
+                    console.log(`✅ Relatório SIGA reconhecido: ${count} chaves de ${lines.length - 1} linhas (${file.name})`);
+                    resolve(true);
+                } catch (err) {
+                    console.warn(`Erro ao processar CSV SIGA ${file.name}: ${err.message}`);
+                    resolve(false);
+                }
+            };
+            reader.onerror = () => resolve(false);
+            reader.readAsText(file, 'utf-8');
+        });
+    }
+
     function processFiles(files, label, checkSvg, dataArray, callback) {
         if (!files || files.length === 0) {
             console.warn('Nenhum arquivo selecionado');
@@ -7055,7 +7137,18 @@ function createNfeCfeComparisonPage(mainContent) {
                        file.type === 'application/vnd.ms-excel' ||
                        file.type === 'text/csv') {
                 console.log(`📊 Processando planilha/CSV: ${file.name}`);
-                promises.push(processSpreadsheet(file, dataArray, label, checkSvg));
+                const ehCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
+                if (ehCsv) {
+                    // SIGA-first: se o CSV for o novo relatório SEFAZ (SIGA), usa o parser
+                    // dedicado; senão, cai no parser genérico (SIGET antigo / planilhas).
+                    promises.push(
+                        processSigaCsv(file, dataArray).then((reconhecido) => {
+                            if (!reconhecido) return processSpreadsheet(file, dataArray, label, checkSvg);
+                        })
+                    );
+                } else {
+                    promises.push(processSpreadsheet(file, dataArray, label, checkSvg));
+                }
             } else {
                 console.warn(`Arquivo ignorado (não é XML, TXT, CSV ou planilha): ${file.name}`);
             }
