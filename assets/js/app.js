@@ -8609,18 +8609,23 @@ async function completeUserRegistration(name, username, control, password, profi
             return;
         }
 
-        const supabaseAtivo = !!(window.supabaseSync?.auth?.signUp && window.supabaseSync.isConfigured());
+        const supabaseAtivo = !!(window.supabaseSync?.auth?.createUser && window.supabaseSync.isConfigured());
 
-        // 1) Cria a conta no Supabase Auth ANTES de qualquer escrita local. Isso dispara
-        //    o trigger handle_new_user, que popula user_profiles. Se falhar, abortamos —
-        //    nada é gravado localmente, evitando usuário órfão (local sem conta na nuvem).
+        // 1) Cria a conta no Supabase ANTES de qualquer escrita local, via Edge Function
+        //    admin (create-user): a admin API aceita o domínio interno .local (o signUp
+        //    público o rejeita como inválido) e não troca a sessão do admin. O trigger
+        //    handle_new_user popula user_profiles. Se falhar, abortamos — nada é gravado
+        //    localmente, evitando usuário órfão (local sem conta na nuvem).
         if (supabaseAtivo) {
-            const signUpResult = await window.supabaseSync.auth.signUp({
+            const createResult = await window.supabaseSync.auth.createUser({
                 username, password, fullName: name, control,
             });
-            if (!signUpResult.ok) {
-                console.warn('⚠️ Falha ao criar conta Supabase Auth — cadastro abortado:', signUpResult.error);
-                alert('Não foi possível criar a conta no Supabase: ' + signUpResult.error +
+            if (!createResult.ok) {
+                console.warn('⚠️ Falha ao criar conta Supabase — cadastro abortado:', createResult.error);
+                const motivo = createResult.error === 'sem-sessao'
+                    ? 'É preciso estar logado como administrador no Supabase para cadastrar usuários.'
+                    : createResult.error;
+                alert('Não foi possível criar a conta no Supabase: ' + motivo +
                       '\n\nO usuário NÃO foi cadastrado. Verifique os dados e tente novamente.');
                 return; // aborta — nenhum espelho local é criado
             }

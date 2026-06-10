@@ -264,6 +264,32 @@ async function authDeleteUser({ username }) {
     return { ok: true, status: data?.status };
 }
 
+/**
+ * Cria um usuário via Edge Function `create-user` (service_role no servidor). Usa a admin
+ * API, que aceita o domínio interno `.local` — diferente do signUp público, que o rejeita
+ * ("Email address is invalid"). Não troca a sessão do admin. Exige sessão admin (RLS/JWT).
+ * @returns {Promise<{ok:boolean, userId?:string, error?:string}>}
+ */
+async function authCreateUser({ username, password, fullName, control }) {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+    if (!currentSession) return { ok: false, error: 'sem-sessao' };
+
+    const { data, error } = await supabaseClient.functions.invoke('create-user', {
+        body: { username: String(username).trim().toLowerCase(), password, fullName, control },
+    });
+    if (error) {
+        let msg = error.message || 'Erro ao chamar create-user';
+        try {
+            const ctx = await error.context?.json?.();
+            if (ctx?.error) msg = ctx.error;
+        } catch { /* corpo não-JSON */ }
+        return { ok: false, error: msg };
+    }
+    return { ok: true, userId: data?.userId };
+}
+
 /** Aguarda sessão antes de chamar fn. Retorna null se nunca houver. */
 async function requireAuth(fn, { timeoutMs = 0 } = {}) {
     if (!supabaseReadyPromise) initSupabase();
@@ -622,6 +648,7 @@ window.supabaseSync = {
         getProfile: authGetCurrentProfile,
         onChange: authOnChange,
         updateProfile: authUpdateProfile,
+        createUser: authCreateUser,
         deleteUser: authDeleteUser,
         usernameToEmail: _usernameToEmail,
     },
