@@ -127,6 +127,11 @@
                 catch (e) { console.warn('Falha ao encerrar sessão Supabase:', e); }
             }
 
+            // Desliga o auto-login: o próximo acesso volta a pedir senha. Mantém
+            // savedUsername para pré-preencher o campo. Este é o único ponto que
+            // reativa a tela de login — exatamente o comportamento pedido.
+            localStorage.removeItem('autoLoginEnabled');
+
             currentUser = null;
             window.currentUser = null;
             
@@ -290,12 +295,47 @@
         return date; // Retornar Date, não string formatada
     }
 
-    // SEGURANÇA (2026-06-01): auto-login com senha persistida foi removido.
-    // "Lembrar de mim" agora só pré-preenche o username — o usuário sempre digita a senha.
-    // Justificativa: senha em localStorage é leitura trivial para extensão maliciosa, XSS ou
-    // qualquer ator com acesso ao computador. A migração final para Supabase Auth (Fase 2)
-    // substitui esse fluxo por refresh tokens com TTL e revogação server-side.
-    const loadSavedCredentialsAndAutoLogin = () => {
+    // Monta o estado de usuário autenticado e abre o dashboard. Compartilhado entre
+    // o login manual (handleLogin) e o auto-login por sessão Supabase persistida —
+    // evita duplicar a montagem de estado e mantém os dois fluxos idênticos.
+    function applyAuthenticatedSession(username, profile) {
+        profile = profile || {};
+        currentUser = username;
+        window.currentUser = username;
+        loadUserPreferences();
+        showDashboardAfterLogin();
+
+        const userNameEl = document.querySelector('#current-user-name');
+        const adminLabelEl = document.querySelector('#admin-label');
+        const profileImageEl = document.querySelector('#profile-image');
+        if (userNameEl) userNameEl.textContent = profile.full_name || username;
+        if (adminLabelEl) adminLabelEl.style.display = (profile.control === 'administrador' || profile.role === 'admin') ? 'block' : 'none';
+        if (profileImageEl) profileImageEl.src = profile.profile_image || profileImages['default'];
+
+        // Espelha o profile do Supabase em registeredUsers (localStorage) para que as
+        // checagens de admin reconheçam o usuário logado via Supabase Auth.
+        try {
+            const all = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+            const mirrored = {
+                username,
+                name: profile.full_name || username,
+                control: profile.control || (profile.role === 'admin' ? 'administrador' : 'auxiliar'),
+                profileImage: profile.profile_image || '',
+            };
+            const idx = all.findIndex(u => u.username === username);
+            if (idx >= 0) all[idx] = { ...all[idx], ...mirrored };
+            else all.push(mirrored);
+            localStorage.setItem('registeredUsers', JSON.stringify(all));
+        } catch (e) {
+            console.warn('Falha ao espelhar profile Supabase em registeredUsers:', e);
+        }
+    }
+
+    // "Lembrar de mim" / auto-login (2026-06-10): reusa a sessão Supabase já
+    // persistida (refresh token em localStorage, com TTL e revogação server-side) —
+    // NÃO persiste senha. Mantém a decisão de 2026-06-01 (senha nunca em localStorage)
+    // e ainda entrega login automático no mesmo PC até o logout explícito.
+    const loadSavedCredentialsAndAutoLogin = async () => {
         const usernameInput = document.querySelector('#login-username');
         const rememberCheckbox = document.querySelector('#rememberMe');
 
@@ -310,6 +350,22 @@
         }
         if (rememberCheckbox) {
             rememberCheckbox.checked = !!savedUsername;
+        }
+
+        // Auto-login: se habilitado, restaura a sessão Supabase e entra direto.
+        if (localStorage.getItem('autoLoginEnabled') === '1' &&
+            window.supabaseSync?.auth?.restoreSession) {
+            try {
+                const result = await window.supabaseSync.auth.restoreSession();
+                if (result && result.ok) {
+                    applyAuthenticatedSession(result.username || savedUsername, result.profile || {});
+                    return;
+                }
+            } catch (e) {
+                console.warn('Auto-login falhou, exibindo tela de login:', e);
+            }
+            // Sessão expirou/foi revogada: limpa o flag para não retentar em loop.
+            localStorage.removeItem('autoLoginEnabled');
         }
     };
     
@@ -391,42 +447,19 @@
         if (window.supabaseSync?.auth && window.supabaseSync.isConfigured()) {
             const result = await window.supabaseSync.auth.signIn(username, password);
             if (result.ok) {
-                currentUser = username;
-                window.currentUser = username;
                 const profile = result.profile || {};
-                loadUserPreferences();
-                showDashboardAfterLogin();
+                applyAuthenticatedSession(username, profile);
 
-                const userNameEl = document.querySelector('#current-user-name');
-                const adminLabelEl = document.querySelector('#admin-label');
-                const profileImageEl = document.querySelector('#profile-image');
-                if (userNameEl) userNameEl.textContent = profile.full_name || username;
-                if (adminLabelEl) adminLabelEl.style.display = (profile.control === 'administrador' || profile.role === 'admin') ? 'block' : 'none';
-                if (profileImageEl) profileImageEl.src = profile.profile_image || profileImages['default'];
-
-                // Espelha o profile do Supabase em registeredUsers (localStorage) para que as
-                // checagens de admin — que fazem registeredUsers.find(u => u.username === currentUser) —
-                // reconheçam o usuário logado via Supabase Auth. Sem isto, control fica indefinido
-                // e todas as áreas admin (CEST, cadastro, analytics) bloqueiam o administrador.
-                try {
-                    const all = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-                    const mirrored = {
-                        username,
-                        name: profile.full_name || username,
-                        control: profile.control || (profile.role === 'admin' ? 'administrador' : 'auxiliar'),
-                        profileImage: profile.profile_image || '',
-                    };
-                    const idx = all.findIndex(u => u.username === username);
-                    if (idx >= 0) all[idx] = { ...all[idx], ...mirrored };
-                    else all.push(mirrored);
-                    localStorage.setItem('registeredUsers', JSON.stringify(all));
-                } catch (e) {
-                    console.warn('Falha ao espelhar profile Supabase em registeredUsers:', e);
-                }
-
+                // "Lembrar de mim": persiste o username e habilita o auto-login pela
+                // sessão Supabase já criada (refresh token), nunca a senha.
                 const rememberMe = rememberMeCheckbox?.checked || false;
-                if (rememberMe) localStorage.setItem('savedUsername', username);
-                else localStorage.removeItem('savedUsername');
+                if (rememberMe) {
+                    localStorage.setItem('savedUsername', username);
+                    localStorage.setItem('autoLoginEnabled', '1');
+                } else {
+                    localStorage.removeItem('savedUsername');
+                    localStorage.removeItem('autoLoginEnabled');
+                }
                 localStorage.removeItem('savedPassword');
                 return;
             }
@@ -1249,12 +1282,8 @@
         else if (page === 'icms-withholding') {
             createIcmsWithholdingPage(mainContent);
         }
-        else if (page === 'dae') {
-            mainContent.innerHTML = `
-                <h1>DAE</h1>
-                <div class="dae-box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 400px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
-                </div>
-            `;
+        else if (page === 'dirbi') {
+            createDirbiPage(mainContent);
         }
         else if (page === 'sped') {
             createSpedPage(mainContent);
@@ -2178,7 +2207,18 @@ function closeImportReport() {
 let icmsXmlFiles = [];
 let icmsModeloWorkbook = null;
 let icmsModeloExcelJS = null; // Workbook do ExcelJS para preservar formatações
-let icmsModeloFile = null;
+let icmsModeloBuffer = null;      // ArrayBuffer cru do modelo (recarregado por empresa)
+let icmsModeloSelecionado = null; // chave do ICMS_MODELOS atualmente carregado
+
+// Modelos de retenção ICMS ST. Apenas 'mercadinho' tem a regra de classificação
+// (CST/CSOSN → aba) implementada. Os demais podem ser selecionados na UI, mas exibem
+// aviso de pendência de configuração e não processam até o contador fornecer as regras.
+const ICMS_MODELOS = {
+    mercadinho: { nome: 'Mercadinho', path: 'assets/js/ICMS ST - Mercadinho.xlsx', funcional: true },
+    deposito: { nome: 'Depósito', path: 'assets/js/ICMS ST - Deposito.xlsx', funcional: false },
+    deposito_regime_especial: { nome: 'Depósito Regime Especial', path: 'assets/js/ICMS ST - Deposito Regime Especial.xlsx', funcional: false },
+    frigorifico: { nome: 'Frigorífico', path: 'assets/js/ICMS ST - Frigorifico.xlsx', funcional: false },
+};
 
 // ==================== SISTEMA DE SINCRONIZAÇÃO COMPARTILHADA ====================
 /**
@@ -2309,32 +2349,31 @@ const BIBLIOTECA_RAZOES = {
 };
 
 function createIcmsWithholdingPage(mainContent) {
+    const icmsModeloOptions = Object.entries(ICMS_MODELOS)
+        .map(([k, v]) => `<option value="${k}">${escapeHtml(v.nome)}${v.funcional ? '' : ' — em configuração'}</option>`)
+        .join('');
     mainContent.innerHTML = `
         <h1>ICMS Withholding</h1>
         <div class="icms-withholding-container" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
-            <!-- Status do Modelo Excel -->
+            <!-- Seleção do Modelo de Retenção -->
             <div class="box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
-                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--color-dark);">Arquivo Modelo Excel:</label>
-                <!-- Input de arquivo (apenas para modo local) -->
-                <div id="icms-modelo-input-container" style="display: none; margin-bottom: 0.5rem;">
-                    <input type="file" id="icms-modelo-input" accept=".xlsx,.xls" style="display: none;">
-                    <button id="icms-modelo-select-btn" class="btn-process" style="padding: 0.5rem 1rem; background: var(--color-primary); color: var(--color-white); border: none; border-radius: var(--border-radius-1); cursor: pointer; font-family: 'Poppins', sans-serif; font-weight: 500; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.5rem;">
-                        <span class="material-icons-sharp" style="font-size: 1rem;">folder_open</span>
-                        Selecionar Modelo Excel
-                    </button>
-                </div>
-                <p id="icms-modelo-info" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--color-dark-variant);">
-                    <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">hourglass_empty</span>
-                    Carregando modelo Excel...
+                <label for="icms-modelo-select" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--color-dark);">Modelo de Retenção ICMS ST:</label>
+                <select id="icms-modelo-select" style="width: 100%; max-width: 400px; padding: 0.5rem 0.75rem; border: 1px solid var(--color-info-light, #ccc); border-radius: var(--border-radius-1); font-family: 'Poppins', sans-serif; font-size: 0.9rem; background: var(--color-white); color: var(--color-dark); cursor: pointer;">
+                    <option value="">— Selecione o modelo —</option>
+                    ${icmsModeloOptions}
+                </select>
+                <p id="icms-modelo-info" style="margin-top: 0.75rem; font-size: 0.85rem; color: var(--color-dark-variant);">
+                    <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">info</span>
+                    Selecione um modelo para começar.
                 </p>
             </div>
             
             <!-- Box de Upload de XMLs -->
             <div class="box animate-section icms-xml-box" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="icms-xml-box">
                 <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">cloud_upload</span>
-                <span class="box-label" id="icms-xml-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Arraste e solte os arquivos XML aqui</span>
-                <span style="font-size: 0.9rem; color: var(--color-dark-variant);">ou clique para selecionar múltiplos arquivos</span>
-                <input type="file" id="icms-xml-input" accept=".xml" multiple style="display: none;">
+                <span class="box-label" id="icms-xml-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Arraste e solte os XML (ou .zip) aqui</span>
+                <span style="font-size: 0.9rem; color: var(--color-dark-variant);">múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip se houver mais de uma)</span>
+                <input type="file" id="icms-xml-input" accept=".xml,.zip" multiple style="display: none;">
                 <div id="icms-xml-info" style="display: none; margin-top: 1rem; text-align: center; max-width: 100%; overflow-x: auto;">
                     <span class="material-icons-sharp" style="font-size: 2rem; color: var(--color-success);">check_circle</span>
                     <p id="icms-xml-count" style="margin-top: 0.5rem; color: var(--color-success); font-weight: 500;"></p>
@@ -2358,9 +2397,7 @@ function createIcmsWithholdingPage(mainContent) {
     `;
 
     const icmsModeloInfo = document.getElementById('icms-modelo-info');
-    const icmsModeloInputContainer = document.getElementById('icms-modelo-input-container');
-    const icmsModeloInput = document.getElementById('icms-modelo-input');
-    const icmsModeloSelectBtn = document.getElementById('icms-modelo-select-btn');
+    const icmsModeloSelect = document.getElementById('icms-modelo-select');
     const icmsXmlBox = document.getElementById('icms-xml-box');
     const icmsXmlInput = document.getElementById('icms-xml-input');
     const icmsXmlLabel = document.getElementById('icms-xml-label');
@@ -2370,10 +2407,12 @@ function createIcmsWithholdingPage(mainContent) {
     const icmsProcessBtn = document.getElementById('icms-process-btn');
     const icmsStatus = document.getElementById('icms-status');
     const icmsStatusText = document.getElementById('icms-status-text');
-    
-    // Detectar se está em servidor ou local
-    const isServerMode = window.location.protocol === 'http:' || window.location.protocol === 'https:';
-    
+
+    // Habilita o botão Processar só quando há modelo funcional carregado E XMLs escolhidos.
+    function atualizarBotaoProcessar() {
+        if (icmsProcessBtn) icmsProcessBtn.disabled = !(icmsModeloSelecionado && icmsXmlFiles.length > 0);
+    }
+
     // Função para carregar modelo a partir de um ArrayBuffer
     async function loadModeloFromBuffer(arrayBuffer, fileName = 'ICMS ST.xlsx') {
         try {
@@ -2439,102 +2478,63 @@ function createIcmsWithholdingPage(mainContent) {
         }
     }
     
-    // Carregar automaticamente a planilha modelo do servidor
-    async function carregarModeloExcel() {
-        if (!isServerMode) {
-            // Modo local: mostrar input de arquivo
-            icmsModeloInputContainer.style.display = 'block';
+    // Seleção do modelo pelo usuário. Só o Mercadinho tem regra de classificação
+    // (CST/CSOSN → aba); os demais carregam aviso de pendência e não processam.
+    async function selecionarModeloIcms(chave) {
+        icmsModeloWorkbook = null;
+        icmsModeloExcelJS = null;
+        icmsModeloBuffer = null;
+        icmsModeloSelecionado = null;
+        atualizarBotaoProcessar();
+
+        if (!chave) {
             icmsModeloInfo.innerHTML = `
-                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-dark-variant);">info</span>
-                <span>Modo local: Selecione o arquivo modelo Excel</span>
-            `;
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">info</span>
+                Selecione um modelo para começar.`;
             icmsModeloInfo.style.color = 'var(--color-dark-variant)';
-            console.log('ℹ️ Modo local detectado - aguardando seleção do modelo pelo usuário');
             return;
         }
-        
-        // Modo servidor: tentar carregar automaticamente
+
+        const modelo = ICMS_MODELOS[chave];
+        if (!modelo) return;
+
+        if (!modelo.funcional) {
+            icmsModeloInfo.innerHTML = `
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-warning, #d68910);">warning</span>
+                <span><strong>${escapeHtml(modelo.nome)}</strong> está em pendência de configuração.
+                As regras de classificação deste modelo ainda não foram definidas — apenas o
+                modelo <strong>Mercadinho</strong> está funcional no momento.</span>`;
+            icmsModeloInfo.style.color = 'var(--color-warning, #d68910)';
+            return;
+        }
+
         try {
             icmsModeloInfo.innerHTML = `
                 <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">hourglass_empty</span>
-                Carregando modelo Excel do servidor...
-            `;
+                Carregando modelo ${escapeHtml(modelo.nome)}...`;
             icmsModeloInfo.style.color = 'var(--color-dark-variant)';
-            
-            // Modelos de retenção por tipo de empresa. Por enquanto FIXO em mercadinho,
-            // até o cadastro de empresas (com o tipo derivado do destinatário do XML) ficar
-            // pronto. TODO: substituir ICMS_TIPO_PADRAO pela leitura do tipo cadastrado da
-            // empresa (mercadinho | frigorifico | deposito) a partir do destinatário do XML.
-            const ICMS_MODELOS = {
-                mercadinho: 'assets/js/ICMS ST - Mercadinho.xlsx',
-                // frigorifico: 'assets/js/ICMS ST - Frigorifico.xlsx',  // a implementar
-                // deposito:    'assets/js/ICMS ST - Deposito.xlsx',      // a implementar
-            };
-            const ICMS_TIPO_PADRAO = 'mercadinho';
-            const caminhoModelo = ICMS_MODELOS[ICMS_TIPO_PADRAO];
-            const nomeModelo = caminhoModelo.split('/').pop();
 
-            console.log('Carregando modelo Excel de:', caminhoModelo);
-
-            // Fazer fetch do arquivo
-            const response = await fetch(caminhoModelo);
-            if (!response.ok) {
-                throw new Error(`Erro ao carregar modelo: ${response.status} ${response.statusText}`);
+            const response = await fetch(modelo.path);
+            if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+            icmsModeloBuffer = await response.arrayBuffer();
+            const ok = await loadModeloFromBuffer(icmsModeloBuffer, modelo.path.split('/').pop());
+            if (ok) {
+                icmsModeloSelecionado = chave;
+                atualizarBotaoProcessar();
             }
-
-            const arrayBuffer = await response.arrayBuffer();
-            await loadModeloFromBuffer(arrayBuffer, nomeModelo);
-            
         } catch (error) {
+            icmsModeloBuffer = null;
             icmsModeloInfo.innerHTML = `
                 <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-danger);">error</span>
-                <span>Erro ao carregar modelo: ${error.message}</span>
-            `;
+                <span>Erro ao carregar modelo: ${escapeHtml(error.message || String(error))}</span>`;
             icmsModeloInfo.style.color = 'var(--color-danger)';
-            console.error('❌ Erro ao carregar modelo Excel automaticamente:', error);
-            console.error('   Verifique se o arquivo existe em: assets/js/ICMS ST.xlsx');
+            console.error('❌ Erro ao carregar modelo ICMS:', error);
         }
     }
-    
-    // Configurar input de arquivo para modo local
-    if (icmsModeloSelectBtn && icmsModeloInput) {
-        icmsModeloSelectBtn.addEventListener('click', () => {
-            icmsModeloInput.click();
-        });
-        
-        icmsModeloInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            
-            if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
-                alert('Por favor, selecione um arquivo Excel (.xlsx ou .xls)');
-                return;
-            }
-            
-            icmsModeloInfo.innerHTML = `
-                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">hourglass_empty</span>
-                Carregando modelo Excel...
-            `;
-            icmsModeloInfo.style.color = 'var(--color-dark-variant)';
-            
-            try {
-                // Salvar arquivo original para uso na API Python
-                icmsModeloFile = file;
-                const arrayBuffer = await readFileAsArrayBuffer(file);
-                await loadModeloFromBuffer(arrayBuffer, file.name);
-            } catch (error) {
-                icmsModeloInfo.innerHTML = `
-                    <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-danger);">error</span>
-                    <span>Erro ao carregar modelo: ${error.message}</span>
-                `;
-                icmsModeloInfo.style.color = 'var(--color-danger)';
-                console.error('❌ Erro ao carregar modelo Excel:', error);
-            }
-        });
+
+    if (icmsModeloSelect) {
+        icmsModeloSelect.addEventListener('change', (e) => selecionarModeloIcms(e.target.value));
     }
-    
-    // Carregar modelo automaticamente quando a página for criada (apenas se servidor)
-    carregarModeloExcel();
 
     // Configurar drag & drop
     icmsXmlBox.addEventListener('dragover', (e) => {
@@ -2549,11 +2549,14 @@ function createIcmsWithholdingPage(mainContent) {
     icmsXmlBox.addEventListener('drop', (e) => {
         e.preventDefault();
         icmsXmlBox.classList.remove('dragover');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.xml'));
+        const files = Array.from(e.dataTransfer.files).filter(f => {
+            const n = f.name.toLowerCase();
+            return n.endsWith('.xml') || n.endsWith('.zip');
+        });
         if (files.length > 0) {
             handleIcmsXmlFiles(files);
         } else {
-            alert('Por favor, selecione arquivos XML');
+            alert('Por favor, selecione arquivos XML ou .zip');
         }
     });
 
@@ -2577,9 +2580,9 @@ function createIcmsWithholdingPage(mainContent) {
         // Listar arquivos
         const fileList = files.slice(0, 10).map(f => f.name).join('<br>');
         icmsXmlList.innerHTML = fileList + (files.length > 10 ? `<br>... e mais ${files.length - 10} arquivo(s)` : '');
-        
-        icmsProcessBtn.disabled = false;
-        console.log(`${files.length} arquivo(s) XML selecionado(s)`);
+
+        atualizarBotaoProcessar();
+        console.log(`${files.length} arquivo(s) XML/ZIP selecionado(s)`);
     }
 
     icmsProcessBtn.addEventListener('click', async () => {
@@ -2588,8 +2591,8 @@ function createIcmsWithholdingPage(mainContent) {
             return;
         }
         
-        if (!icmsModeloWorkbook || !icmsModeloExcelJS) {
-            alert('O modelo Excel ainda não foi carregado. Aguarde alguns instantes ou verifique se o arquivo "ICMS ST.xlsx" existe em assets/js/');
+        if (!icmsModeloSelecionado || !icmsModeloBuffer) {
+            alert('Selecione um modelo funcional (Mercadinho) antes de processar.');
             return;
         }
 
@@ -2604,392 +2607,164 @@ function createIcmsWithholdingPage(mainContent) {
             console.error('Erro ao processar XMLs:', error);
             icmsStatusText.textContent = `Erro: ${error.message}`;
             icmsStatusText.style.color = 'var(--color-danger)';
-            icmsProcessBtn.disabled = false;
+            atualizarBotaoProcessar();
         }
     });
 }
 
-// Configuração da API Python (pode ser ajustada conforme necessário)
-const ICMS_API_URL = (window.APP_CONFIG && window.APP_CONFIG.icmsApiUrl) || 'http://localhost:5000/api/icms';
-const USE_PYTHON_API = true; // Flag para habilitar/desabilitar API Python
-
-// Helper: fetch com timeout via AbortController
-// timeoutMs: 5000 para health checks, 120000 para processamento pesado
-function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
-    const controller = new AbortController();
-    const timerId = setTimeout(() => controller.abort(), timeoutMs);
-    return fetch(url, { ...options, signal: controller.signal })
-        .finally(() => clearTimeout(timerId));
-}
-
-// Função para processar ICMS usando API Python (openpyxl - preserva fórmulas e tabelas)
-async function processIcmsXmlsWithPython() {
-    const statusText = document.getElementById('icms-status-text');
-    
-    if (!icmsModeloFile) {
-        throw new Error('Modelo Excel não foi carregado. Por favor, selecione o arquivo modelo primeiro.');
-    }
-    
-    if (!icmsXmlFiles || icmsXmlFiles.length === 0) {
-        throw new Error('Nenhum arquivo XML foi selecionado.');
-    }
-    
-    statusText.textContent = 'Enviando arquivos para processamento Python...';
-    
-    try {
-        // Verificar se API está disponível (timeout de 5s para não travar na espera)
-        const healthResponse = await fetchWithTimeout(`${ICMS_API_URL}/health`, {}, 5000).catch(() => null);
-        if (!healthResponse || !healthResponse.ok) {
-            const errorMsg = 'API Python não está disponível.\n\n' +
-                'Para usar o processamento Python (que preserva fórmulas e tabelas):\n' +
-                '1. Abra um terminal na pasta: api_icms\n' +
-                '2. Execute: python api_icms.py\n' +
-                '3. Aguarde a mensagem "API ICMS ST iniciando..."\n' +
-                '4. Tente processar novamente\n\n' +
-                'O sistema tentará usar processamento JavaScript local como fallback.';
-            throw new Error(errorMsg);
-        }
-        
-        // Preparar FormData
-        const formData = new FormData();
-        formData.append('modelo', icmsModeloFile);
-        icmsXmlFiles.forEach(xmlFile => {
-            formData.append('xmls', xmlFile);
-        });
-        
-        statusText.textContent = 'Processando com Python (openpyxl)...';
-        
-        // Enviar para API Python (timeout de 120s para processamentos pesados)
-        const response = await fetchWithTimeout(`${ICMS_API_URL}/process`, {
-            method: 'POST',
-            body: formData
-        }, 120000);
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
-            throw new Error(errorData.error || `Erro na API: ${response.status}`);
-        }
-        
-        statusText.textContent = 'Recebendo planilha gerada...';
-        
-        // Receber arquivo Excel gerado
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        
-        // Obter nome do arquivo do header Content-Disposition (mesmo formato do Python)
-        const contentDisposition = response.headers.get('Content-Disposition');
-        let fileName = 'ICMS ST.xlsx';
-        if (contentDisposition) {
-            // Tentar extrair nome do arquivo (suporta filename="..." e filename*=UTF-8''...)
-            const fileNameMatch = contentDisposition.match(/filename\*=UTF-8''(.+)|filename=["']?([^"';]+)["']?/i);
-            if (fileNameMatch) {
-                fileName = fileNameMatch[1] ? decodeURIComponent(fileNameMatch[1]) : fileNameMatch[2];
-                fileName = fileName.replace(/['"]/g, '');
-            }
-        }
-        
-        // Download do arquivo
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        
-        statusText.textContent = `✅ Planilha gerada com sucesso via Python: ${fileName}`;
-        statusText.style.color = 'var(--color-success)';
-        
-        // Resetar
-        setTimeout(() => {
-            icmsXmlFiles = [];
-            document.getElementById('icms-xml-label').textContent = 'Arraste e solte os arquivos XML aqui';
-            document.getElementById('icms-xml-label').style.color = 'var(--color-dark)';
-            document.getElementById('icms-xml-info').style.display = 'none';
-            document.getElementById('icms-process-btn').disabled = true;
-            document.getElementById('icms-status').style.display = 'none';
-        }, 3000);
-        
-        return true; // Sucesso
-        
-    } catch (error) {
-        console.error('❌ Erro ao processar com API Python:', error);
-        throw error; // Propagar erro para fallback
-    }
-}
-
-// Processa XMLs e gera planilha. SEMPRE via API Python (preserva fórmulas/tabelas).
-// O fallback JS via ExcelJS foi REMOVIDO porque quebra fórmulas — preferimos falhar
-// explicitamente e pedir ao usuário para subir a API a entregar planilha corrompida.
+// Processa XMLs/ZIP de NF-e, agrupa por CNPJ do destinatário (a empresa cuja retenção
+// é apurada) e gera uma planilha ICMS ST por empresa direto no browser (ExcelJS),
+// preservando as fórmulas do modelo. Com 1 empresa baixa o .xlsx; com várias, um .zip.
+// Apenas o modelo Mercadinho tem a classificação por CST/CSOSN implementada.
 async function processIcmsXmls() {
     const statusText = document.getElementById('icms-status-text');
-
-    if (!icmsModeloFile) {
-        throw new Error('Modelo Excel não foi selecionado. Selecione o arquivo modelo primeiro.');
+    if (!icmsModeloBuffer || !icmsModeloSelecionado) {
+        throw new Error('Selecione um modelo funcional (Mercadinho) antes de processar.');
     }
 
-    try {
-        await processIcmsXmlsWithPython();
-        return;
-    } catch (error) {
-        const msg = (error && error.message) || 'Erro desconhecido';
-        console.error('❌ Falha no pipeline ICMS via API Python:', error);
-        if (statusText) {
-            statusText.innerHTML = `
-                ❌ <strong>API Python obrigatória não disponível.</strong><br>
-                <small style="color: var(--color-warning, #d68910);">
-                    Inicie a API local (auto_start_api.bat ou start_api.bat) e tente novamente.<br>
-                    Detalhe: ${escapeHtml(msg)}
-                </small>`;
-        }
-        throw new Error('API Python obrigatória — fallback JS foi removido para não corromper fórmulas.');
-    }
+    if (statusText) statusText.textContent = 'Lendo arquivos (XML/ZIP)...';
+    const xmls = await expandXmlInputs(icmsXmlFiles);
+    if (!xmls.length) throw new Error('Nenhum XML encontrado (avulso ou dentro de .zip).');
 
-    // O bloco abaixo é dead code — mantido temporariamente apenas como referência
-    // histórica. Será removido em sprint de limpeza.
-    if (!icmsModeloExcelJS) {
-        throw new Error('Modelo Excel não foi carregado. Por favor, selecione o arquivo modelo primeiro.');
-    }
-    
-    statusText.textContent = 'Extraindo dados dos XMLs...';
-    
-    // Grupos conforme Python
-    const produtosPorGrupo = {
-        "Aliquota 1,54%": [],
-        "Aliquota 4%": [],
-        "Aliquota 7%": []
-    };
-    const periodos = [];
-    const razoesSociais = [];
+    if (statusText) statusText.textContent = 'Extraindo dados dos XMLs...';
+    // Agrupa por CNPJ do destinatário. cnpj -> { produtosPorGrupo, periodos[], razoes[] }
+    const empresas = {};
+    for (let i = 0; i < xmls.length; i++) {
+        let dados;
+        try { dados = extrairDadosFiltrados(xmls[i].text); }
+        catch (e) { console.error('Erro ao processar', xmls[i].name, e); continue; }
 
-    // Processar XMLs
-    for (const file of icmsXmlFiles) {
-        try {
-            const xmlText = await readFileAsText(file);
-            const { periodo, razaoSocial, resultados } = extrairDadosFiltrados(xmlText);
-            
-            if (periodo) periodos.push(periodo);
-            if (razaoSocial) razoesSociais.push(razaoSocial);
-            
-            // Agrupar produtos
-            for (const [grupo, produtos] of Object.entries(resultados || {})) {
-                if (produtos && produtos.length > 0) {
-                    produtosPorGrupo[grupo] = produtosPorGrupo[grupo] || [];
-                    produtosPorGrupo[grupo].push(...produtos);
-                }
+        const cnpj = (dados && dados.cnpj) ? dados.cnpj : 'sem-cnpj';
+        const emp = empresas[cnpj] || (empresas[cnpj] = {
+            produtosPorGrupo: { "Aliquota 1,54%": [], "Aliquota 4%": [], "Aliquota 7%": [] },
+            periodos: [], razoes: [],
+        });
+        if (dados.periodo) emp.periodos.push(dados.periodo);
+        if (dados.razaoSocial) emp.razoes.push(dados.razaoSocial);
+        for (const [grupo, produtos] of Object.entries(dados.resultados || {})) {
+            if (produtos && produtos.length && emp.produtosPorGrupo[grupo]) {
+                emp.produtosPorGrupo[grupo].push(...produtos);
             }
-        } catch (error) {
-            console.error(`Erro ao processar ${file.name}:`, error);
+        }
+
+        if (i % 100 === 0) {
+            if (statusText) statusText.textContent = `Processando ${i + 1}/${xmls.length} XML...`;
+            await new Promise((r) => requestAnimationFrame(r));
         }
     }
 
-    // Encontrar período mais comum
-    const periodoCount = {};
-    periodos.forEach(p => periodoCount[p] = (periodoCount[p] || 0) + 1);
-    const periodo = Object.keys(periodoCount).reduce((a, b) => periodoCount[a] > periodoCount[b] ? a : b, periodos[0] || '');
+    const cnpjs = Object.keys(empresas);
+    if (!cnpjs.length) throw new Error('nenhum XML válido de NF-e encontrado.');
 
-    // Normalizar razão social (conforme Python)
-    function normalizar(nome) {
-        return nome.toUpperCase().trim().replace(/[-–—]\s*ME$/i, '').replace(/\s{2,}/g, ' ');
-    }
-    const razaoCount = {};
-    razoesSociais.map(normalizar).forEach(r => razaoCount[r] = (razaoCount[r] || 0) + 1);
-    const razaoSocialFinal = Object.keys(razaoCount).reduce((a, b) => razaoCount[a] > razaoCount[b] ? a : b, '');
+    if (statusText) statusText.textContent = `Gerando ${cnpjs.length} planilha(s)...`;
+    const arquivos = [];
+    let periodoGlobal = '';
+    let vazias = 0;
+    for (const cnpj of cnpjs) {
+        const emp = empresas[cnpj];
+        const periodo = maisComum(emp.periodos);
+        const razaoSocial = emp.razoes.length ? normalizarRazaoSocial(emp.razoes) : '';
+        if (periodo && !periodoGlobal) periodoGlobal = periodo;
 
-    if (!razaoSocialFinal || !periodo) {
-        throw new Error('Não foi possível extrair a razão social ou a data de apuração dos XMLs.');
-    }
+        const totalProdutos = Object.values(emp.produtosPorGrupo).reduce((s, a) => s + a.length, 0);
+        if (!totalProdutos) { vazias++; continue; } // nenhum produto passou nos filtros UF/CFOP
 
-    statusText.textContent = 'Preenchendo planilha...';
-    
-    // Trabalhar diretamente no modelo (como Python)
-    const workbook = icmsModeloExcelJS;
+        // Recarrega o modelo do buffer para cada empresa (workbook independente).
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(icmsModeloBuffer);
 
-    // Preencher cabeçalho (conforme Python: aba_icms["C3"] = razao_social)
-    const abaPrincipal = workbook.getWorksheet('ICMS ST 1104');
-    if (abaPrincipal) {
-        const cellC3 = abaPrincipal.getCell('C3');
-        if (!cellC3.formula) cellC3.value = razaoSocialFinal;
-        
-        const cellC5 = abaPrincipal.getCell('C5');
-        if (!cellC5.formula) {
-            // Conforme Python: aba_icms["C5"] = datetime.strptime(periodo, "%m-%Y")
-            // aba_icms["C5"].number_format = "mmm-yy"
-            const [mes, ano] = periodo.split('-');
-            cellC5.value = new Date(parseInt(ano), parseInt(mes) - 1, 1);
-            cellC5.numFmt = "mmm-yy"; // Conforme Python linha 192
+        // Cabeçalho na aba principal (C3 razão social, C5 período mmm-yy).
+        const abaPrincipal = workbook.getWorksheet('ICMS ST 1104');
+        if (abaPrincipal) {
+            const cellC3 = abaPrincipal.getCell('C3');
+            if (!cellC3.formula && razaoSocial) cellC3.value = razaoSocial;
+            const cellC5 = abaPrincipal.getCell('C5');
+            if (!cellC5.formula && periodo) {
+                const [mes, ano] = periodo.split('-');
+                cellC5.value = new Date(parseInt(ano), parseInt(mes) - 1, 1);
+                cellC5.numFmt = 'mmm-yy';
+            }
         }
-    }
-    // Mapeamento conforme Python: MAPEAMENTO_ABAS_CELULAS
-    const MAPEAMENTO_ABAS = {
-        "Aliquota 1,54%": "D2",
-        "Aliquota 4%": "D2",
-        "Aliquota 7%": "D2"
-    };
 
-    // Função para escrever dados (conforme Python: escrever_dados_na_planilha)
-    function escreverDadosNaPlanilha(worksheet, dados, celulaInicial) {
-        const colLetra = celulaInicial.match(/[A-Z]+/)[0];
-        const linBase = parseInt(celulaInicial.match(/\d+/)[0]);
-        const colIndex = colLetra.charCodeAt(0) - 64; // A=1, B=2, C=3, D=4
-
-        dados.forEach((linha, i) => {
-            linha.forEach((valor, j) => {
-                const row = linBase + i;
-                const col = colIndex + j;
-                const cell = worksheet.getCell(row, col);
-
-                // Ignorar células mescladas (conforme Python)
-                if (cell.isMerged) return;
-
-                // Conforme Python: if j in (8, 9, 10, 11):
-                // Python linhas 136-143: para j in (8,9,10,11): cell.value = float(valor) e cell.number_format = 'R$ #,##0.00'
-                // Para outras colunas: cell.value = valor (sem formatação específica)
-                if (j >= 8 && j <= 11) {
-                    try {
-                        const numVal = parseFloat(String(valor || '0').replace(',', '.'));
-                        cell.value = numVal;
-                        cell.numFmt = 'R$ #,##0.00'; // Conforme Python linha 139
-                    } catch {
-                        cell.value = valor; // Conforme Python linha 141
-                    }
-                } else {
-                    // Conforme Python linha 143: para outras colunas, apenas cell.value = valor
-                    // Mas aplicamos formatações específicas solicitadas pelo usuário:
-                    // - NCM (j=5): texto formatado como texto
-                    // - Números (j=1,2,6,7): converter para número
-                    if (j === 5) {
-                        // NCM - texto (número formatado como texto)
-                        cell.value = String(valor || '');
-                        cell.numFmt = '@';
-                    } else if (j === 1 || j === 2 || j === 6 || j === 7) {
-                        // Números simples (UF, Nº NF-e, CFOP, CST/CSOSN)
-                        const numVal = parseFloat(String(valor || '0').replace(/[^\d.-]/g, '')) || 0;
-                        cell.value = numVal;
-                    } else {
-                        // Texto (Chave, Fornecedor, Produto)
-                        cell.value = String(valor || '');
-                    }
-                }
-            });
-        });
-    }
-
-    // Preencher produtos em cada aba (conforme Python)
-    for (const [nomeGrupo, produtos] of Object.entries(produtosPorGrupo)) {
-        if (!produtos || produtos.length === 0) continue;
-        
-        const worksheet = workbook.getWorksheet(nomeGrupo);
-        if (!worksheet) continue;
-        
-        const celulaInicial = MAPEAMENTO_ABAS[nomeGrupo] || "D2";
-        escreverDadosNaPlanilha(worksheet, produtos, celulaInicial);
-    }
-
-    statusText.textContent = 'Gerando arquivo...';
-
-    // #region agent log - HYPOTHESIS Q, R, S, T - Verificar fórmulas e tabelas ANTES de modificar/remover autoFilter
-    let formulasAntes = [];
-    let tablesAntes = [];
-    let formulasComTabela = [];
-    workbook.worksheets.forEach(ws => {
-        ws.eachRow((row, rowNumber) => {
-            row.eachCell((cell, colNumber) => {
-                if (cell.formula) {
-                    formulasAntes.push({
-                        sheet: ws.name,
-                        cell: `${rowNumber},${colNumber}`,
-                        formula: cell.formula
-                    });
-                    // Verificar se fórmula referencia tabelas
-                    if (cell.formula.match(/Tabela\d+/i) || cell.formula.match(/Table\d+/i)) {
-                        formulasComTabela.push({
-                            sheet: ws.name,
-                            cell: `${rowNumber},${colNumber}`,
-                            formula: cell.formula
-                        });
-                    }
-                }
-            });
-        });
-        // Verificar tabelas no modelo interno
-        if (ws.model?.tables) {
-            ws.model.tables.forEach((table, idx) => {
-                tablesAntes.push({
-                    sheet: ws.name,
-                    index: idx,
-                    name: table.name || `Table${idx}`,
-                    ref: table.ref || 'N/A',
-                    displayName: table.displayName || 'N/A',
-                    hasAutoFilter: !!table.autoFilter
-                });
-            });
+        // Produtos por aba de alíquota (a partir de D2), preservando fórmulas do modelo.
+        for (const [nomeGrupo, produtos] of Object.entries(emp.produtosPorGrupo)) {
+            if (!produtos.length) continue;
+            const ws = workbook.getWorksheet(nomeGrupo);
+            if (!ws) continue;
+            escreverDadosIcms(ws, produtos, 'D2');
         }
-    });
-    // #endregion
 
-    // CRÍTICO: Python (openpyxl) NÃO modifica autoFilter - apenas salva o workbook
-    // Mas ExcelJS tem bug conhecido que corrompe o XML quando autoFilter está presente
-    // Tentativa: NÃO remover autoFilter, deixar ExcelJS lidar com isso
-    // Se ainda corromper, tentaremos outra abordagem
-    // workbook.worksheets.forEach(ws => {
-    //     if (ws.model?.tables) {
-    //         ws.model.tables.forEach(table => {
-    //             if (table?.autoFilter) {
-    //                 table.autoFilter = undefined;
-    //             }
-    //         });
-    //     }
-    // });
+        const buffer = await workbook.xlsx.writeBuffer();
+        const nome = `ICMS ST ${periodo || 'sem-periodo'}_${(razaoSocial || cnpj).replace(/[\\/:*?"<>|]/g, '').slice(0, 60)}.xlsx`;
+        arquivos.push({ nome, buffer });
+    }
 
-    // Salvar (conforme Python: wb.save(caminho_saida))
-    const nomePlanilha = `ICMS ST ${periodo}_${razaoSocialFinal}.xlsx`;
-    
-    // #region agent log - HYPOTHESIS Q, R, S, T - Verificar fórmulas e tabelas IMEDIATAMENTE ANTES do writeBuffer
-    let formulasAntesWrite = [];
-    workbook.worksheets.forEach(ws => {
-        ws.eachRow((row, rowNumber) => {
-            row.eachCell((cell, colNumber) => {
-                if (cell.formula) {
-                    formulasAntesWrite.push({
-                        sheet: ws.name,
-                        cell: `${rowNumber},${colNumber}`,
-                        formula: cell.formula
-                    });
-                }
-            });
-        });
-    });
-    // #endregion
-    
-    const buffer = await workbook.xlsx.writeBuffer();
-    
-    // #region agent log - HYPOTHESIS Q, R, S, T - Verificar buffer gerado (não podemos verificar fórmulas depois pois buffer já foi criado)
-    // Mas podemos verificar o tamanho e tipo do buffer
-    // #endregion
-    
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = nomePlanilha;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
-    
-    statusText.textContent = `✅ Planilha gerada com sucesso: ${nomePlanilha}`;
-    statusText.style.color = 'var(--color-success)';
-    
-    // Resetar
+    if (!arquivos.length) throw new Error('Nenhum produto passou nos filtros (UF/CFOP) — nada a gerar.');
+
+    const zipNome = `ICMS ST ${periodoGlobal || 'sem-periodo'}.zip`;
+    await downloadXlsxOrZip(arquivos, zipNome);
+
+    if (statusText) {
+        statusText.innerHTML =
+            `✅ <strong>Concluído.</strong> ${arquivos.length} planilha(s) gerada(s)` +
+            `${vazias ? ` &middot; ${vazias} empresa(s) sem produtos nos filtros` : ''}.<br>` +
+            (arquivos.length > 1
+                ? `Arquivo <strong>${escapeHtml(zipNome)}</strong> (zip) baixado.`
+                : `Planilha <strong>${escapeHtml(arquivos[0].nome)}</strong> baixada.`);
+        statusText.style.color = 'var(--color-success)';
+    }
+
     setTimeout(() => {
         icmsXmlFiles = [];
-        document.getElementById('icms-xml-label').textContent = 'Arraste e solte os arquivos XML aqui';
-        document.getElementById('icms-xml-label').style.color = 'var(--color-dark)';
-        document.getElementById('icms-xml-info').style.display = 'none';
-        document.getElementById('icms-process-btn').disabled = true;
-        document.getElementById('icms-status').style.display = 'none';
+        const lbl = document.getElementById('icms-xml-label');
+        if (lbl) { lbl.textContent = 'Arraste e solte os XML (ou .zip) aqui'; lbl.style.color = 'var(--color-dark)'; }
+        const info = document.getElementById('icms-xml-info'); if (info) info.style.display = 'none';
+        const st = document.getElementById('icms-status'); if (st) st.style.display = 'none';
+        atualizarBotaoProcessarIcms();
     }, 3000);
+}
+
+// Item mais frequente de um array de strings (ou '' se vazio).
+function maisComum(arr) {
+    if (!arr || !arr.length) return '';
+    const c = {};
+    for (const v of arr) c[v] = (c[v] || 0) + 1;
+    return Object.keys(c).reduce((a, b) => (c[a] >= c[b] ? a : b), arr[0]);
+}
+
+// Reseta o botão Processar fora do escopo do createIcmsWithholdingPage (após download).
+function atualizarBotaoProcessarIcms() {
+    const btn = document.getElementById('icms-process-btn');
+    if (btn) btn.disabled = !(icmsModeloSelecionado && icmsXmlFiles.length > 0);
+}
+
+// Escreve as linhas de produtos numa aba a partir de celulaInicial (ex.: "D2"),
+// preservando fórmulas do modelo. Colunas de valor (j=8..11) recebem formato R$,
+// NCM (j=5) vira texto, e UF/Nº/CFOP/CST (j=1,2,6,7) viram numéricos.
+function escreverDadosIcms(worksheet, dados, celulaInicial) {
+    const colLetra = celulaInicial.match(/[A-Z]+/)[0];
+    const linBase = parseInt(celulaInicial.match(/\d+/)[0]);
+    const colIndex = colLetra.charCodeAt(0) - 64; // A=1, B=2, C=3, D=4
+
+    dados.forEach((linha, i) => {
+        linha.forEach((valor, j) => {
+            const cell = worksheet.getCell(linBase + i, colIndex + j);
+            if (cell.isMerged) return;
+            if (cell.formula) return; // nunca sobrescreve fórmula do modelo
+            if (j >= 8 && j <= 11) {
+                const numVal = parseFloat(String(valor || '0').replace(',', '.'));
+                cell.value = isNaN(numVal) ? valor : numVal;
+                cell.numFmt = 'R$ #,##0.00';
+            } else if (j === 5) {
+                cell.value = String(valor || '');
+                cell.numFmt = '@';
+            } else if (j === 1 || j === 2 || j === 6 || j === 7) {
+                cell.value = parseFloat(String(valor || '0').replace(/[^\d.-]/g, '')) || 0;
+            } else {
+                cell.value = String(valor || '');
+            }
+        });
+    });
 }
 
 // Função para ler arquivo como texto
@@ -3624,8 +3399,262 @@ async function loadIcmsModelo() {
 }
 
 //------------------------------------- FIM ICMS Withholding ------------------------------------//
-//--------------------------------------------- DAE ---------------------------------------------//
-//------------------------------------------- FIM DAE -------------------------------------------//
+//--------------------------------------------- DIRBI -------------------------------------------//
+
+// Modelo DIRBI embutido. Linhas 4-21: col D = NCM(s) exigidos, col E = valor a somar,
+// F/G = fórmulas Pis/Cofins (=E*1.65% / =E*7.6%) que NÃO devem ser tocadas. B2 = razão social.
+const DIRBI_MODELO_PATH = 'assets/js/DIRBI MES-ANO.xlsx';
+
+// ---- Helpers compartilhados DIRBI/ICMS (entrada .zip e saída zip/xlsx) ----
+// São function declarations (hoisted), então a posição no arquivo não importa.
+
+// Expande uma FileList em [{name, text}] de XMLs. Arquivos .zip são descompactados
+// no browser (JSZip) e seus .xml internos extraídos; .xml avulsos passam direto;
+// outros tipos são ignorados. XMLs ilegíveis são descartados silenciosamente.
+async function expandXmlInputs(fileList) {
+    const out = [];
+    for (const file of Array.from(fileList)) {
+        const lower = (file.name || '').toLowerCase();
+        if (lower.endsWith('.xml')) {
+            try { out.push({ name: file.name, text: await file.text() }); } catch (_) { /* ignora */ }
+        } else if (lower.endsWith('.zip')) {
+            if (typeof JSZip === 'undefined') throw new Error('JSZip não carregou — não é possível ler arquivos .zip.');
+            const zip = await JSZip.loadAsync(await file.arrayBuffer());
+            const entries = Object.values(zip.files).filter(
+                (e) => !e.dir && e.name.toLowerCase().endsWith('.xml'));
+            for (const entry of entries) {
+                try { out.push({ name: entry.name, text: await entry.async('string') }); } catch (_) { /* ignora */ }
+            }
+        }
+    }
+    return out;
+}
+
+// Dispara o download de um Blob com o nome dado.
+function triggerDownload(blob, nome) {
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+}
+
+// Com 1 arquivo, baixa o .xlsx direto; com vários, empacota num .zip. arquivos: [{nome, buffer}].
+async function downloadXlsxOrZip(arquivos, zipNome) {
+    if (!arquivos.length) return;
+    if (arquivos.length === 1) {
+        triggerDownload(new Blob([arquivos[0].buffer], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }), arquivos[0].nome);
+        return;
+    }
+    if (typeof JSZip === 'undefined') throw new Error('JSZip não carregou — não é possível gerar o .zip.');
+    const zip = new JSZip();
+    for (const a of arquivos) zip.file(a.nome, a.buffer);
+    const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    triggerDownload(zipBlob, zipNome);
+}
+
+// Lê as regras de NCM do modelo (D4:D21). Cada célula pode conter um NCM ou vários
+// separados por "-"/espaços, com formatos mistos (número, string com zero à esquerda).
+// Retorna [{ row, prefixes: [string...] }] com os prefixos normalizados (só dígitos).
+function parseDirbiNcmRules(ws) {
+    const rules = [];
+    for (let r = 4; r <= 21; r++) {
+        const raw = ws.getCell('D' + r).value;
+        if (raw === null || raw === undefined || raw === '') continue;
+        const prefixes = String(raw)
+            .split(/[^0-9]+/)        // separa por qualquer não-dígito (hífen, espaços)
+            .map((s) => s.trim())
+            .filter(Boolean);
+        if (prefixes.length) rules.push({ row: r, prefixes });
+    }
+    return rules;
+}
+
+// Retorna a linha (4-21) da PRIMEIRA regra cujo prefixo casa o início do NCM, ou null.
+// "Primeira que casa" evita dupla contagem quando categorias têm prefixos próximos.
+function matchDirbiRow(ncm, rules) {
+    for (const rule of rules) {
+        for (const p of rule.prefixes) {
+            if (ncm.startsWith(p)) return rule.row;
+        }
+    }
+    return null;
+}
+
+// Cria a aba DIRBI: box de upload de múltiplos XML de NFC-e + status.
+function createDirbiPage(mainContent) {
+    mainContent.innerHTML = `
+        <h1>DIRBI</h1>
+        <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.6rem; max-width:1000px; margin:0 auto; padding:2rem;">
+            <div id="dirbi-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:300px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+                <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">request_quote</span>
+                <p id="dirbi-drop-label" style="font-weight:600;">Selecione os XML das NFC-e (ou arquivos .zip)</p>
+                <small style="color:var(--color-dark-variant);">Aceita XML avulsos e .zip. Múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip quando houver mais de uma). As fórmulas de Pis/Cofins são preservadas.</small>
+                <input type="file" id="dirbi-file-input" accept=".xml,.zip" multiple style="display:none;">
+            </div>
+            <div id="dirbi-status" style="max-width:800px; margin:0 auto; width:100%; color:var(--color-dark-variant);"></div>
+        </div>
+    `;
+
+    const box = document.getElementById('dirbi-drop');
+    const input = document.getElementById('dirbi-file-input');
+    if (!box || !input) return;
+
+    box.addEventListener('click', () => input.click());
+    box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('dragover'); });
+    box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+    box.addEventListener('drop', (e) => {
+        e.preventDefault();
+        box.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length) processDirbiXmls(e.dataTransfer.files);
+    });
+    input.addEventListener('change', () => {
+        if (input.files && input.files.length) processDirbiXmls(input.files);
+    });
+}
+
+// Processa o lote de XMLs (avulsos e/ou .zip), agrupa por CNPJ do emitente e gera
+// uma planilha DIRBI por empresa. Com 1 empresa baixa o .xlsx direto; com várias,
+// empacota tudo num DIRBI_{periodo}.zip. As fórmulas F/G do modelo são preservadas.
+async function processDirbiXmls(fileList) {
+    const status = document.getElementById('dirbi-status');
+    const setStatus = (html) => { if (status) status.innerHTML = html; };
+
+    let xmls;
+    try {
+        setStatus('Lendo arquivos (XML/ZIP)...');
+        xmls = await expandXmlInputs(fileList);
+    } catch (e) {
+        setStatus(`<span style="color:var(--color-danger);">${escapeHtml(e.message || String(e))}</span>`);
+        return;
+    }
+    if (!xmls.length) {
+        setStatus('<span style="color:var(--color-danger);">Nenhum XML encontrado (avulso ou dentro de .zip).</span>');
+        return;
+    }
+
+    try {
+        setStatus('Carregando modelo DIRBI...');
+        const resp = await fetch(DIRBI_MODELO_PATH);
+        if (!resp.ok) throw new Error(`modelo não encontrado (${resp.status})`);
+        const modelBuffer = await resp.arrayBuffer();
+
+        // Regras de NCM lidas uma vez — iguais para todas as empresas (modelo único).
+        const wbProbe = new ExcelJS.Workbook();
+        await wbProbe.xlsx.load(modelBuffer);
+        const wsProbe = wbProbe.getWorksheet('DIRBI') || wbProbe.worksheets[0];
+        const rules = parseDirbiNcmRules(wsProbe);
+        if (!rules.length) throw new Error('modelo sem regras de NCM (D4:D21 vazias)');
+
+        // Agrupa por CNPJ do emitente. cnpj -> acumuladores da empresa.
+        const empresas = {};
+        let xmlInvalidos = 0;
+        let periodoGlobal = '';
+        const parser = new DOMParser();
+
+        for (let i = 0; i < xmls.length; i++) {
+            const doc = parser.parseFromString(xmls[i].text, 'application/xml');
+            if (doc.getElementsByTagName('parsererror').length) { xmlInvalidos++; continue; }
+
+            const dets = doc.getElementsByTagNameNS('*', 'det');
+            if (!dets.length) { xmlInvalidos++; continue; }
+
+            // Emitente: CNPJ (chave de agrupamento) e razão social (NFC-e não tem dest).
+            const emit = doc.getElementsByTagNameNS('*', 'emit')[0];
+            const cnpjEl = emit ? emit.getElementsByTagNameNS('*', 'CNPJ')[0] : null;
+            const cnpj = cnpjEl && cnpjEl.textContent ? cnpjEl.textContent.replace(/\D/g, '') : 'sem-cnpj';
+            const emp = empresas[cnpj] || (empresas[cnpj] = {
+                somas: {}, razaoCount: {}, periodo: '', xmlLidos: 0, produtosCasados: 0, produtosSemRegra: 0,
+            });
+
+            const xNome = emit ? emit.getElementsByTagNameNS('*', 'xNome')[0] : null;
+            if (xNome && xNome.textContent.trim()) {
+                const nome = xNome.textContent.trim();
+                emp.razaoCount[nome] = (emp.razaoCount[nome] || 0) + 1;
+            }
+            // Período (MM-YYYY) a partir do primeiro dhEmi válido da empresa.
+            if (!emp.periodo) {
+                const dh = doc.getElementsByTagNameNS('*', 'dhEmi')[0];
+                const m = dh && dh.textContent ? dh.textContent.match(/^(\d{4})-(\d{2})/) : null;
+                if (m) { emp.periodo = `${m[2]}-${m[1]}`; if (!periodoGlobal) periodoGlobal = emp.periodo; }
+            }
+
+            for (let d = 0; d < dets.length; d++) {
+                const det = dets[d];
+                const ncmEl = det.getElementsByTagNameNS('*', 'NCM')[0];
+                const vEl = det.getElementsByTagNameNS('*', 'vProd')[0];
+                if (!ncmEl || !vEl) continue;
+                const ncm = (ncmEl.textContent || '').replace(/\D/g, '');
+                if (!ncm) continue;
+                const valor = parseFloat((vEl.textContent || '').replace(',', '.')) || 0;
+                const row = matchDirbiRow(ncm, rules);
+                if (row == null) { emp.produtosSemRegra++; continue; }
+                emp.somas[row] = (emp.somas[row] || 0) + valor;
+                emp.produtosCasados++;
+            }
+            emp.xmlLidos++;
+
+            // Mantém a UI responsiva em lotes grandes.
+            if (i % 100 === 0) {
+                setStatus(`Processando ${i + 1}/${xmls.length} XML...`);
+                await new Promise((r) => requestAnimationFrame(r));
+            }
+        }
+
+        const cnpjs = Object.keys(empresas);
+        if (!cnpjs.length) throw new Error('nenhum XML válido de NFC-e encontrado.');
+
+        setStatus(`Gerando ${cnpjs.length} planilha(s)...`);
+        const arquivos = [];
+        const resumo = [];
+        for (const cnpj of cnpjs) {
+            const emp = empresas[cnpj];
+            // Recarrega o modelo do buffer para cada empresa (workbook independente).
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(modelBuffer);
+            const ws = wb.getWorksheet('DIRBI') || wb.worksheets[0];
+
+            // Escreve as somas em E4:E21 (preserva F/G) e a razão social em B2.
+            for (const rule of rules) {
+                ws.getCell('E' + rule.row).value = Math.round((emp.somas[rule.row] || 0) * 100) / 100;
+            }
+            const razaoFinal = Object.keys(emp.razaoCount).reduce(
+                (a, b) => (emp.razaoCount[a] >= emp.razaoCount[b] ? a : b), '');
+            if (razaoFinal) ws.getCell('B2').value = razaoFinal;
+
+            const buffer = await wb.xlsx.writeBuffer();
+            const nomeArq = `DIRBI ${emp.periodo || 'sem-periodo'}_${(razaoFinal || cnpj || 'empresa').replace(/[\\/:*?"<>|]/g, '').slice(0, 60)}.xlsx`;
+            arquivos.push({ nome: nomeArq, buffer });
+            resumo.push(
+                `&bull; ${escapeHtml(razaoFinal || cnpj)} — ${emp.xmlLidos} XML, ${emp.produtosCasados} produto(s)` +
+                `${emp.produtosSemRegra ? `, ${emp.produtosSemRegra} sem NCM` : ''}`);
+        }
+
+        const zipNome = `DIRBI_${periodoGlobal || 'sem-periodo'}.zip`;
+        await downloadXlsxOrZip(arquivos, zipNome);
+
+        setStatus(
+            `<div style="background:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:1rem;">` +
+            `<strong>Concluído.</strong> ${cnpjs.length} empresa(s)` +
+            `${xmlInvalidos ? ` &middot; ${xmlInvalidos} XML inválido(s) ignorado(s)` : ''}.<br>` +
+            resumo.join('<br>') + `<br>` +
+            (arquivos.length > 1
+                ? `Arquivo <strong>${escapeHtml(zipNome)}</strong> (zip com ${arquivos.length} planilhas) baixado.`
+                : `Planilha <strong>${escapeHtml(arquivos[0].nome)}</strong> baixada.`) +
+            `</div>`
+        );
+    } catch (e) {
+        console.error('Erro ao processar DIRBI:', e);
+        setStatus(`<span style="color:var(--color-danger);">Erro ao gerar a DIRBI: ${escapeHtml(e.message || String(e))}</span>`);
+    }
+}
+
+//------------------------------------------- FIM DIRBI -----------------------------------------//
 //--------------------------------------------- SPED --------------------------------------------//
 
 // Ler arquivo SPED com detecção automática de encoding
@@ -3641,31 +3670,25 @@ function readSpedFileWithEncoding(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
-            const binary = e.target.result;
-            let encoding = 'windows-1252'; // SPED Fiscal/Contribuições é WIN-1252 na prática.
-            if (typeof jschardet !== 'undefined' && binary) {
-                try {
-                    const detected = jschardet.detect(binary);
-                    if (detected && detected.encoding) {
-                        const enc = (detected.encoding || '').toUpperCase();
-                        if (enc === 'UTF-8' || enc === 'UTF8') encoding = 'utf-8';
-                        else if (enc.includes('WINDOWS-1252') || enc.includes('CP1252')) encoding = 'windows-1252';
-                        else if (enc.includes('ISO-8859-1') || enc.includes('LATIN1')) encoding = 'windows-1252';
-                    }
-                } catch (err) {
-                    console.warn('Erro ao detectar encoding, assumindo windows-1252:', err);
-                }
-            }
+            const bytes = new Uint8Array(e.target.result);
+            // SPED Fiscal/Contribuições é win-1252 na prática, mas alguns geradores
+            // emitem UTF-8. UTF-8 é auto-validável: se os bytes decodificam sem erro
+            // em modo estrito E há algum byte multibyte (>= 0x80), é UTF-8; caso
+            // contrário, win-1252. Isso é determinístico e substitui a detecção
+            // instável do jschardet — que classificava win-1252 como UTF-8 e fazia
+            // 0xE7 (ç) virar U+FFFD (�) já na leitura, gravando mojibake permanente.
+            let encoding = 'windows-1252';
             try {
-                const bytes = new Uint8Array([...binary].map(c => c.charCodeAt(0) & 0xFF));
-                const decoder = new TextDecoder(encoding, { fatal: false });
-                resolve({ text: decoder.decode(bytes), encoding });
-            } catch (err) {
-                resolve({ text: binary, encoding });
+                new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+                if (bytes.some((b) => b >= 0x80)) encoding = 'utf-8';
+            } catch (_) {
+                encoding = 'windows-1252';
             }
+            const decoder = new TextDecoder(encoding, { fatal: false });
+            resolve({ text: decoder.decode(bytes), encoding });
         };
         reader.onerror = () => reject(reader.error);
-        reader.readAsBinaryString(file);
+        reader.readAsArrayBuffer(file);
     });
 }
 
@@ -3703,6 +3726,23 @@ function encodeSpedText(text, encoding) {
         } else {
             bytes[i] = 0x3F; // '?'
         }
+    }
+    return bytes;
+}
+
+/**
+ * Codifica uma string JS de volta para bytes latin1 (ISO-8859-1) puro.
+ * Par exato de `reader.readAsText(file, 'latin1')`: cada caractere foi lido como
+ * 1 byte (code point 0..255), então re-emitimos o mesmo byte. Usado no download do
+ * Fortes — NÃO usar encodeSpedText/win-1252 aqui, pois o range 0x80..0x9F (aspas/
+ * travessões do Word) seria trocado por '?'. latin1 preserva o round-trip byte-a-byte.
+ * @param {string} text
+ * @returns {Uint8Array}
+ */
+function encodeLatin1(text) {
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) {
+        bytes[i] = text.charCodeAt(i) & 0xFF;
     }
     return bytes;
 }
@@ -3986,7 +4026,9 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
         const { text: fileContent, encoding: srcEncoding } = await readSpedFileWithEncoding(file);
         const { cestsVencidos } = await getCestProducts();
         const vencidosSet = new Set((cestsVencidos || []).map(c => sanitizarCodigoCest(c)));
-        const lines = fileContent.split('\n');
+        // Preserva a quebra de linha original (SPED é \r\n; alguns geradores usam \n).
+        const eol = fileContent.includes('\r\n') ? '\r\n' : '\n';
+        const lines = fileContent.split(/\r?\n/);
                 const hasEmptyLastLine = lines[lines.length - 1] === '';
                 const fileLines = lines.length;
                 const produtos = {};
@@ -4055,7 +4097,7 @@ async function processSpedFiscal(file, resultsList, progressBar, progressPercent
                 if (!hasEmptyLastLine) newLines.push('');
 
                 // FIX ENCODING: re-codifica no encoding original do arquivo (evita mojibake).
-                const blob = new Blob([encodeSpedText(newLines.join('\n'), srcEncoding)], { type: 'text/plain' });
+                const blob = new Blob([encodeSpedText(newLines.join(eol), srcEncoding)], { type: 'text/plain' });
                 if (handle) {
                     try {
                         const permission = await handle.queryPermission({ mode: 'readwrite' });
@@ -4099,7 +4141,9 @@ async function processSpedContribuicao(file, resultsList, progressBar, progressP
     try {
         console.log(`Iniciando processamento de ${file.name}`);
         const { text: fileContent, encoding: srcEncoding } = await readSpedFileWithEncoding(file);
-        const lines = fileContent.split('\n');
+        // Preserva a quebra de linha original (SPED é \r\n; alguns geradores usam \n).
+        const eol = fileContent.includes('\r\n') ? '\r\n' : '\n';
+        const lines = fileContent.split(/\r?\n/);
                 const hasEmptyLastLine = lines[lines.length - 1] === '';
                 const fileLines = lines.length;
                 const produtos = {};
@@ -4142,7 +4186,7 @@ async function processSpedContribuicao(file, resultsList, progressBar, progressP
                 if (!hasEmptyLastLine) newLines.push('');
 
                 // FIX ENCODING: re-codifica no encoding original do arquivo (evita mojibake).
-                const blob = new Blob([encodeSpedText(newLines.join('\n'), srcEncoding)], { type: 'text/plain' });
+                const blob = new Blob([encodeSpedText(newLines.join(eol), srcEncoding)], { type: 'text/plain' });
                 if (handle) {
                     try {
                         const permission = await handle.queryPermission({ mode: 'readwrite' });
@@ -6530,7 +6574,10 @@ function downloadCorrectedFortesFile() {
         return;
     }
 
-    const blob = new Blob([fortesFileData], { type: 'text/plain;charset=latin1' });
+    // FIX ENCODING: Blob de string JS é serializado como UTF-8 pelo browser (o
+    // charset do MIME é ignorado), corrompendo acentos. O arquivo foi lido com
+    // readAsText(file,'latin1'), então re-emitimos os bytes latin1 originais.
+    const blob = new Blob([encodeLatin1(fortesFileData)], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -6542,7 +6589,7 @@ function downloadCorrectedFortesFile() {
 }
 
 //------------------------------------ FIM Fortes Correction ------------------------------------//
-//------------------------------------ NFe | CFe Comparasion ------------------------------------//
+//------------------------------------ NFe | NFCe Comparasion ------------------------------------//
 
 let sigetData = [];
 let fortesData = [];
@@ -6550,7 +6597,7 @@ let fortesData = [];
 function createNfeCfeComparisonPage(mainContent) {
     console.log('createNfeCfeComparisonPage chamado');
     mainContent.innerHTML = `
-        <h1>NFe | CFe Comparison</h1>
+        <h1>NFe | NFCe Comparison</h1>
         <div class="nfe-cfe-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
             <div class="box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center;" id="siget-box">
                 <span class="box-label" id="siget-label">Siget</span>
@@ -6583,10 +6630,8 @@ function createNfeCfeComparisonPage(mainContent) {
 
     const checkBothLoaded = () => {
         if (sigetLoaded && fortesLoaded) {
-            console.log('Ambos os boxes processados. Aguardando 3 segundos para abrir modal...');
-            setTimeout(() => {
-                showComparisonModal();
-            }, 3000);
+            // Abre o modal assim que ambos os lados terminam (sem espera artificial).
+            showComparisonModal();
         }
     };
 
@@ -7211,7 +7256,7 @@ function createNfeCfeComparisonPage(mainContent) {
             <div class="modal-content">
                 <div class="tabs">
                     <div class="tab active" data-tab="quantidades">
-                        Quantidade de NFe | CFe
+                        Quantidade de NFe | NFCe
                     </div>
                     <div class="export-buttons">
                         <button class="export-btn pdf-btn" onclick="exportToPDF()" title="Exportar para PDF">
@@ -7222,7 +7267,7 @@ function createNfeCfeComparisonPage(mainContent) {
                         </button>
                     </div>
                     <div class="tab" data-tab="valores">
-                        Valores de NFe | CFe
+                        Valores de NFe | NFCe
                     </div>
                 </div>
                 <div id="quantidades-tab" class="tab-content">
@@ -7279,22 +7324,27 @@ function createNfeCfeComparisonPage(mainContent) {
         document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
         element.classList.add('active');
         if (tabId === 'quantidades') {
-            console.log('Reaplicando layout da aba Quantidade');
+            // O conteúdo já foi renderizado em compareLists() na abertura do modal;
+            // trocar de aba só alterna o display. Recomputar/re-renderizar listas
+            // enormes a cada clique era um custo desnecessário.
             targetTab.style.display = 'flex';
             targetTab.style.gap = '2rem';
-            console.log('HTML de #quantidades-tab após troca:', targetTab.innerHTML);
-            compareLists(); // Re-renderiza para garantir conteúdo atualizado
         }
     }
 
     function compareLists() {
         console.log('Comparando listas...');
-        const sigetKeys = sigetData.map(item => item.key);
-        const fortesKeys = fortesData.map(item => item.key);
-    
-        const sigetSet = new Set(sigetKeys);
-        const fortesSet = new Set(fortesKeys);
-    
+        // Índices key -> item (O(1) lookup). Mantém o PRIMEIRO item de cada chave,
+        // preservando a semântica do .find() anterior, mas elimina o O(n²) que travava
+        // a comparação com dezenas de milhares de notas.
+        const sigetMap = new Map();
+        for (const item of sigetData) if (!sigetMap.has(item.key)) sigetMap.set(item.key, item);
+        const fortesMap = new Map();
+        for (const item of fortesData) if (!fortesMap.has(item.key)) fortesMap.set(item.key, item);
+
+        const sigetSet = sigetMap; // Map também responde .has() em O(1)
+        const fortesSet = fortesMap;
+
         const sigetOnly = sigetData.filter(item => !fortesSet.has(item.key));
         const fortesOnly = fortesData.filter(item => !sigetSet.has(item.key));
     
@@ -7339,20 +7389,20 @@ function createNfeCfeComparisonPage(mainContent) {
         if (fortesCount) {
             fortesCount.textContent = `(${fortesOnly.length})`;
         }
-    
-        console.log('HTML de #quantidades-tab após atualização:', quantidadesTab.innerHTML);
-    
-        const commonKeys = sigetKeys.filter(key => fortesSet.has(key));
+
+        // Chaves comuns: percorre o menor lado e consulta o maior em O(1) via Map.
+        const commonKeys = [];
+        for (const key of sigetMap.keys()) if (fortesMap.has(key)) commonKeys.push(key);
         const fortesHasNoValues = fortesData.every(item => !item.value || item.value === '0,00');
         const valoresTab = document.getElementById('valores-tab');
-    
+
         if (commonKeys.length === 0 || fortesHasNoValues) {
             valoresTab.innerHTML = `<p class="error-message">Informações de Valores Ausentes</p>`;
             console.log('Nenhuma chave comum ou valores ausentes em Fortes. Exibindo mensagem de erro.');
         } else {
             const divergentValues = commonKeys.map(key => {
-                const sigetItem = sigetData.find(item => item.key === key);
-                const fortesItem = fortesData.find(item => item.key === key);
+                const sigetItem = sigetMap.get(key);
+                const fortesItem = fortesMap.get(key);
                 if (!sigetItem.value || !fortesItem.value) {
                     return { key, fortesValue: fortesItem.value || 'Ausente', sigetValue: sigetItem.value || 'Ausente', difference: 'Informações para comparação incompletas' };
                 }
@@ -7396,9 +7446,9 @@ function createNfeCfeComparisonPage(mainContent) {
 
 }
 
-//---------------------------------- FIM NFe | CFe Comparasion ----------------------------------//
+//---------------------------------- FIM NFe | NFCe Comparasion ----------------------------------//
 
-// Funções de exportação globais para NFe | CFe Comparison
+// Funções de exportação globais para NFe | NFCe Comparison
 function exportToPDF() {
     console.log('Exportando para PDF...');
     
@@ -7435,11 +7485,11 @@ function exportToPDF() {
         // Adicionar título baseado na aba ativa
         let reportTitle = '';
         if (tabType === 'quantidades') {
-            reportTitle = 'Relatório de Quantidades - NFe | CFe';
+            reportTitle = 'Relatório de Quantidades - NFe | NFCe';
         } else if (tabType === 'valores') {
-            reportTitle = 'Relatório de Valores - NFe | CFe';
+            reportTitle = 'Relatório de Valores - NFe | NFCe';
         } else {
-            reportTitle = 'Relatório de Comparação NFe | CFe';
+            reportTitle = 'Relatório de Comparação NFe | NFCe';
         }
         
         doc.setFontSize(15);
@@ -8325,7 +8375,7 @@ async function loadUsersList() {
                 </div>
             </div>
             <div style="display: flex; gap: 0.5rem;">
-                <button class="btn-edit" onclick="editUser(${user.id})" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                <button class="btn-edit" onclick="editUser(${user.id})" title="Editar usuário (nome, controle, foto e senha)" aria-label="Editar usuário" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
                     <span class="material-icons-sharp" style="font-size: 1.2rem;">edit</span>
                 </button>
                 <button class="btn-delete" onclick="deleteUser(${user.id})">
@@ -8599,6 +8649,21 @@ async function completeUserRegistration(name, username, control, password, profi
             }
         }
 
+        // Senha (e control) precisam ir ao auth.users via Edge Function admin —
+        // updateProfile só toca user_profiles e não muda a senha de login. Só dispara
+        // quando uma nova senha foi informada na edição.
+        if (password && window.supabaseSync?.auth?.updateUser && window.supabaseSync.isConfigured()) {
+            const updPwd = await window.supabaseSync.auth.updateUser({
+                username: existingUser.username,
+                password,
+                control,
+            });
+            if (!updPwd.ok && updPwd.error !== 'sem-sessao') {
+                console.warn('⚠️ Falha ao atualizar senha no Supabase:', updPwd.error);
+                supabaseAviso += '\n\n(Atenção: a nova senha foi salva localmente, mas não foi aplicada no login da nuvem: ' + updPwd.error + ')';
+            }
+        }
+
         alert('Usuário atualizado com sucesso!' + supabaseAviso);
     } else {
         // CRIAR NOVO USUÁRIO — SUPABASE-FIRST.
@@ -8705,6 +8770,15 @@ function showContributorRegistrationModal() {
             <div class="modal-body">
                 <div class="form-section">
                     <h3 id="contributor-form-title">Cadastrar Novo Contribuinte</h3>
+                    <div class="contributor-bulk-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <button type="button" id="contributor-download-template" class="btn-cancel" style="background:#3498db; color:#fff; padding:0.5rem 1rem; font-size:0.85rem; display:flex; align-items:center; gap:0.4rem;">
+                            <span class="material-icons-sharp" style="font-size:1.1rem;">download</span> Baixar modelo
+                        </button>
+                        <button type="button" id="contributor-import-btn" class="btn-cancel" style="background:var(--color-success); color:#fff; padding:0.5rem 1rem; font-size:0.85rem; display:flex; align-items:center; gap:0.4rem;">
+                            <span class="material-icons-sharp" style="font-size:1.1rem;">upload_file</span> Importar planilha
+                        </button>
+                        <input type="file" id="contributor-import-input" accept=".xlsx,.xls" style="display:none;">
+                    </div>
                     <form id="contributor-registration-form">
                         <input type="hidden" id="contributor-edit-id" value="">
                         <div class="form-columns">
@@ -8824,6 +8898,17 @@ function showContributorRegistrationModal() {
         if (clearAllBtn) {
             clearAllBtn.addEventListener('click', clearAllContributors);
         }
+
+        // Cadastro em massa: baixar modelo + importar planilha de contribuintes.
+        const dlTemplateBtn = modal.querySelector('#contributor-download-template');
+        if (dlTemplateBtn) dlTemplateBtn.addEventListener('click', downloadContributorTemplate);
+
+        const importBtn = modal.querySelector('#contributor-import-btn');
+        const importInput = modal.querySelector('#contributor-import-input');
+        if (importBtn && importInput) {
+            importBtn.addEventListener('click', () => importInput.click());
+            importInput.addEventListener('change', handleContributorImport);
+        }
     }, 0);
 
     // Adicionar evento de clique fora do modal para fechar
@@ -8904,7 +8989,7 @@ async function loadContributorsList() {
                 </div>
             </div>
             <div style="display: flex; gap: 0.5rem; margin-left: 1rem;">
-                <button class="btn-edit contributor-edit-btn" data-contributor-id="${safeId}" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                <button class="btn-edit contributor-edit-btn" data-contributor-id="${safeId}" title="Editar contribuinte (razão social, regime, etc.)" aria-label="Editar contribuinte" style="padding: 0.5rem; background: var(--color-primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
                     <span class="material-icons-sharp" style="font-size: 1.2rem;">edit</span>
                 </button>
                 <button class="btn-delete contributor-delete-btn" data-contributor-id="${safeId}">
@@ -9184,6 +9269,133 @@ async function handleContributorRegistration(e) {
     await loadContributorsList();
 
     alert(`Contribuinte "${razaoSocial}" cadastrado com sucesso!`);
+}
+
+// Gera e baixa o modelo de cadastro em massa de contribuintes (cabeçalhos na linha 1,
+// mesma ordem do arquivo "Cadastro de Contribuinte.xlsx"). Inclui uma linha de exemplo.
+function downloadContributorTemplate() {
+    try {
+        const headers = ['Código', 'Razão Social', 'CNPJ', 'Atividade', 'Regime', 'Município', 'ISS', 'Senha'];
+        const exemplo = ['001', 'EMPRESA EXEMPLO LTDA', '12345678000190', 'Comércio', 'Simples Nacional', 'Fortaleza', '', ''];
+        const ws = XLSX.utils.aoa_to_sheet([headers, exemplo]);
+        ws['!cols'] = headers.map(() => ({ wch: 20 }));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Cadastro');
+        XLSX.writeFile(wb, 'Cadastro de Contribuinte.xlsx');
+    } catch (e) {
+        console.error('Erro ao gerar modelo de contribuintes:', e);
+        alert('Não foi possível gerar o modelo. Tente novamente.');
+    }
+}
+
+// Importa contribuintes em massa de uma planilha .xlsx. Mapeia colunas por nome de
+// cabeçalho (tolerante à ordem), valida cada linha, ignora duplicatas (código/CNPJ) e
+// grava tudo em uma única sincronização. Reporta um resumo ao final.
+async function handleContributorImport(event) {
+    const input = event.target;
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    try {
+        const buffer = await file.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        if (!ws) { alert('A planilha está vazia ou em formato inválido.'); return; }
+
+        const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+        if (matrix.length < 2) { alert('A planilha não contém linhas de dados.'); return; }
+
+        // Mapear índices de coluna pelo nome do cabeçalho (normalizado, sem acento) —
+        // tolerante a reordenação das colunas.
+        const norm = (s) => String(s || '').trim().toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '');
+        const header = matrix[0].map(norm);
+        const col = (names) => {
+            for (const n of names) { const i = header.indexOf(n); if (i >= 0) return i; }
+            return -1;
+        };
+        const idx = {
+            codigo: col(['codigo']),
+            razaoSocial: col(['razao social', 'razaosocial', 'razao']),
+            cnpj: col(['cnpj']),
+            atividade: col(['atividade']),
+            regime: col(['regime']),
+            municipio: col(['municipio']),
+            iss: col(['iss']),
+            senha: col(['senha', 'password']),
+        };
+        if (idx.codigo < 0 || idx.razaoSocial < 0 || idx.cnpj < 0) {
+            alert('Cabeçalho inválido. Use o modelo (colunas Código, Razão Social, CNPJ, Atividade, Regime, Município, ISS, Senha).');
+            return;
+        }
+
+        const existing = await loadDataSync('contributors', []);
+        const codigosUsados = new Set(existing.map(c => String(c.codigo)));
+        const cnpjsUsados = new Set(existing.map(c => String(c.cnpj)));
+
+        const novos = [];
+        const erros = [];
+        let ignoradosDup = 0;
+
+        for (let r = 1; r < matrix.length; r++) {
+            const row = matrix[r] || [];
+            const get = (i) => (i >= 0 && row[i] != null ? String(row[i]).trim() : '');
+            const codigo = get(idx.codigo);
+            const razaoSocial = get(idx.razaoSocial);
+            const cnpj = get(idx.cnpj).replace(/\D/g, '');
+            const atividade = get(idx.atividade);
+            const regime = get(idx.regime);
+            const municipio = get(idx.municipio);
+            const iss = get(idx.iss);
+            const senha = get(idx.senha);
+
+            // Linha totalmente em branco: ignora silenciosamente.
+            if (!codigo && !razaoSocial && !cnpj) continue;
+
+            if (!codigo || !razaoSocial || !cnpj || !atividade || !regime || !municipio) {
+                erros.push(`Linha ${r + 1}: campos obrigatórios faltando`);
+                continue;
+            }
+            if (cnpj.length !== 14) {
+                erros.push(`Linha ${r + 1}: CNPJ inválido (${cnpj || 'vazio'})`);
+                continue;
+            }
+            if (codigosUsados.has(codigo) || cnpjsUsados.has(cnpj)) {
+                ignoradosDup++;
+                continue;
+            }
+
+            const passwordHash = senha ? await window.generateSecureHash(senha) : null;
+            novos.push({
+                id: Date.now() + r,
+                codigo, razaoSocial, cnpj, atividade, regime, municipio,
+                iss: iss || null,
+                passwordHash,
+                createdAt: new Date().toISOString(),
+                createdBy: window.currentUser,
+            });
+            codigosUsados.add(codigo);
+            cnpjsUsados.add(cnpj);
+        }
+
+        if (novos.length > 0) {
+            await saveDataSync('contributors', existing.concat(novos));
+            await loadContributorsList();
+        }
+
+        let msg = `Importação concluída.\n\n${novos.length} contribuinte(s) cadastrado(s).`;
+        if (ignoradosDup > 0) msg += `\n${ignoradosDup} ignorado(s) (código/CNPJ já existente).`;
+        if (erros.length > 0) {
+            msg += `\n${erros.length} com erro:\n` + erros.slice(0, 8).join('\n');
+            if (erros.length > 8) msg += `\n... e mais ${erros.length - 8}.`;
+        }
+        alert(msg);
+    } catch (e) {
+        console.error('Erro ao importar contribuintes:', e);
+        alert('Não foi possível ler a planilha. Verifique se é um .xlsx válido no formato do modelo.');
+    } finally {
+        input.value = ''; // permite reimportar o mesmo arquivo
+    }
 }
 
 // ==================== BIBLIOTECA PYTHON ====================

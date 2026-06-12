@@ -199,6 +199,30 @@ async function authGetUser() {
 function authGetCurrentSession() { return currentSession; }
 function authGetCurrentProfile() { return currentProfile; }
 
+/**
+ * Auto-login: restaura a sessão Supabase já persistida (refresh token em localStorage)
+ * sem exigir senha. Aguarda o init, lê a sessão atual do client como fonte de verdade
+ * (o cache `currentSession` pode ainda não estar populado no boot) e carrega o profile.
+ * Mesmo formato de retorno que authSignIn, mais o `username` derivado do email.
+ * @returns {Promise<{ok: boolean, user?: object, profile?: object, username?: string, error?: string}>}
+ */
+async function authRestoreSession() {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error || !data?.session?.user) {
+        return { ok: false, error: error?.message || 'Sem sessão persistida' };
+    }
+
+    const user = data.session.user;
+    currentSession = data.session;
+    const profile = await _loadProfile(user.id);
+    const username = String(user.email || '').split('@')[0];
+    return { ok: true, user, profile, username };
+}
+
 function authOnChange(callback) {
     if (!supabaseClient) return () => {};
     const { data } = supabaseClient.auth.onAuthStateChange((event, session) => {
@@ -288,6 +312,32 @@ async function authCreateUser({ username, password, fullName, control }) {
         return { ok: false, error: msg };
     }
     return { ok: true, userId: data?.userId };
+}
+
+/**
+ * Atualiza senha (e opcionalmente full_name/control) no auth.users via Edge Function
+ * `update-user` (service_role). O wrapper updateProfile só altera user_profiles e NÃO
+ * troca a senha de login — por isso esta função existe. Exige sessão admin (RLS/JWT).
+ * @returns {Promise<{ok:boolean, status?:string, error?:string}>}
+ */
+async function authUpdateUser({ username, password, fullName, control }) {
+    if (!supabaseReadyPromise) initSupabase();
+    const ready = await supabaseReadyPromise;
+    if (!ready) return { ok: false, error: 'Supabase não configurado' };
+    if (!currentSession) return { ok: false, error: 'sem-sessao' };
+
+    const { data, error } = await supabaseClient.functions.invoke('update-user', {
+        body: { username: String(username).trim().toLowerCase(), password, fullName, control },
+    });
+    if (error) {
+        let msg = error.message || 'Erro ao chamar update-user';
+        try {
+            const ctx = await error.context?.json?.();
+            if (ctx?.error) msg = ctx.error;
+        } catch { /* corpo não-JSON */ }
+        return { ok: false, error: msg };
+    }
+    return { ok: true, status: data?.status };
 }
 
 /** Aguarda sessão antes de chamar fn. Retorna null se nunca houver. */
@@ -646,9 +696,11 @@ window.supabaseSync = {
         getUser: authGetUser,
         getSession: authGetCurrentSession,
         getProfile: authGetCurrentProfile,
+        restoreSession: authRestoreSession,
         onChange: authOnChange,
         updateProfile: authUpdateProfile,
         createUser: authCreateUser,
+        updateUser: authUpdateUser,
         deleteUser: authDeleteUser,
         usernameToEmail: _usernameToEmail,
     },
