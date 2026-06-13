@@ -2621,6 +2621,9 @@ async function processIcmsXmls() {
     if (!icmsModeloBuffer || !icmsModeloSelecionado) {
         throw new Error('Selecione um modelo funcional (Mercadinho) antes de processar.');
     }
+    if (typeof JSZip === 'undefined') {
+        throw new Error('JSZip não carregou — não é possível gerar a planilha ICMS.');
+    }
 
     if (statusText) statusText.textContent = 'Lendo arquivos (XML/ZIP)...';
     const xmls = await expandXmlInputs(icmsXmlFiles);
@@ -2669,32 +2672,48 @@ async function processIcmsXmls() {
         const totalProdutos = Object.values(emp.produtosPorGrupo).reduce((s, a) => s + a.length, 0);
         if (!totalProdutos) { vazias++; continue; } // nenhum produto passou nos filtros UF/CFOP
 
-        // Recarrega o modelo do buffer para cada empresa (workbook independente).
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.load(icmsModeloBuffer);
+        // Edição direta do .xlsx via JSZip — NÃO usa ExcelJS para escrever. O ExcelJS 4.x
+        // corrompe a definição de tabela (ListObject) do modelo no round-trip: gera
+        // headerRowCount="0" + autoFilter inconsistente, que o Excel/WPS recusam como
+        // "arquivo corrompido". Como as fórmulas de ICMS dependem da tabela
+        // (Tabela2[[#This Row],...]), removê-la não é opção. Editamos só as células de
+        // dados; tabelas, fórmulas, estilos e drawings do modelo ficam intactos.
+        const zip = await JSZip.loadAsync(icmsModeloBuffer);
+        const abas = await resolverAbasIcms(zip);
 
-        // Cabeçalho na aba principal (C3 razão social, C5 período mmm-yy).
-        const abaPrincipal = workbook.getWorksheet('ICMS ST 1104');
-        if (abaPrincipal) {
-            const cellC3 = abaPrincipal.getCell('C3');
-            if (!cellC3.formula && razaoSocial) cellC3.value = razaoSocial;
-            const cellC5 = abaPrincipal.getCell('C5');
-            if (!cellC5.formula && periodo) {
-                const [mes, ano] = periodo.split('-');
-                cellC5.value = new Date(parseInt(ano), parseInt(mes) - 1, 1);
-                cellC5.numFmt = 'mmm-yy';
+        // O modelo tem <autoFilter> nas definições de tabela (xl/tables/*.xml) que o Excel
+        // moderno rejeita ("Registros Removidos: AutoFiltro de parte de tableN.xml" → abre
+        // só após reparo). Removemos o autoFilter — a tabela e suas fórmulas seguem válidas.
+        await removerAutoFiltroTabelas(zip);
+
+        // Cabeçalho na aba principal: C3 razão social, C5 período (texto "mmm-yy" em PT —
+        // evita depender de estilo de data/locale; o valor exibido fica idêntico).
+        const caminhoPrincipal = abas['ICMS ST 1104'];
+        if (caminhoPrincipal && zip.file(caminhoPrincipal)) {
+            const editsCab = [];
+            if (razaoSocial) editsCab.push({ row: 3, col: 3, valor: razaoSocial, tipo: 'str' });
+            if (periodo) editsCab.push({ row: 5, col: 3, valor: formatarPeriodoIcms(periodo), tipo: 'str' });
+            if (editsCab.length) {
+                const xml = await zip.file(caminhoPrincipal).async('string');
+                zip.file(caminhoPrincipal, aplicarEditsIcms(xml, editsCab));
             }
         }
 
         // Produtos por aba de alíquota (a partir de D2), preservando fórmulas do modelo.
         for (const [nomeGrupo, produtos] of Object.entries(emp.produtosPorGrupo)) {
             if (!produtos.length) continue;
-            const ws = workbook.getWorksheet(nomeGrupo);
-            if (!ws) continue;
-            escreverDadosIcms(ws, produtos, 'D2');
+            const caminho = abas[nomeGrupo];
+            if (!caminho || !zip.file(caminho)) continue;
+            const xml = await zip.file(caminho).async('string');
+            zip.file(caminho, escreverDadosIcmsXml(xml, produtos, 2));
         }
 
-        const buffer = await workbook.xlsx.writeBuffer();
+        // Força recálculo ao abrir: editar o XML direto deixa os valores cacheados das
+        // fórmulas (ICMS ST, totais) desatualizados — mesmo motivo do fullCalcOnLoad do DIRBI.
+        const wbXml = await zip.file('xl/workbook.xml').async('string');
+        zip.file('xl/workbook.xml', forcarRecalculoIcms(wbXml));
+
+        const buffer = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
         const nome = `ICMS ST ${periodo || 'sem-periodo'}_${(razaoSocial || cnpj).replace(/[\\/:*?"<>|]/g, '').slice(0, 60)}.xlsx`;
         arquivos.push({ nome, buffer });
     }
@@ -2738,33 +2757,152 @@ function atualizarBotaoProcessarIcms() {
     if (btn) btn.disabled = !(icmsModeloSelecionado && icmsXmlFiles.length > 0);
 }
 
-// Escreve as linhas de produtos numa aba a partir de celulaInicial (ex.: "D2"),
-// preservando fórmulas do modelo. Colunas de valor (j=8..11) recebem formato R$,
-// NCM (j=5) vira texto, e UF/Nº/CFOP/CST (j=1,2,6,7) viram numéricos.
-function escreverDadosIcms(worksheet, dados, celulaInicial) {
-    const colLetra = celulaInicial.match(/[A-Z]+/)[0];
-    const linBase = parseInt(celulaInicial.match(/\d+/)[0]);
-    const colIndex = colLetra.charCodeAt(0) - 64; // A=1, B=2, C=3, D=4
+// ── Escrita ICMS por edição direta do XML do .xlsx (via JSZip) ──────────────────
+// O ExcelJS corrompe a definição de tabela do modelo no round-trip (ver processIcmsXmls),
+// então escrevemos as células manipulando o sheet XML e regeneramos o zip, preservando
+// tabelas/fórmulas/estilos/drawings intactos.
 
+// "D" -> 4 (índice de coluna 1-based).
+function colLetraParaIndice(letra) {
+    let n = 0;
+    for (let i = 0; i < letra.length; i++) n = n * 26 + (letra.charCodeAt(i) - 64);
+    return n;
+}
+// 4 -> "D".
+function colIndiceParaLetra(idx) {
+    let s = '';
+    while (idx > 0) { const r = (idx - 1) % 26; s = String.fromCharCode(65 + r) + s; idx = Math.floor((idx - 1) / 26); }
+    return s;
+}
+function xmlEscape(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function decodeXmlEntities(s) {
+    return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+}
+
+// Mapeia nome da aba -> caminho do sheet XML, lendo workbook.xml + seus rels (não hardcoda
+// a ordem dos sheets, que pode divergir do número do arquivo).
+async function resolverAbasIcms(zip) {
+    const wbXml = await zip.file('xl/workbook.xml').async('string');
+    const relsXml = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const rid2target = {};
+    for (const tag of relsXml.match(/<Relationship\b[^>]*>/g) || []) {
+        const id = (tag.match(/Id="([^"]+)"/) || [])[1];
+        const target = (tag.match(/Target="([^"]+)"/) || [])[1];
+        if (id && target) rid2target[id] = target;
+    }
+    const abas = {};
+    for (const tag of wbXml.match(/<sheet\b[^>]*>/g) || []) {
+        const nome = (tag.match(/name="([^"]+)"/) || [])[1];
+        const rid = (tag.match(/r:id="([^"]+)"/) || [])[1];
+        if (nome && rid && rid2target[rid]) abas[decodeXmlEntities(nome)] = 'xl/' + rid2target[rid].replace(/^\.?\//, '');
+    }
+    return abas;
+}
+
+// Monta uma célula <c>. Número vira <v>; texto vira inline string (não mexe em sharedStrings).
+// Sem atributo s a célula herda o estilo da coluna (<col style>), que o modelo já define.
+function construirCelulaIcms(ref, s, valor, tipo) {
+    const sAttr = s ? ` s="${s}"` : '';
+    if (tipo === 'num') return `<c r="${ref}"${sAttr}><v>${valor}</v></c>`;
+    return `<c r="${ref}"${sAttr} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(valor)}</t></is></c>`;
+}
+
+// Aplica edições de célula a um sheet XML, preservando o resto byte-a-byte.
+// edits: [{ row:Number, col:Number(1-based), valor, tipo:'str'|'num' }].
+// Não sobrescreve células que contêm fórmula (<f>); reusa o estilo (s=) da célula existente.
+function aplicarEditsIcms(sheetXml, edits) {
+    const porRow = {};
+    for (const e of edits) (porRow[e.row] = porRow[e.row] || []).push(e);
+    return sheetXml.replace(/<row r="(\d+)"([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g, (full, rNum, attrs, inner) => {
+        const lista = porRow[rNum];
+        if (!lista) return full;
+        const celulas = {};
+        if (inner) {
+            const re = /<c r="([A-Z]+)(\d+)"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+            let m;
+            while ((m = re.exec(inner)) !== null) celulas[colLetraParaIndice(m[1])] = { attrs: m[3] || '', body: m[4] || '', raw: m[0] };
+        }
+        for (const e of lista) {
+            const exist = celulas[e.col];
+            if (exist && /<f[ >/]/.test(exist.body)) continue; // nunca sobrescreve fórmula do modelo
+            const sMatch = exist ? (exist.attrs.match(/\ss="(\d+)"/) || [])[1] : null;
+            const ref = colIndiceParaLetra(e.col) + rNum;
+            celulas[e.col] = { raw: construirCelulaIcms(ref, sMatch, e.valor, e.tipo) };
+        }
+        const idx = Object.keys(celulas).map(Number).sort((a, b) => a - b);
+        const cleanAttrs = attrs.replace(/\/\s*$/, ''); // remove '/' se a row era self-closing
+        return `<row r="${rNum}"${cleanAttrs}>${idx.map((ci) => celulas[ci].raw).join('')}</row>`;
+    });
+}
+
+// Escreve as linhas de produtos numa aba a partir de D{rowBase}, preservando fórmulas.
+// Colunas de valor (j=8..11) e UF/Nº/CFOP/CST (j=1,2,6,7) são numéricas; NCM (j=5) e o
+// resto, texto. A formatação (R$, etc.) vem do estilo de coluna do modelo.
+function escreverDadosIcmsXml(sheetXml, dados, rowBase) {
+    const COL_BASE = 4;     // coluna D
+    const MAX_ROW = 1000;   // a tabela do modelo cobre D1:S1000 (fórmulas até a linha 1000)
+    const edits = [];
+    let excedentes = 0;
     dados.forEach((linha, i) => {
+        const row = rowBase + i;
+        if (row > MAX_ROW) { excedentes++; return; }
         linha.forEach((valor, j) => {
-            const cell = worksheet.getCell(linBase + i, colIndex + j);
-            if (cell.isMerged) return;
-            if (cell.formula) return; // nunca sobrescreve fórmula do modelo
-            if (j >= 8 && j <= 11) {
-                const numVal = parseFloat(String(valor || '0').replace(',', '.'));
-                cell.value = isNaN(numVal) ? valor : numVal;
-                cell.numFmt = 'R$ #,##0.00';
-            } else if (j === 5) {
-                cell.value = String(valor || '');
-                cell.numFmt = '@';
-            } else if (j === 1 || j === 2 || j === 6 || j === 7) {
-                cell.value = parseFloat(String(valor || '0').replace(/[^\d.-]/g, '')) || 0;
+            const col = COL_BASE + j;
+            if (j >= 9 && j <= 12) {
+                // M FRETE | N DESPESAS | O IPI | P Vl. Produto → numérico (R$ vem do estilo da coluna)
+                const num = parseFloat(String(valor || '0').replace(',', '.'));
+                edits.push(isNaN(num)
+                    ? { row, col, valor: String(valor || ''), tipo: 'str' }
+                    : { row, col, valor: num, tipo: 'num' });
+            } else if (j === 1 || j === 2 || j === 7) {
+                // E UF | F Nº NF-e | K CFOP → numérico
+                edits.push({ row, col, valor: parseFloat(String(valor || '0').replace(/[^\d.-]/g, '')) || 0, tipo: 'num' });
             } else {
-                cell.value = String(valor || '');
+                // D Chave | G Fornecedor | H CNPJ | I Produto | J NCM | L CST → texto (preserva zeros à esquerda)
+                edits.push({ row, col, valor: String(valor || ''), tipo: 'str' });
             }
         });
     });
+    if (excedentes) console.warn(`ICMS: ${excedentes} linha(s) além da linha ${MAX_ROW} do modelo foram ignoradas.`);
+    return aplicarEditsIcms(sheetXml, edits);
+}
+
+// Formata "MM-YYYY" como "mmm-yy" em PT (ex.: "06-2025" -> "jun-25").
+function formatarPeriodoIcms(periodo) {
+    const meses = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const [mes, ano] = String(periodo).split('-');
+    const mi = parseInt(mes, 10) - 1;
+    return `${(mi >= 0 && mi < 12) ? meses[mi] : mes}-${String(ano).slice(-2)}`;
+}
+
+// Remove <autoFilter> das definições de tabela (xl/tables/*.xml). Esses autoFiltros vêm
+// inválidos no modelo e o Excel os recusa ("Registros Removidos"), forçando reparo na
+// abertura. Sem o autoFilter a tabela segue válida (perde só os dropdowns de filtro); as
+// fórmulas estruturadas (calculatedColumnFormula / Tabela2[...]) ficam intactas.
+async function removerAutoFiltroTabelas(zip) {
+    const tabelas = zip.file(/^xl\/tables\/table\d+\.xml$/);
+    for (const t of tabelas) {
+        const xml = await t.async('string');
+        const novo = xml
+            .replace(/<autoFilter\b[^>]*\/>/g, '')
+            .replace(/<autoFilter\b[^>]*>[\s\S]*?<\/autoFilter>/g, '');
+        if (novo !== xml) zip.file(t.name, novo);
+    }
+}
+
+// Garante fullCalcOnLoad="1" no <calcPr> do workbook.xml para o Excel/WPS recalcular ao abrir.
+function forcarRecalculoIcms(wbXml) {
+    if (/<calcPr\b/.test(wbXml)) {
+        return wbXml.replace(/<calcPr\b([^>]*?)\/?>/, (full, attrs) => {
+            const a = /fullCalcOnLoad=/.test(attrs)
+                ? attrs.replace(/fullCalcOnLoad="[^"]*"/, 'fullCalcOnLoad="1"')
+                : attrs + ' fullCalcOnLoad="1"';
+            return `<calcPr${a}/>`;
+        });
+    }
+    return wbXml.replace(/<\/sheets>/, '</sheets><calcPr fullCalcOnLoad="1"/>');
 }
 
 // Função para ler arquivo como texto
@@ -3045,6 +3183,11 @@ function extrairDadosFiltrados(xmlText) {
         let xFant = findWithNS(emit, 'xFant');
         if (!xFant) xFant = emit.querySelector('xFant');
         const fornecedor = xFant?.textContent || "";
+
+        // CNPJ (ou CPF) do emitente = fornecedor, para a coluna H do modelo.
+        let cnpjEmitEl = findWithNS(emit, 'CNPJ') || emit.querySelector('CNPJ') || emit.querySelector('nfe:CNPJ');
+        if (!cnpjEmitEl) cnpjEmitEl = findWithNS(emit, 'CPF') || emit.querySelector('CPF') || emit.querySelector('nfe:CPF');
+        const cnpjFornecedor = cnpjEmitEl?.textContent ? cnpjEmitEl.textContent.replace(/\D/g, '') : '';
         
         // Buscar CNPJ do destinatário - tentar múltiplas formas
         let cnpjDest = findWithNS(dest, 'CNPJ');
@@ -3277,8 +3420,10 @@ function extrairDadosFiltrados(xmlText) {
                 continue; // Pular produtos que não passam nos filtros
             }
             
-            // Criar linha do produto
-            const linha = [chave, uf, numeroNf, fornecedor, xprod, ncm, cfop, cst || csosn, vFrete, vOutro, vIpi, vprod];
+            // Criar linha do produto. Ordem casa com as colunas D:P do modelo:
+            // D Chave | E UF | F Nº NF-e | G Fornecedor | H CNPJ | I Produto | J NCM |
+            // K CFOP | L CST | M FRETE | N DESPESAS | O IPI | P Vl. Produto
+            const linha = [chave, uf, numeroNf, fornecedor, cnpjFornecedor, xprod, ncm, cfop, cst || csosn, vFrete, vOutro, vIpi, vprod];
             
             // Agrupar produtos conforme GRUPOS do código Python
             // GRUPOS = {
@@ -3626,6 +3771,12 @@ async function processDirbiXmls(fileList) {
             const razaoFinal = Object.keys(emp.razaoCount).reduce(
                 (a, b) => (emp.razaoCount[a] >= emp.razaoCount[b] ? a : b), '');
             if (razaoFinal) ws.getCell('B2').value = razaoFinal;
+
+            // As fórmulas F/G (Pis/Cofins = E*1,65% / E*7,6%) são shared formulas cujo
+            // valor cacheado <v> o ExcelJS não recalcula ao reescrever: ele mantém o cache
+            // do modelo (E vazio → 0). fullCalcOnLoad força o Excel/WPS a recalcular toda a
+            // pasta ao abrir, descartando o cache stale e exibindo F/G corretos.
+            wb.calcProperties = { fullCalcOnLoad: true };
 
             const buffer = await wb.xlsx.writeBuffer();
             const nomeArq = `DIRBI ${emp.periodo || 'sem-periodo'}_${(razaoFinal || cnpj || 'empresa').replace(/[\\/:*?"<>|]/g, '').slice(0, 60)}.xlsx`;
