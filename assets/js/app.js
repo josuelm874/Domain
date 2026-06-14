@@ -7767,14 +7767,8 @@ function createBaixarNfcePage(mainContent) {
             <div class="box animate-section" style="animation-delay: 0s; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column; gap: 1.2rem;">
 
                 <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                    <label style="font-weight: 600; color: var(--color-dark);">CNPJ da empresa</label>
-                    <input type="text" id="bn-cnpj" inputmode="numeric" maxlength="18" placeholder="14 dígitos (somente números)"
-                        style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-size: 0.95rem;">
-                </div>
-
-                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                    <label style="font-weight: 600; color: var(--color-dark);">Token JWT <span style="font-weight: 400; color: var(--color-info-dark);">(F12 → Network → header x-authentication-token)</span></label>
-                    <textarea id="bn-token" rows="3" placeholder="Cole o token JWT aqui (vale 24h)"
+                    <label style="font-weight: 600; color: var(--color-dark);">Token JWT ou URL de download <span style="font-weight: 400; color: var(--color-info-dark);">(cole o token, ou a URL completa do /xml/ com apiKey=)</span></label>
+                    <textarea id="bn-token" rows="3" placeholder="Cole o token JWT (vale 24h), ou uma URL de download contendo apiKey=... — o CNPJ sai do próprio token"
                         style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical; word-break: break-all;"></textarea>
                     <div id="bn-jwt-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
                 </div>
@@ -7819,7 +7813,6 @@ function createBaixarNfcePage(mainContent) {
         </div>
     `;
 
-    const cnpjInput = document.getElementById('bn-cnpj');
     const tokenInput = document.getElementById('bn-token');
     const keysInput = document.getElementById('bn-keys');
     const fileInput = document.getElementById('bn-file');
@@ -7843,6 +7836,18 @@ function createBaixarNfcePage(mainContent) {
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));
     const backoff = (attempt) => 500 * Math.pow(2, attempt); // 500, 1000, 2000ms
     const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
+
+    // Aceita: token JWT puro, ou uma URL de download (com apiKey={jwt}), ou texto
+    // que contenha um JWT. Retorna só o token.
+    function extractToken(input) {
+        const s = String(input || '').trim();
+        if (!s) return '';
+        const m = s.match(/[?&]apiKey=([^&\s]+)/i);
+        if (m) return decodeURIComponent(m[1]);
+        const jwt = s.match(/eyJ[\w-]+\.[\w-]+\.[\w-]+/);
+        if (jwt) return jwt[0];
+        return s;
+    }
 
     function parseKeys(text) {
         const out = [];
@@ -7873,7 +7878,7 @@ function createBaixarNfcePage(mainContent) {
         }
     }
 
-    function validateJwt(token, cnpj) {
+    function validateJwt(token) {
         const parts = String(token || '').trim().split('.');
         if (parts.length < 2) return { ok: false, message: 'Token não parece um JWT (faltam segmentos).' };
         let payload;
@@ -7882,6 +7887,8 @@ function createBaixarNfcePage(mainContent) {
         } catch (e) {
             return { ok: false, message: 'Falha ao decodificar o payload do JWT.' };
         }
+        const cnpj = payload.sub ? String(payload.sub) : '';
+        if (!/^\d{14}$/.test(cnpj)) return { ok: false, message: 'Token sem CNPJ válido no campo sub.' };
         const now = Math.floor(Date.now() / 1000);
         let warning = '';
         let suffix = '';
@@ -7891,16 +7898,13 @@ function createBaixarNfcePage(mainContent) {
             if (minsLeft < 30) warning = 'expira em ~' + minsLeft + ' min';
             suffix = ' (expira ' + new Date(payload.exp * 1000).toLocaleString('pt-BR') + ')';
         }
-        if (cnpj && payload.sub && payload.sub !== cnpj) {
-            return { ok: false, message: 'CNPJ do token (' + payload.sub + ') ≠ CNPJ informado (' + cnpj + ').' };
-        }
-        return { ok: true, warning, message: 'Token válido' + (warning ? ' — ' + warning : '') + suffix };
+        return { ok: true, cnpj, warning, message: 'Token válido • CNPJ ' + cnpj + (warning ? ' — ' + warning : '') + suffix };
     }
 
     function refreshJwtStatus() {
-        const token = tokenInput.value.trim();
+        const token = extractToken(tokenInput.value);
         if (!token) { jwtStatus.textContent = ''; return; }
-        const v = validateJwt(token, cleanDigits(cnpjInput.value));
+        const v = validateJwt(token);
         jwtStatus.textContent = v.message;
         jwtStatus.style.color = v.ok ? (v.warning ? '#c47f00' : 'var(--color-success)') : 'var(--color-danger)';
     }
@@ -7994,15 +7998,18 @@ function createBaixarNfcePage(mainContent) {
     }
 
     function validateInputs() {
-        const cnpj = cleanDigits(cnpjInput.value);
-        const token = tokenInput.value.trim();
+        const token = extractToken(tokenInput.value);
         const keys = parseKeys(keysInput.value);
-        if (cnpj.length !== 14) return { error: 'Informe um CNPJ válido (14 dígitos).' };
-        if (!token) return { error: 'Cole o token JWT.' };
-        const v = validateJwt(token, cnpj);
+        if (!token) return { error: 'Cole o token JWT ou a URL de download.' };
+        const v = validateJwt(token);
         if (!v.ok) return { error: v.message };
         if (!keys.length) return { error: 'Nenhuma chave de 44 dígitos detectada.' };
-        return { cnpj, token, keys, jwt: v };
+        // Conferência leve: o CNPJ embutido na 1ª chave (posições 7-20) deve bater com o do token
+        const chaveCnpj = keys[0].substring(6, 20);
+        const warn = (chaveCnpj !== v.cnpj)
+            ? 'Atenção: CNPJ da 1ª chave (' + chaveCnpj + ') ≠ CNPJ do token (' + v.cnpj + '). Lista pode ser de outra empresa.'
+            : '';
+        return { cnpj: v.cnpj, token, keys, jwt: v, warn };
     }
 
     // ---------- ações de UI ----------
@@ -8031,7 +8038,6 @@ function createBaixarNfcePage(mainContent) {
 
     keysInput.addEventListener('input', refreshKeysCount);
     tokenInput.addEventListener('input', refreshJwtStatus);
-    cnpjInput.addEventListener('input', refreshJwtStatus);
 
     copyFailsBtn.addEventListener('click', () => {
         if (!lastFailures.length) return;
@@ -8047,7 +8053,7 @@ function createBaixarNfcePage(mainContent) {
         if (v.error) { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ ' + v.error; return; }
         setBusy(true);
         testResult.style.color = 'var(--color-dark)';
-        testResult.textContent = 'Testando com a 1ª chave: ' + v.keys[0] + '…';
+        testResult.textContent = (v.warn ? '⚠ ' + v.warn + '\n' : '') + 'Testando com a 1ª chave: ' + v.keys[0] + '…';
         try {
             const idNfe = await resolveIdNfe(v.keys[0], v.token, v.cnpj);
             // Confirma o ponto em aberto da spec: o /xml/ aceita só apiKey na query?
@@ -8083,7 +8089,7 @@ function createBaixarNfcePage(mainContent) {
         if (typeof JSZip === 'undefined') { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ JSZip não carregado.'; return; }
 
         setBusy(true);
-        testResult.textContent = '';
+        if (v.warn) { testResult.style.color = '#c47f00'; testResult.textContent = '⚠ ' + v.warn; } else { testResult.textContent = ''; }
         progressWrap.style.display = 'flex';
         failWrap.style.display = 'none';
         failList.value = '';
