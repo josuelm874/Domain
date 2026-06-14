@@ -7504,6 +7504,12 @@ function createNfeCfeComparisonPage(mainContent) {
             console.log(`Processamento concluído. Dados:`, dataArray);
             animateLabelToCheck(label, checkSvg);
             callback();
+        }).catch((err) => {
+            // Sem este catch, a falha de parse de um único arquivo abortava toda a
+            // importação silenciosamente (animação e callback nunca disparavam).
+            console.error('Falha ao processar arquivos:', err);
+            animateLabelToCheck(label, checkSvg);
+            callback();
         });
     }
 
