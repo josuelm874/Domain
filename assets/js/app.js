@@ -1115,7 +1115,17 @@
                 mainContent.innerHTML = `
                     <h1>Dashboard</h1>
                     <div class="dashboard-grid">
-                        <div class="box animate-section" style="animation-delay: 0s"></div>
+                        <div class="box animate-section baixar-nfce-box" style="animation-delay: 0s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">receipt_long</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>Baixar NFCe</h3>
+                                    <p>Baixar XMLs de cupons NFC-e da SEFAZ-CE em massa</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section" style="animation-delay: 0.05s"></div>
                         <div class="box animate-section" style="animation-delay: 0.1s"></div>
                         <div class="box animate-section" style="animation-delay: 0.15s"></div>
@@ -1230,6 +1240,12 @@
                     `;
                 }
             }
+
+            // Card "Baixar NFCe" → abre a página dedicada de download em massa
+            const baixarNfceBox = document.querySelector('.baixar-nfce-box');
+            if (baixarNfceBox) {
+                baixarNfceBox.addEventListener('click', () => navigateTo('baixar-nfce'));
+            }
         } else if (page === 'analytics') {
             // Verificar tipo de usuário
             const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -1278,6 +1294,9 @@
         }
         else if (page === 'nfe-cfe-comparison') {
             createNfeCfeComparisonPage(mainContent);
+        }
+        else if (page === 'baixar-nfce') {
+            createBaixarNfcePage(mainContent);
         }
         else if (page === 'icms-withholding') {
             createIcmsWithholdingPage(mainContent);
@@ -7730,6 +7749,411 @@ function createNfeCfeComparisonPage(mainContent) {
 }
 
 //---------------------------------- FIM NFe | NFCe Comparasion ----------------------------------//
+
+//---------------------------------- INÍCIO Baixar NFCe ----------------------------------//
+// Baixa em massa os XMLs de cupons NFC-e direto da API do Ambiente Seguro da
+// SEFAZ-CE. CORS está aberto -> fetch direto no browser, sem proxy/Python.
+// Fluxo por chave: GET /coupons/extract/{chave} -> idNfe ; GET /fiscal-coupons/xml/{idNfe}.
+function createBaixarNfcePage(mainContent) {
+    console.log('createBaixarNfcePage chamado');
+
+    const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
+    const CONCURRENCY = 8;
+    const MAX_RETRIES = 3;
+
+    mainContent.innerHTML = `
+        <h1>Baixar NFCe</h1>
+        <div style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 900px; margin: 0 auto; padding: 1.5rem;">
+            <div class="box animate-section" style="animation-delay: 0s; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column; gap: 1.2rem;">
+
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <label style="font-weight: 600; color: var(--color-dark);">CNPJ da empresa</label>
+                    <input type="text" id="bn-cnpj" inputmode="numeric" maxlength="18" placeholder="14 dígitos (somente números)"
+                        style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-size: 0.95rem;">
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <label style="font-weight: 600; color: var(--color-dark);">Token JWT <span style="font-weight: 400; color: var(--color-info-dark);">(F12 → Network → header x-authentication-token)</span></label>
+                    <textarea id="bn-token" rows="3" placeholder="Cole o token JWT aqui (vale 24h)"
+                        style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical; word-break: break-all;"></textarea>
+                    <div id="bn-jwt-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <label style="font-weight: 600; color: var(--color-dark);">Chaves de acesso <span style="font-weight: 400; color: var(--color-info-dark);">(44 dígitos, uma por linha)</span></label>
+                    <textarea id="bn-keys" rows="8" placeholder="Cole as chaves ou carregue o relatório SIGA/.txt abaixo"
+                        style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical;"></textarea>
+                    <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                        <button id="bn-upload-btn" type="button"
+                            style="padding: 0.5rem 1rem; border: 1px solid var(--color-primary); border-radius: 0.5rem; background: transparent; color: var(--color-primary); cursor: pointer; font-size: 0.85rem;">Carregar arquivo (.txt / SIGA)</button>
+                        <input type="file" id="bn-file" accept=".txt,.csv" multiple style="display: none;">
+                        <span id="bn-keys-count" style="font-size: 0.85rem; color: var(--color-info-dark);">0 chaves detectadas</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.4rem;">
+                    <button id="bn-test-btn" type="button"
+                        style="padding: 0.7rem 1.4rem; border: 1px solid var(--color-primary); border-radius: 0.5rem; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 600;">Testar 1 chave</button>
+                    <button id="bn-download-btn" type="button"
+                        style="padding: 0.7rem 1.4rem; border: none; border-radius: 0.5rem; background: var(--color-success); color: #fff; cursor: pointer; font-weight: 600;">Baixar XMLs (ZIP)</button>
+                </div>
+
+                <div id="bn-test-result" style="font-size: 0.85rem; white-space: pre-wrap; color: var(--color-dark);"></div>
+            </div>
+
+            <div id="bn-progress-wrap" class="box animate-section" style="display: none; animation-delay: 0.1s; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); flex-direction: column; gap: 0.9rem;">
+                <div style="height: 1.1rem; background: rgba(125,141,161,0.25); border-radius: 0.6rem; overflow: hidden;">
+                    <div id="bn-progress-bar" style="height: 100%; width: 0%; background: var(--color-primary); transition: width 0.2s ease;"></div>
+                </div>
+                <div id="bn-progress-text" style="font-size: 0.9rem; color: var(--color-dark);">Aguardando…</div>
+                <div id="bn-fail-wrap" style="display: none; flex-direction: column; gap: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 600; color: var(--color-danger);">Chaves que falharam</span>
+                        <button id="bn-copy-fails" type="button"
+                            style="padding: 0.35rem 0.8rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); cursor: pointer; font-size: 0.8rem;">Copiar chaves</button>
+                    </div>
+                    <textarea id="bn-fail-list" rows="6" readonly
+                        style="padding: 0.6rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.78rem; resize: vertical;"></textarea>
+                </div>
+            </div>
+        </div>
+    `;
+
+    const cnpjInput = document.getElementById('bn-cnpj');
+    const tokenInput = document.getElementById('bn-token');
+    const keysInput = document.getElementById('bn-keys');
+    const fileInput = document.getElementById('bn-file');
+    const uploadBtn = document.getElementById('bn-upload-btn');
+    const keysCount = document.getElementById('bn-keys-count');
+    const jwtStatus = document.getElementById('bn-jwt-status');
+    const testBtn = document.getElementById('bn-test-btn');
+    const downloadBtn = document.getElementById('bn-download-btn');
+    const testResult = document.getElementById('bn-test-result');
+    const progressWrap = document.getElementById('bn-progress-wrap');
+    const progressBar = document.getElementById('bn-progress-bar');
+    const progressText = document.getElementById('bn-progress-text');
+    const failWrap = document.getElementById('bn-fail-wrap');
+    const failList = document.getElementById('bn-fail-list');
+    const copyFailsBtn = document.getElementById('bn-copy-fails');
+
+    let lastFailures = [];
+
+    // ---------- helpers ----------
+    const cleanDigits = (s) => String(s || '').replace(/\D/g, '');
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+    const backoff = (attempt) => 500 * Math.pow(2, attempt); // 500, 1000, 2000ms
+    const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
+
+    function parseKeys(text) {
+        const out = [];
+        const seen = new Set();
+        if (!text) return out;
+        // Mesma âncora usada em extractKeysFromFreeText: corrida de dígitos+separadores
+        // (-, ., /) que vira 44 dígitos após limpeza, ou chave crua de 44 dígitos.
+        const re = /\d[\d.\-\/]{38,}\d/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            const k = m[0].replace(/\D/g, '');
+            if (k.length !== 44) continue;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(k);
+        }
+        return out;
+    }
+
+    function base64UrlDecode(str) {
+        let s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        const bin = atob(s);
+        try {
+            return decodeURIComponent(bin.split('').map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+        } catch (e) {
+            return bin;
+        }
+    }
+
+    function validateJwt(token, cnpj) {
+        const parts = String(token || '').trim().split('.');
+        if (parts.length < 2) return { ok: false, message: 'Token não parece um JWT (faltam segmentos).' };
+        let payload;
+        try {
+            payload = JSON.parse(base64UrlDecode(parts[1]));
+        } catch (e) {
+            return { ok: false, message: 'Falha ao decodificar o payload do JWT.' };
+        }
+        const now = Math.floor(Date.now() / 1000);
+        let warning = '';
+        let suffix = '';
+        if (payload.exp) {
+            if (payload.exp <= now) return { ok: false, message: 'Token EXPIRADO. Gere um novo no Ambiente Seguro.' };
+            const minsLeft = Math.floor((payload.exp - now) / 60);
+            if (minsLeft < 30) warning = 'expira em ~' + minsLeft + ' min';
+            suffix = ' (expira ' + new Date(payload.exp * 1000).toLocaleString('pt-BR') + ')';
+        }
+        if (cnpj && payload.sub && payload.sub !== cnpj) {
+            return { ok: false, message: 'CNPJ do token (' + payload.sub + ') ≠ CNPJ informado (' + cnpj + ').' };
+        }
+        return { ok: true, warning, message: 'Token válido' + (warning ? ' — ' + warning : '') + suffix };
+    }
+
+    function refreshJwtStatus() {
+        const token = tokenInput.value.trim();
+        if (!token) { jwtStatus.textContent = ''; return; }
+        const v = validateJwt(token, cleanDigits(cnpjInput.value));
+        jwtStatus.textContent = v.message;
+        jwtStatus.style.color = v.ok ? (v.warning ? '#c47f00' : 'var(--color-success)') : 'var(--color-danger)';
+    }
+
+    function refreshKeysCount() {
+        const n = parseKeys(keysInput.value).length;
+        keysCount.textContent = n + (n === 1 ? ' chave detectada' : ' chaves detectadas');
+    }
+
+    function jsonHeaders(token, cnpj) {
+        return { 'x-authentication-token': token, 'x-authentication-taxid': cnpj, 'accept': 'application/json' };
+    }
+    // /xml/ leva o apiKey na query; mandamos os headers também (defensivo — não atrapalha).
+    function xmlHeaders(token, cnpj) {
+        return { 'x-authentication-token': token, 'x-authentication-taxid': cnpj, 'accept': '*/*' };
+    }
+
+    async function fetchWithRetry(url, options, attempt) {
+        attempt = attempt || 0;
+        try {
+            const res = await fetch(url, options);
+            if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
+            if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
+            if (!res.ok) {
+                if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+                throw makeErr('http', 'HTTP ' + res.status);
+            }
+            return res;
+        } catch (err) {
+            if (err && err.kind) {
+                if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+                throw err; // auth / notfound / http esgotado: não insistir
+            }
+            // erro de rede (TypeError do fetch) → retry com backoff
+            if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+            throw makeErr('network', (err && err.message) ? err.message : 'Falha de rede');
+        }
+    }
+
+    async function resolveIdNfe(chave, token, cnpj) {
+        const url = API_BASE + '/coupons/extract/' + encodeURIComponent(chave);
+        const res = await fetchWithRetry(url, { headers: jsonHeaders(token, cnpj) });
+        const data = await res.json();
+        const idNfe = data && (data.idNfe || (data.coupon && data.coupon.idNfe));
+        if (!idNfe) throw makeErr('parse', 'Resposta sem idNfe');
+        return String(idNfe);
+    }
+
+    function xmlUrl(idNfe, chave, token) {
+        return API_BASE + '/fiscal-coupons/xml/' + encodeURIComponent(idNfe) +
+            '?chaveAcesso=' + encodeURIComponent(chave) + '&apiKey=' + encodeURIComponent(token);
+    }
+
+    async function fetchXml(idNfe, chave, token, cnpj) {
+        const res = await fetchWithRetry(xmlUrl(idNfe, chave, token), { headers: xmlHeaders(token, cnpj) });
+        return await res.text();
+    }
+
+    // pool de concorrência limitada; respeita abort por token morto (401/403)
+    async function runPool(items, worker, concurrency, onProgress, state) {
+        let idx = 0;
+        let done = 0;
+        const results = new Array(items.length);
+        async function runner() {
+            while (idx < items.length && !state.aborted) {
+                const myIdx = idx++;
+                const item = items[myIdx];
+                try {
+                    results[myIdx] = { ok: true, value: await worker(item), item };
+                } catch (err) {
+                    results[myIdx] = { ok: false, error: err, item };
+                    if (err && err.kind === 'auth') { state.aborted = true; state.abortReason = err.message; }
+                }
+                done++;
+                onProgress(done, items.length);
+            }
+        }
+        const runners = [];
+        for (let i = 0; i < Math.min(concurrency, items.length); i++) runners.push(runner());
+        await Promise.all(runners);
+        return results;
+    }
+
+    function setBusy(busy) {
+        testBtn.disabled = busy;
+        downloadBtn.disabled = busy;
+        downloadBtn.style.opacity = busy ? '0.6' : '1';
+        testBtn.style.opacity = busy ? '0.6' : '1';
+        downloadBtn.style.cursor = busy ? 'default' : 'pointer';
+        testBtn.style.cursor = busy ? 'default' : 'pointer';
+    }
+
+    function validateInputs() {
+        const cnpj = cleanDigits(cnpjInput.value);
+        const token = tokenInput.value.trim();
+        const keys = parseKeys(keysInput.value);
+        if (cnpj.length !== 14) return { error: 'Informe um CNPJ válido (14 dígitos).' };
+        if (!token) return { error: 'Cole o token JWT.' };
+        const v = validateJwt(token, cnpj);
+        if (!v.ok) return { error: v.message };
+        if (!keys.length) return { error: 'Nenhuma chave de 44 dígitos detectada.' };
+        return { cnpj, token, keys, jwt: v };
+    }
+
+    // ---------- ações de UI ----------
+    uploadBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async () => {
+        const files = Array.from(fileInput.files || []);
+        if (!files.length) return;
+        let appended = 0;
+        for (const f of files) {
+            try {
+                const text = await f.text();
+                const found = parseKeys(text);
+                if (found.length) {
+                    keysInput.value += (keysInput.value && !keysInput.value.endsWith('\n') ? '\n' : '') + found.join('\n');
+                    appended += found.length;
+                }
+            } catch (e) {
+                console.warn('Falha ao ler ' + f.name + ': ' + e.message);
+            }
+        }
+        refreshKeysCount();
+        console.log('Arquivos carregados: +' + appended + ' chaves');
+        fileInput.value = '';
+    });
+
+    keysInput.addEventListener('input', refreshKeysCount);
+    tokenInput.addEventListener('input', refreshJwtStatus);
+    cnpjInput.addEventListener('input', refreshJwtStatus);
+
+    copyFailsBtn.addEventListener('click', () => {
+        if (!lastFailures.length) return;
+        const txt = lastFailures.map((f) => f.chave).join('\n');
+        navigator.clipboard.writeText(txt).then(
+            () => { copyFailsBtn.textContent = 'Copiado!'; setTimeout(() => { copyFailsBtn.textContent = 'Copiar chaves'; }, 1500); },
+            () => { failList.select(); }
+        );
+    });
+
+    testBtn.addEventListener('click', async () => {
+        const v = validateInputs();
+        if (v.error) { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ ' + v.error; return; }
+        setBusy(true);
+        testResult.style.color = 'var(--color-dark)';
+        testResult.textContent = 'Testando com a 1ª chave: ' + v.keys[0] + '…';
+        try {
+            const idNfe = await resolveIdNfe(v.keys[0], v.token, v.cnpj);
+            // Confirma o ponto em aberto da spec: o /xml/ aceita só apiKey na query?
+            let viaQuery = false;
+            try {
+                const r1 = await fetch(xmlUrl(idNfe, v.keys[0], v.token));
+                viaQuery = r1.ok;
+            } catch (e) { viaQuery = false; }
+            let viaHeaders = false;
+            if (!viaQuery) {
+                try {
+                    const r2 = await fetch(xmlUrl(idNfe, v.keys[0], v.token), { headers: xmlHeaders(v.token, v.cnpj) });
+                    viaHeaders = r2.ok;
+                } catch (e) { viaHeaders = false; }
+            }
+            testResult.style.color = 'var(--color-success)';
+            testResult.textContent =
+                '✓ idNfe (protocolo) resolvido: ' + idNfe + '\n' +
+                '✓ XML acessível: ' + ((viaQuery || viaHeaders) ? 'sim' : 'NÃO') + '\n' +
+                'Headers no /xml/: ' + (viaQuery ? 'dispensáveis (apiKey na query basta)' : (viaHeaders ? 'NECESSÁRIOS (query sozinha não bastou)' : 'indefinido — verifique o token')) + '\n' +
+                'Pode rodar o lote.';
+        } catch (err) {
+            testResult.style.color = 'var(--color-danger)';
+            testResult.textContent = '✗ Falhou: ' + (err.kind === 'auth' ? err.message + ' (gere novo token)' : err.message);
+        } finally {
+            setBusy(false);
+        }
+    });
+
+    downloadBtn.addEventListener('click', async () => {
+        const v = validateInputs();
+        if (v.error) { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ ' + v.error; return; }
+        if (typeof JSZip === 'undefined') { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ JSZip não carregado.'; return; }
+
+        setBusy(true);
+        testResult.textContent = '';
+        progressWrap.style.display = 'flex';
+        failWrap.style.display = 'none';
+        failList.value = '';
+        lastFailures = [];
+        progressBar.style.width = '0%';
+        progressBar.style.background = 'var(--color-primary)';
+        const total = v.keys.length;
+        progressText.textContent = '0 / ' + total + ' • sucesso: 0 • erro: 0';
+
+        const state = { aborted: false, abortReason: '' };
+        const zip = new JSZip();
+        let success = 0;
+        let errors = 0;
+
+        const onProgress = (doneCount) => {
+            const pct = Math.round((doneCount / total) * 100);
+            progressBar.style.width = pct + '%';
+            progressText.textContent = doneCount + ' / ' + total + ' • sucesso: ' + success + ' • erro: ' + errors;
+        };
+
+        const worker = async (chave) => {
+            const idNfe = await resolveIdNfe(chave, v.token, v.cnpj);
+            const xml = await fetchXml(idNfe, chave, v.token, v.cnpj);
+            return { chave, xml };
+        };
+
+        const results = await runPool(v.keys, async (chave) => {
+            try {
+                const r = await worker(chave);
+                zip.file(chave + '.xml', r.xml);
+                success++;
+                return r;
+            } catch (err) {
+                errors++;
+                throw err;
+            }
+        }, CONCURRENCY, onProgress, state);
+
+        for (const r of results) {
+            if (r && !r.ok) lastFailures.push({ chave: r.item, motivo: (r.error && r.error.message) || 'erro' });
+        }
+
+        if (state.aborted) {
+            progressBar.style.background = 'var(--color-danger)';
+            progressText.textContent = 'ABORTADO: ' + state.abortReason + ' • baixados antes de abortar: ' + success + ' • restantes não tentados.';
+        } else {
+            progressText.textContent = 'Concluído • sucesso: ' + success + ' • erro: ' + errors + ' de ' + total;
+        }
+
+        if (success > 0) {
+            try {
+                const blob = await zip.generateAsync({ type: 'blob' });
+                const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+                triggerDownload(blob, 'NFCe_XMLs_' + ts + '.zip');
+            } catch (e) {
+                progressText.textContent += ' • Erro ao gerar ZIP: ' + e.message;
+            }
+        }
+
+        if (lastFailures.length) {
+            failWrap.style.display = 'flex';
+            failList.value = lastFailures.map((f) => f.chave + '\t' + f.motivo).join('\n');
+        }
+
+        setBusy(false);
+    });
+
+    refreshKeysCount();
+}
+//---------------------------------- FIM Baixar NFCe ----------------------------------//
 
 // Funções de exportação globais para NFe | NFCe Comparison
 function exportToPDF() {
