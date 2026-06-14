@@ -7779,8 +7779,8 @@ function createBaixarNfcePage(mainContent) {
                         style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical;"></textarea>
                     <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
                         <button id="bn-upload-btn" type="button"
-                            style="padding: 0.5rem 1rem; border: 1px solid var(--color-primary); border-radius: 0.5rem; background: transparent; color: var(--color-primary); cursor: pointer; font-size: 0.85rem;">Carregar arquivo (.txt / SIGA)</button>
-                        <input type="file" id="bn-file" accept=".txt,.csv" multiple style="display: none;">
+                            style="padding: 0.5rem 1rem; border: 1px solid var(--color-primary); border-radius: 0.5rem; background: transparent; color: var(--color-primary); cursor: pointer; font-size: 0.85rem;">Carregar arquivo (.txt / .csv / .xls — SIGA/SIGET)</button>
+                        <input type="file" id="bn-file" accept=".txt,.csv,.xls,.xlsx" multiple style="display: none;">
                         <span id="bn-keys-count" style="font-size: 0.85rem; color: var(--color-info-dark);">0 chaves detectadas</span>
                     </div>
                 </div>
@@ -7923,16 +7923,16 @@ function createBaixarNfcePage(mainContent) {
         return parseFloat(t);
     }
 
-    // Tenta interpretar o texto como relatório SIGA/SIGET (CSV). Varre as primeiras ~25
-    // linhas atrás do header que contenha colunas "chave" E "valor" (SIGET tem preâmbulo
+    // Núcleo: recebe linhas já divididas em células (array de arrays). Varre as primeiras
+    // ~25 linhas atrás do header que contenha colunas "chave" E "valor" (SIGET tem preâmbulo
     // antes do header). Retorna Map<chave,{nNF,dhEmi,vNF}> ou null se não for relatório.
-    function parseReportText(text) {
-        const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim() !== '');
-        if (lines.length < 2) return null;
+    const cellStr = (c) => String(c == null ? '' : c).trim();
+    function parseReportRows(rows) {
+        if (!rows || rows.length < 2) return null;
         let headerIdx = -1, header = null, idxChave = -1, idxValor = -1;
-        const scanLimit = Math.min(lines.length, 25);
+        const scanLimit = Math.min(rows.length, 25);
         for (let h = 0; h < scanLimit; h++) {
-            const cells = parseCsvLineBN(lines[h]).map((c) => c.toLowerCase());
+            const cells = (rows[h] || []).map((c) => cellStr(c).toLowerCase());
             const ic = cells.findIndex((c) => c.includes('chave'));
             const iv = cells.findIndex((c) => c.includes('valor'));
             if (ic !== -1 && iv !== -1) { headerIdx = h; header = cells; idxChave = ic; idxValor = iv; break; }
@@ -7941,16 +7941,41 @@ function createBaixarNfcePage(mainContent) {
         const idxNum = header.findIndex((h) => h.includes('número') || h.includes('numero'));
         const idxData = header.findIndex((h) => h.includes('data') || h.includes('emiss'));
         const map = new Map();
-        for (let i = headerIdx + 1; i < lines.length; i++) {
-            const cols = parseCsvLineBN(lines[i]);
-            const key = cleanDigits(cols[idxChave] || '');
+        for (let i = headerIdx + 1; i < rows.length; i++) {
+            const cols = rows[i] || [];
+            const key = cleanDigits(cellStr(cols[idxChave]));
             if (!/^\d{44}$/.test(key)) continue;
-            const vNF = String(cols[idxValor] || '').trim();
-            const nNF = idxNum !== -1 ? String(cols[idxNum] || '').trim() : '';
-            const dhEmi = idxData !== -1 ? normalizeDate(cols[idxData] || '') : '';
+            const vNF = cellStr(cols[idxValor]);
+            const nNF = idxNum !== -1 ? cellStr(cols[idxNum]) : '';
+            const dhEmi = idxData !== -1 ? normalizeDate(cellStr(cols[idxData])) : '';
             map.set(key, { nNF, dhEmi, vNF });
         }
         return map.size ? map : null;
+    }
+
+    // CSV/texto (SIGA) → linhas de células. Retorna Map ou null.
+    function parseReportText(text) {
+        const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim() !== '');
+        return parseReportRows(lines.map((l) => parseCsvLineBN(l)));
+    }
+
+    // Planilha binária .xls/.xlsx (SIGET) → linhas via SheetJS. raw:false usa o texto
+    // formatado (.w), preservando a chave de 44 díg como texto (evita notação científica).
+    // Retorna { map, text } — text é o dump das células p/ fallback de extração de chaves.
+    function parseReportWorkbook(arrayBuffer) {
+        if (typeof XLSX === 'undefined') return { map: null, text: '' };
+        let wb;
+        try { wb = XLSX.read(arrayBuffer, { type: 'array' }); } catch (e) { return { map: null, text: '' }; }
+        let bestMap = null;
+        let dump = '';
+        for (const name of wb.SheetNames) {
+            const sheet = wb.Sheets[name];
+            if (!sheet) continue;
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+            dump += rows.map((r) => (r || []).join('\t')).join('\n') + '\n';
+            if (!bestMap) { const m = parseReportRows(rows); if (m) bestMap = m; }
+        }
+        return { map: bestMap, text: dump };
     }
 
     // Confere um XML baixado contra os metadados esperados do relatório.
@@ -8152,10 +8177,20 @@ function createBaixarNfcePage(mainContent) {
         let metaAdded = 0;
         for (const f of files) {
             try {
-                const text = await f.text();
-                // Tenta detectar relatório SIGA/SIGET: além de extrair as chaves,
-                // guarda os metadados esperados para conferência posterior.
-                const reportMap = parseReportText(text);
+                // SIGA vem em CSV/texto; SIGET vem em .xls/.xlsx binário (SheetJS).
+                // Em ambos, detecta o relatório, guarda metadados p/ conferência e extrai chaves.
+                const name = (f.name || '').toLowerCase();
+                const isBinary = name.endsWith('.xls') || name.endsWith('.xlsx');
+                let reportMap = null;
+                let fallbackText = '';
+                if (isBinary) {
+                    const parsed = parseReportWorkbook(await f.arrayBuffer());
+                    reportMap = parsed.map;
+                    fallbackText = parsed.text;
+                } else {
+                    fallbackText = await f.text();
+                    reportMap = parseReportText(fallbackText);
+                }
                 if (reportMap) {
                     if (!reportMeta) reportMeta = new Map();
                     const keys = [];
@@ -8163,7 +8198,7 @@ function createBaixarNfcePage(mainContent) {
                     appended += appendKeysToTextarea(keys);
                     metaAdded += keys.length;
                 } else {
-                    appended += appendKeysToTextarea(parseKeys(text));
+                    appended += appendKeysToTextarea(parseKeys(fallbackText));
                 }
             } catch (e) {
                 console.warn('Falha ao ler ' + f.name + ': ' + e.message);
