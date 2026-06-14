@@ -6751,18 +6751,18 @@ function createNfeCfeComparisonPage(mainContent) {
         <h1>NFe | NFCe Comparison</h1>
         <div class="nfe-cfe-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
             <div class="box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center;" id="siget-box">
-                <span class="box-label" id="siget-label">Siget</span>
+                <span class="box-label" id="siget-label">SIGA</span>
                 <svg id="siget-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
                     <path d="M20 6L9 17L4 12" stroke="#00ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
-                <input type="file" id="siget-file-input" accept=".txt,.csv,.xls,.xlsx,.xml" multiple style="display: none;">
+                <input type="file" id="siget-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple style="display: none;">
             </div>
             <div class="box animate-section" style="animation-delay: 0.1s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center;" id="fortes-box">
                 <span class="box-label" id="fortes-label">Fortes</span>
                 <svg id="fortes-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
                     <path d="M20 6L9 17L4 12" stroke="#00ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
-                <input type="file" id="fortes-file-input" accept=".txt,.csv,.xls,.xlsx,.xml" multiple style="display: none;">
+                <input type="file" id="fortes-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple style="display: none;">
             </div>
         </div>
     `;
@@ -6786,22 +6786,22 @@ function createNfeCfeComparisonPage(mainContent) {
         }
     };
 
-    // Configurar SIGET
+    // Configurar SIGA
     sigetBox.addEventListener('dragover', (e) => {
         e.preventDefault();
         sigetBox.classList.add('dragover');
-        console.log('Dragover em SIGET');
+        console.log('Dragover em SIGA');
     });
 
     sigetBox.addEventListener('dragleave', () => {
         sigetBox.classList.remove('dragover');
-        console.log('Dragleave em SIGET');
+        console.log('Dragleave em SIGA');
     });
 
     sigetBox.addEventListener('drop', (e) => {
         e.preventDefault();
         sigetBox.classList.remove('dragover');
-        console.log('Drop em SIGET');
+        console.log('Drop em SIGA');
         const files = e.dataTransfer.files;
         processFiles(files, sigetLabel, sigetCheck, sigetData, () => {
             sigetLoaded = true;
@@ -6810,12 +6810,12 @@ function createNfeCfeComparisonPage(mainContent) {
     });
 
     sigetBox.addEventListener('click', () => {
-        console.log('Clique em SIGET box');
+        console.log('Clique em SIGA box');
         sigetFileInput.click();
     });
 
     sigetFileInput.addEventListener('change', () => {
-        console.log('Arquivos selecionados via input em SIGET');
+        console.log('Arquivos selecionados via input em SIGA');
         processFiles(sigetFileInput.files, sigetLabel, sigetCheck, sigetData, () => {
             sigetLoaded = true;
             checkBothLoaded();
@@ -7314,6 +7314,110 @@ function createNfeCfeComparisonPage(mainContent) {
         });
     }
 
+    // Helper compartilhado por PDF/HTML/RTF: varre um texto livre, extrai cada
+    // chave de 44 dígitos e busca o valor monetário mais próximo nos 200 chars
+    // seguintes. Os formatos FORTES (pdf/html/rtf) não têm colunas estruturadas,
+    // então a chave é a âncora e o valor é o R$ que aparece logo após.
+    function extractKeysFromFreeText(text, dataArray) {
+        if (!text) return 0;
+        const moneyRegex = /R\$\s*([\d.]+,\d{2})|(\d{1,3}(?:\.\d{3})*,\d{2})/;
+        const keyRegex = /\d{44}/g;
+        let count = 0;
+        let match;
+        while ((match = keyRegex.exec(text)) !== null) {
+            const key = match[0];
+            const after = text.slice(match.index + 44, match.index + 44 + 200);
+            const moneyMatch = after.match(moneyRegex);
+            const rawValue = moneyMatch ? (moneyMatch[1] || moneyMatch[2]) : '';
+            const value = formatSpreadsheetOrTextValue(rawValue) || '0,00';
+            dataArray.push({ key, value, type: 'NFe', numeroNf: '', dhEmi: '', cnpj: '' });
+            count++;
+        }
+        return count;
+    }
+
+    function processPdf(file, dataArray) {
+        return new Promise((resolve) => {
+            if (!window.pdfjsLib) {
+                console.warn(`pdf.js não carregado; PDF ignorado: ${file.name}`);
+                resolve(false);
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const pdf = await pdfjsLib.getDocument({ data: e.target.result }).promise;
+                    let fullText = '';
+                    for (let p = 1; p <= pdf.numPages; p++) {
+                        const page = await pdf.getPage(p);
+                        const content = await page.getTextContent();
+                        fullText += ' ' + content.items.map(i => i.str).join(' ');
+                    }
+                    const count = extractKeysFromFreeText(fullText, dataArray);
+                    console.log(`✅ PDF processado: ${count} chaves (${file.name})`);
+                    resolve(true);
+                } catch (err) {
+                    console.warn(`Erro ao processar PDF ${file.name}: ${err.message}`);
+                    resolve(false);
+                }
+            };
+            reader.onerror = () => resolve(false);
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    function processHtml(file, dataArray) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const raw = e.target.result || '';
+                    let text = raw;
+                    try {
+                        const doc = new DOMParser().parseFromString(raw, 'text/html');
+                        text = (doc.body && (doc.body.innerText || doc.body.textContent)) || raw;
+                    } catch (parseErr) {
+                        // Fallback: DOMParser falhou, usa o texto bruto direto
+                        text = raw;
+                    }
+                    const count = extractKeysFromFreeText(text, dataArray);
+                    console.log(`✅ HTML processado: ${count} chaves (${file.name})`);
+                    resolve(true);
+                } catch (err) {
+                    console.warn(`Erro ao processar HTML ${file.name}: ${err.message}`);
+                    resolve(false);
+                }
+            };
+            reader.onerror = () => resolve(false);
+            reader.readAsText(file);
+        });
+    }
+
+    function processRtf(file, dataArray) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const raw = e.target.result || '';
+                    // Remove escapes \'XX e grupos de controle RTF, mantendo o texto.
+                    const text = raw
+                        .replace(/\\'[0-9a-fA-F]{2}/g, ' ')
+                        .replace(/\\\w+[-]?[\d]*/g, '')
+                        .replace(/[{}]/g, '')
+                        .replace(/\\\\/g, '\\');
+                    const count = extractKeysFromFreeText(text, dataArray);
+                    console.log(`✅ RTF processado: ${count} chaves (${file.name})`);
+                    resolve(true);
+                } catch (err) {
+                    console.warn(`Erro ao processar RTF ${file.name}: ${err.message}`);
+                    resolve(false);
+                }
+            };
+            reader.onerror = () => resolve(false);
+            reader.readAsText(file, 'windows-1252');
+        });
+    }
+
     function processFiles(files, label, checkSvg, dataArray, callback) {
         if (!files || files.length === 0) {
             console.warn('Nenhum arquivo selecionado');
@@ -7345,8 +7449,17 @@ function createNfeCfeComparisonPage(mainContent) {
                 } else {
                     promises.push(processSpreadsheet(file, dataArray, label, checkSvg));
                 }
+            } else if (file.name.match(/\.pdf$/i)) {
+                console.log(`📄 Processando PDF: ${file.name}`);
+                promises.push(processPdf(file, dataArray));
+            } else if (file.name.match(/\.html?$/i)) {
+                console.log(`🌐 Processando HTML: ${file.name}`);
+                promises.push(processHtml(file, dataArray));
+            } else if (file.name.match(/\.rtf$/i)) {
+                console.log(`📝 Processando RTF: ${file.name}`);
+                promises.push(processRtf(file, dataArray));
             } else {
-                console.warn(`Arquivo ignorado (não é XML, TXT, CSV ou planilha): ${file.name}`);
+                console.warn(`Arquivo ignorado (não é XML, TXT, CSV, planilha, PDF, HTML ou RTF): ${file.name}`);
             }
         }
         Promise.all(promises).then(() => {
@@ -7424,14 +7537,14 @@ function createNfeCfeComparisonPage(mainContent) {
                 <div id="quantidades-tab" class="tab-content">
                     <div class="column">
                         <h4 class="siget-title">
-                            Notas presentes no Siget e ausentes no Fortes
+                            Notas presentes no SIGA e ausentes no Fortes
                             <span class="column-count" id="siget-count">(0)</span>
                         </h4>
                         <ul id="siget-only-list"></ul>
                     </div>
                     <div class="column">
                         <h4 class="fortes-title">
-                            Notas presentes no Fortes e ausentes no Siget
+                            Notas presentes no Fortes e ausentes no SIGA
                             <span class="column-count" id="fortes-count">(0)</span>
                         </h4>
                         <ul id="fortes-only-list"></ul>
@@ -7509,14 +7622,14 @@ function createNfeCfeComparisonPage(mainContent) {
             quantidadesTab.innerHTML = `
                 <div class="column">
                     <h4 class="siget-title">
-                        Notas presentes no Siget e ausentes no Fortes
+                        Notas presentes no SIGA e ausentes no Fortes
                         <span class="column-count" id="siget-count">(0)</span>
                     </h4>
                     <ul id="siget-only-list"></ul>
                 </div>
                 <div class="column">
                     <h4 class="fortes-title">
-                        Notas presentes no Fortes e ausentes no Siget
+                        Notas presentes no Fortes e ausentes no SIGA
                         <span class="column-count" id="fortes-count">(0)</span>
                     </h4>
                     <ul id="fortes-only-list"></ul>
@@ -7573,7 +7686,7 @@ function createNfeCfeComparisonPage(mainContent) {
                             <tr>
                                 <th>Chave</th>
                                 <th>Valor do Fortes</th>
-                                <th>Valor do Siget</th>
+                                <th>Valor do SIGA</th>
                                 <th>Diferença</th>
                             </tr>
                         </thead>
@@ -7670,8 +7783,8 @@ function exportToPDF() {
                 
                 // Títulos das colunas
                 doc.setFontSize(11);
-                doc.setTextColor(0, 100, 0); // Verde para SIGET
-                doc.text('SIGET:', sigetX, yPosition);
+                doc.setTextColor(0, 100, 0); // Verde para SIGA
+                doc.text('SIGA:', sigetX, yPosition);
                 doc.setTextColor(139, 0, 0); // Vermelho para FORTES
                 doc.text('FORTES:', fortesX, yPosition);
                 yPosition += 10;
@@ -7852,7 +7965,7 @@ function exportToXLSX() {
                 const sigetList = quantidadesTab.querySelector('#siget-only-list');
                 const fortesList = quantidadesTab.querySelector('#fortes-only-list');
                 
-                quantidadesData.push(['SIGET - Chaves Exclusivas', 'FORTES - Chaves Exclusivas']);
+                quantidadesData.push(['SIGA - Chaves Exclusivas', 'FORTES - Chaves Exclusivas']);
                 
                 if (sigetList && fortesList) {
                     const sigetItems = Array.from(sigetList.querySelectorAll('li')).map(li => li.textContent);
