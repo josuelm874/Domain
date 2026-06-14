@@ -7278,19 +7278,32 @@ function createNfeCfeComparisonPage(mainContent) {
                     const lines = String(e.target.result).split(/\r?\n/).filter(l => l.trim() !== '');
                     if (lines.length < 2) { resolve(false); return; }
 
-                    const header = parseCsvLine(lines[0]).map(h => h.toLowerCase());
-                    const idxChave = header.findIndex(h => h.includes('chave'));
-                    const idxValor = header.findIndex(h => h.includes('valor'));
-                    // Assinatura do SIGA: precisa ter colunas "Chave NF-e" e "Valor".
-                    if (idxChave === -1 || idxValor === -1) { resolve(false); return; }
+                    // O cabeçalho nem sempre está na 1ª linha. O layout SIGA novo (SEFAZ)
+                    // tem header na linha 0, mas o layout SIGET (DEP PLANALTO/CONSTRULOPES)
+                    // traz linhas de preâmbulo (empresa, CGF, ano) antes — o header real
+                    // só aparece mais abaixo. Varremos as primeiras linhas atrás da que
+                    // tenha colunas "Chave" E "Valor".
+                    let headerIdx = -1, header = null, idxChave = -1, idxValor = -1;
+                    const scanLimit = Math.min(lines.length, 25);
+                    for (let h = 0; h < scanLimit; h++) {
+                        const cells = parseCsvLine(lines[h]).map(c => c.toLowerCase());
+                        const ic = cells.findIndex(c => c.includes('chave'));
+                        const iv = cells.findIndex(c => c.includes('valor'));
+                        if (ic !== -1 && iv !== -1) {
+                            headerIdx = h; header = cells; idxChave = ic; idxValor = iv;
+                            break;
+                        }
+                    }
+                    // Assinatura do SIGA/SIGET: precisa ter colunas "Chave" e "Valor".
+                    if (headerIdx === -1) { resolve(false); return; }
 
                     const idxCnpj = header.findIndex(h => h.includes('cnpj'));
                     const idxNum = header.findIndex(h => h.includes('número') || h.includes('numero'));
                     const idxData = header.findIndex(h => h.includes('data') || h.includes('emiss'));
-                    const idxStatus = header.findIndex(h => h.includes('indicador'));
+                    const idxStatus = header.findIndex(h => h.includes('indicador') || h.includes('situa'));
 
                     let count = 0;
-                    for (let i = 1; i < lines.length; i++) {
+                    for (let i = headerIdx + 1; i < lines.length; i++) {
                         const cols = parseCsvLine(lines[i]);
                         const key = cleanKey(cols[idxChave] || '');
                         if (!/^\d{44}$/.test(key)) continue;
