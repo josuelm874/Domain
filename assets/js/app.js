@@ -7321,12 +7321,18 @@ function createNfeCfeComparisonPage(mainContent) {
     function extractKeysFromFreeText(text, dataArray) {
         if (!text) return 0;
         const moneyRegex = /R\$\s*([\d.]+,\d{2})|(\d{1,3}(?:\.\d{3})*,\d{2})/;
-        const keyRegex = /\d{44}/g;
+        // O FORTES imprime a chave formatada com separadores, ex.:
+        //   23-2601-12.370.169/0001-12-65-801-000.020.500-155.219.544-9
+        // Capturamos corridas de digitos+separadores (-, ., /) e validamos 44 digitos
+        // apos a limpeza. Tambem casa a chave "crua" de 44 digitos seguidos.
+        const candidateRegex = /\d[\d.\-\/]{38,}\d/g;
         let count = 0;
         let match;
-        while ((match = keyRegex.exec(text)) !== null) {
-            const key = match[0];
-            const after = text.slice(match.index + 44, match.index + 44 + 200);
+        while ((match = candidateRegex.exec(text)) !== null) {
+            const key = match[0].replace(/\D/g, '');
+            if (key.length !== 44) continue;
+            const afterStart = match.index + match[0].length;
+            const after = text.slice(afterStart, afterStart + 200);
             const moneyMatch = after.match(moneyRegex);
             const rawValue = moneyMatch ? (moneyMatch[1] || moneyMatch[2]) : '';
             const value = formatSpreadsheetOrTextValue(rawValue) || '0,00';
