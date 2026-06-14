@@ -6910,8 +6910,15 @@ function createNfeCfeComparisonPage(mainContent) {
 
     function formatFileDate(dateStr) {
         if (!dateStr) return '';
-        const [day, month, year] = dateStr.split('/');
-        return `${year}-${month}-${day}`;
+        const s = String(dateStr).trim();
+        // DD/MM/AAAA (aceita hora após a data, ex.: "15/03/2024 10:30")
+        const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+        if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+        // AAAA-MM-DD (ISO) — já no formato alvo
+        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+        // Formato desconhecido: não fabrica "undefined-undefined-..."
+        return '';
     }
 
     function processTextFile(file, dataArray) {
@@ -7019,7 +7026,7 @@ function createNfeCfeComparisonPage(mainContent) {
                     let emit = xml.querySelector('nfeProc > NFe > infNFe > emit');
                     if (elem && elem.textContent && valueElem && valueElem.textContent && ide && emit) {
                         key = elem.textContent.trim();
-                        numeroNf = ide.getElementsByTagNameNS(nfeNamespace, 'cNF')[0]?.textContent.trim() || '';
+                        numeroNf = ide.getElementsByTagNameNS(nfeNamespace, 'nNF')[0]?.textContent.trim() || '';
                         dhEmi = ide.getElementsByTagNameNS(nfeNamespace, 'dhEmi')[0]?.textContent.trim().slice(0, 10) || '';
                         cnpj = emit.getElementsByTagNameNS(nfeNamespace, 'CNPJ')[0]?.textContent.trim() || '';
                         value = valueElem.textContent.trim();
@@ -7175,7 +7182,7 @@ function createNfeCfeComparisonPage(mainContent) {
                                             const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
                                             const cell = sheet[cellAddress];
                                             if (cell) {
-                                                const rawKey = String(cell.v).trim();
+                                                const rawKey = String(cell.w || cell.v).trim();
                                                 const cleanedKey = cleanKey(rawKey);
                                                 if (/^\d{44}$/.test(cleanedKey)) {
                                                     keyFound = true;
