@@ -7809,6 +7809,15 @@ function createBaixarNfcePage(mainContent) {
                     <textarea id="bn-fail-list" rows="6" readonly
                         style="padding: 0.6rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.78rem; resize: vertical;"></textarea>
                 </div>
+                <div id="bn-conf-wrap" style="display: none; flex-direction: column; gap: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;">
+                        <span id="bn-conf-summary" style="font-weight: 600; color: var(--color-dark);">Conferência</span>
+                        <button id="bn-copy-conf" type="button"
+                            style="padding: 0.35rem 0.8rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); cursor: pointer; font-size: 0.8rem;">Copiar divergências</button>
+                    </div>
+                    <textarea id="bn-conf-list" rows="7" readonly
+                        style="padding: 0.6rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.78rem; resize: vertical;"></textarea>
+                </div>
             </div>
         </div>
     `;
@@ -7828,8 +7837,16 @@ function createBaixarNfcePage(mainContent) {
     const failWrap = document.getElementById('bn-fail-wrap');
     const failList = document.getElementById('bn-fail-list');
     const copyFailsBtn = document.getElementById('bn-copy-fails');
+    const confWrap = document.getElementById('bn-conf-wrap');
+    const confSummary = document.getElementById('bn-conf-summary');
+    const confList = document.getElementById('bn-conf-list');
+    const copyConfBtn = document.getElementById('bn-copy-conf');
 
     let lastFailures = [];
+    // Metadados esperados por chave, vindos de um relatório SIGA/SIGET carregado.
+    // Map<chave(44díg), { nNF, dhEmi:YYYY-MM-DD, vNF (string crua do relatório) }>.
+    // Null/vazio = modo simples (só chaves, sem conferência).
+    let reportMeta = null;
 
     // ---------- helpers ----------
     const cleanDigits = (s) => String(s || '').replace(/\D/g, '');
@@ -7865,6 +7882,111 @@ function createBaixarNfcePage(mainContent) {
             out.push(k);
         }
         return out;
+    }
+
+    // ---------- relatório SIGA/SIGET (parser isolado — NÃO mexe na aba de comparação) ----------
+    // Parser de uma linha CSV respeitando aspas. Réplica local de parseCsvLine.
+    function parseCsvLineBN(line) {
+        const out = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+                else cur += ch;
+            } else {
+                if (ch === '"') inQuotes = true;
+                else if (ch === ',') { out.push(cur); cur = ''; }
+                else cur += ch;
+            }
+        }
+        out.push(cur);
+        return out.map((s) => s.trim());
+    }
+
+    // Normaliza data para YYYY-MM-DD. Aceita ISO (2026-01-24T...), DD/MM/AAAA e DD-MM-AAAA.
+    function normalizeDate(s) {
+        const t = String(s || '').trim();
+        let m = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return m[1] + '-' + m[2] + '-' + m[3];
+        m = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1];
+        m = t.match(/(\d{2})-(\d{2})-(\d{4})/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1];
+        return t.slice(0, 10);
+    }
+
+    // Valor BR ("1.234,56" / "46,30") → Number. Remove milhares e troca vírgula por ponto.
+    function parseBrlValue(s) {
+        let t = String(s || '').replace(/[^\d.,-]/g, '');
+        if (t.indexOf(',') !== -1) t = t.replace(/\./g, '').replace(',', '.');
+        return parseFloat(t);
+    }
+
+    // Tenta interpretar o texto como relatório SIGA/SIGET (CSV). Varre as primeiras ~25
+    // linhas atrás do header que contenha colunas "chave" E "valor" (SIGET tem preâmbulo
+    // antes do header). Retorna Map<chave,{nNF,dhEmi,vNF}> ou null se não for relatório.
+    function parseReportText(text) {
+        const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim() !== '');
+        if (lines.length < 2) return null;
+        let headerIdx = -1, header = null, idxChave = -1, idxValor = -1;
+        const scanLimit = Math.min(lines.length, 25);
+        for (let h = 0; h < scanLimit; h++) {
+            const cells = parseCsvLineBN(lines[h]).map((c) => c.toLowerCase());
+            const ic = cells.findIndex((c) => c.includes('chave'));
+            const iv = cells.findIndex((c) => c.includes('valor'));
+            if (ic !== -1 && iv !== -1) { headerIdx = h; header = cells; idxChave = ic; idxValor = iv; break; }
+        }
+        if (headerIdx === -1) return null;
+        const idxNum = header.findIndex((h) => h.includes('número') || h.includes('numero'));
+        const idxData = header.findIndex((h) => h.includes('data') || h.includes('emiss'));
+        const map = new Map();
+        for (let i = headerIdx + 1; i < lines.length; i++) {
+            const cols = parseCsvLineBN(lines[i]);
+            const key = cleanDigits(cols[idxChave] || '');
+            if (!/^\d{44}$/.test(key)) continue;
+            const vNF = String(cols[idxValor] || '').trim();
+            const nNF = idxNum !== -1 ? String(cols[idxNum] || '').trim() : '';
+            const dhEmi = idxData !== -1 ? normalizeDate(cols[idxData] || '') : '';
+            map.set(key, { nNF, dhEmi, vNF });
+        }
+        return map.size ? map : null;
+    }
+
+    // Confere um XML baixado contra os metadados esperados do relatório.
+    // Retorna lista de divergências [{ campo, esperado, obtido }] (vazia = OK).
+    function conferirXml(chave, xml) {
+        const exp = reportMeta.get(chave);
+        const diffs = [];
+        // nNF — comparar como inteiro (remove zeros à esquerda)
+        if (exp.nNF) {
+            const mN = xml.match(/<nNF>(\d+)<\/nNF>/);
+            const xmlN = mN ? mN[1] : '';
+            const e = parseInt(String(exp.nNF).replace(/\D/g, ''), 10);
+            const g = xmlN ? parseInt(xmlN, 10) : NaN;
+            if (!Number.isNaN(e) && (Number.isNaN(g) || e !== g)) {
+                diffs.push({ campo: 'nNF', esperado: String(exp.nNF), obtido: xmlN || '(ausente)' });
+            }
+        }
+        // dhEmi — normalizar ambos para YYYY-MM-DD
+        if (exp.dhEmi) {
+            const mD = xml.match(/<dhEmi>([^<]+)<\/dhEmi>/);
+            const xmlD = mD ? normalizeDate(mD[1].slice(0, 10)) : '';
+            if (!xmlD || xmlD !== normalizeDate(exp.dhEmi)) {
+                diffs.push({ campo: 'data', esperado: exp.dhEmi, obtido: (mD ? xmlD : '') || '(ausente)' });
+            }
+        }
+        // vNF — relatório em vírgula BR, XML em ponto; tolerância 0.01
+        if (exp.vNF) {
+            const mV = xml.match(/<vNF>([\d.]+)<\/vNF>/);
+            const xmlV = mV ? mV[1] : '';
+            const e = parseBrlValue(exp.vNF);
+            const g = xmlV ? parseFloat(xmlV) : NaN;
+            if (Number.isNaN(g) || Number.isNaN(e) || Math.abs(e - g) > 0.01) {
+                diffs.push({ campo: 'valor', esperado: exp.vNF, obtido: xmlV || '(ausente)' });
+            }
+        }
+        return diffs;
     }
 
     function base64UrlDecode(str) {
@@ -7911,7 +8033,9 @@ function createBaixarNfcePage(mainContent) {
 
     function refreshKeysCount() {
         const n = parseKeys(keysInput.value).length;
-        keysCount.textContent = n + (n === 1 ? ' chave detectada' : ' chaves detectadas');
+        let txt = n + (n === 1 ? ' chave detectada' : ' chaves detectadas');
+        if (reportMeta && reportMeta.size) txt += ' • ' + reportMeta.size + ' com metadados (relatório)';
+        keysCount.textContent = txt;
     }
 
     function jsonHeaders(token, cnpj) {
@@ -8015,24 +8139,38 @@ function createBaixarNfcePage(mainContent) {
     // ---------- ações de UI ----------
     uploadBtn.addEventListener('click', () => fileInput.click());
 
+    function appendKeysToTextarea(keys) {
+        if (!keys.length) return 0;
+        keysInput.value += (keysInput.value && !keysInput.value.endsWith('\n') ? '\n' : '') + keys.join('\n');
+        return keys.length;
+    }
+
     fileInput.addEventListener('change', async () => {
         const files = Array.from(fileInput.files || []);
         if (!files.length) return;
         let appended = 0;
+        let metaAdded = 0;
         for (const f of files) {
             try {
                 const text = await f.text();
-                const found = parseKeys(text);
-                if (found.length) {
-                    keysInput.value += (keysInput.value && !keysInput.value.endsWith('\n') ? '\n' : '') + found.join('\n');
-                    appended += found.length;
+                // Tenta detectar relatório SIGA/SIGET: além de extrair as chaves,
+                // guarda os metadados esperados para conferência posterior.
+                const reportMap = parseReportText(text);
+                if (reportMap) {
+                    if (!reportMeta) reportMeta = new Map();
+                    const keys = [];
+                    reportMap.forEach((meta, key) => { reportMeta.set(key, meta); keys.push(key); });
+                    appended += appendKeysToTextarea(keys);
+                    metaAdded += keys.length;
+                } else {
+                    appended += appendKeysToTextarea(parseKeys(text));
                 }
             } catch (e) {
                 console.warn('Falha ao ler ' + f.name + ': ' + e.message);
             }
         }
         refreshKeysCount();
-        console.log('Arquivos carregados: +' + appended + ' chaves');
+        console.log('Arquivos carregados: +' + appended + ' chaves' + (metaAdded ? ' (' + metaAdded + ' com metadados de relatório)' : ''));
         fileInput.value = '';
     });
 
@@ -8045,6 +8183,14 @@ function createBaixarNfcePage(mainContent) {
         navigator.clipboard.writeText(txt).then(
             () => { copyFailsBtn.textContent = 'Copiado!'; setTimeout(() => { copyFailsBtn.textContent = 'Copiar chaves'; }, 1500); },
             () => { failList.select(); }
+        );
+    });
+
+    copyConfBtn.addEventListener('click', () => {
+        if (!confList.value) return;
+        navigator.clipboard.writeText(confList.value).then(
+            () => { copyConfBtn.textContent = 'Copiado!'; setTimeout(() => { copyConfBtn.textContent = 'Copiar divergências'; }, 1500); },
+            () => { confList.select(); }
         );
     });
 
@@ -8093,6 +8239,8 @@ function createBaixarNfcePage(mainContent) {
         progressWrap.style.display = 'flex';
         failWrap.style.display = 'none';
         failList.value = '';
+        confWrap.style.display = 'none';
+        confList.value = '';
         lastFailures = [];
         progressBar.style.width = '0%';
         progressBar.style.background = 'var(--color-primary)';
@@ -8103,6 +8251,10 @@ function createBaixarNfcePage(mainContent) {
         const zip = new JSZip();
         let success = 0;
         let errors = 0;
+        // Conferência contra relatório (só ativa se houve relatório carregado)
+        const hasReport = !!(reportMeta && reportMeta.size);
+        const confResults = [];
+        let confChecked = 0, confOk = 0, confDiverg = 0;
 
         const onProgress = (doneCount) => {
             const pct = Math.round((doneCount / total) * 100);
@@ -8113,6 +8265,15 @@ function createBaixarNfcePage(mainContent) {
         const worker = async (chave) => {
             const idNfe = await resolveIdNfe(chave, v.token, v.cnpj);
             const xml = await fetchXml(idNfe, chave, v.token, v.cnpj);
+            // Salvaguarda: a chave interna do XML tem que bater com a chave pedida.
+            // Protege contra duplicata silenciosa (2 chaves resolvendo p/ o mesmo idNfe).
+            let innerKey = '';
+            let mk = xml.match(/Id="NFe(\d{44})"/);
+            if (!mk) mk = xml.match(/<chNFe>(\d{44})<\/chNFe>/);
+            if (mk) innerKey = mk[1];
+            if (innerKey && innerKey !== chave) {
+                throw makeErr('mismatch', 'XML retornou chave ' + innerKey + ', esperado ' + chave);
+            }
             return { chave, xml };
         };
 
@@ -8121,6 +8282,14 @@ function createBaixarNfcePage(mainContent) {
                 const r = await worker(chave);
                 zip.file(chave + '.xml', r.xml);
                 success++;
+                // Conferência: divergência NÃO é erro de download — XML válido vai pro ZIP,
+                // só entra no relatório de conferência (pode indicar erro no próprio SIGA).
+                if (hasReport && reportMeta.has(chave)) {
+                    confChecked++;
+                    const diffs = conferirXml(chave, r.xml);
+                    if (diffs.length) { confDiverg++; confResults.push({ chave, diffs }); }
+                    else confOk++;
+                }
                 return r;
             } catch (err) {
                 errors++;
@@ -8152,6 +8321,21 @@ function createBaixarNfcePage(mainContent) {
         if (lastFailures.length) {
             failWrap.style.display = 'flex';
             failList.value = lastFailures.map((f) => f.chave + '\t' + f.motivo).join('\n');
+        }
+
+        if (hasReport) {
+            confWrap.style.display = 'flex';
+            confSummary.textContent = 'Conferência: ' + confChecked + ' conferidos • ' + confOk + ' OK • ' + confDiverg + ' divergentes';
+            confSummary.style.color = confDiverg ? 'var(--color-danger)' : 'var(--color-success)';
+            if (confResults.length) {
+                confList.value = confResults.map((c) =>
+                    c.chave + '\n' + c.diffs.map((d) => '  • ' + d.campo + ': esperado ' + d.esperado + ' | obtido ' + d.obtido).join('\n')
+                ).join('\n\n');
+            } else {
+                confList.value = confChecked
+                    ? 'Sem divergências. Todos os ' + confOk + ' XMLs conferidos batem com o relatório.'
+                    : 'Nenhuma das chaves baixadas estava no relatório carregado.';
+            }
         }
 
         setBusy(false);
