@@ -7771,95 +7771,134 @@ function createBaixarNfcePage(mainContent) {
     console.log('createBaixarNfcePage chamado');
 
     const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
-    const CONCURRENCY = 8;
+    const CONCURRENCY = 10; // requisições de chave simultâneas no pool global (configurável)
     const MAX_RETRIES = 3;
 
     mainContent.innerHTML = `
         <h1>Baixar NFCe</h1>
-        <div style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 900px; margin: 0 auto; padding: 1.5rem;">
-            <div class="box animate-section" style="animation-delay: 0s; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column; gap: 1.2rem;">
-
-                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                    <label style="font-weight: 600; color: var(--color-dark);">Token JWT ou URL de download <span style="font-weight: 400; color: var(--color-info-dark);">(cole o token, ou a URL completa do /xml/ com apiKey=)</span></label>
-                    <textarea id="bn-token" rows="3" placeholder="Cole o token JWT (vale 24h), ou uma URL de download contendo apiKey=... — o CNPJ sai do próprio token"
-                        style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical; word-break: break-all;"></textarea>
-                    <div id="bn-jwt-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
-                </div>
-
-                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                    <label style="font-weight: 600; color: var(--color-dark);">Chaves de acesso <span style="font-weight: 400; color: var(--color-info-dark);">(44 dígitos, uma por linha)</span></label>
-                    <textarea id="bn-keys" rows="8" placeholder="Cole as chaves ou carregue o relatório SIGA/.txt abaixo"
-                        style="padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical;"></textarea>
-                    <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
-                        <button id="bn-upload-btn" type="button"
-                            style="padding: 0.5rem 1rem; border: 1px solid var(--color-primary); border-radius: 0.5rem; background: transparent; color: var(--color-primary); cursor: pointer; font-size: 0.85rem;">Carregar arquivo (.txt / .csv / .xls — SIGA/SIGET)</button>
-                        <input type="file" id="bn-file" accept=".txt,.csv,.xls,.xlsx" multiple style="display: none;">
-                        <span id="bn-keys-count" style="font-size: 0.85rem; color: var(--color-info-dark);">0 chaves detectadas</span>
+        <style>
+            .bn-shell { max-width: 920px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.4rem; }
+            .bn-dropzone { position: relative; min-height: 240px; border: 2px dashed var(--color-info-dark); border-radius: var(--card-border-radius); background: var(--color-white); box-shadow: var(--box-shadow); padding: 1.2rem; cursor: pointer; transition: border-color .2s ease, background .2s ease; display: flex; }
+            .bn-dropzone:hover, .bn-dropzone.bn-dragover { border-color: var(--color-primary); background: rgba(115,128,243,0.05); }
+            .bn-dropzone.has-reports { cursor: default; }
+            .bn-dz-empty { margin: auto; text-align: center; color: var(--color-info-dark); display: flex; flex-direction: column; align-items: center; gap: 0.6rem; pointer-events: none; }
+            .bn-dz-empty .material-icons-sharp { font-size: 3rem; opacity: 0.7; }
+            .bn-report-grid { display: grid; gap: 0.9rem; width: 100%; grid-auto-rows: 1fr; }
+            .bn-report-card { background: rgba(115,128,243,0.07); border: 1px solid rgba(115,128,243,0.35); border-radius: 0.8rem; padding: 1rem; display: flex; flex-direction: column; justify-content: center; gap: 0.45rem; min-height: 92px; animation: bnPop .28s cubic-bezier(0.16,1,0.3,1); transition: transform .35s cubic-bezier(0.16,1,0.3,1), opacity .35s ease; }
+            .bn-report-card .bn-rc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
+            .bn-report-card .bn-rc-count { font-size: 0.82rem; color: var(--color-primary); font-weight: 600; }
+            .bn-report-card .bn-rc-emp { font-size: 0.74rem; color: var(--color-info-dark); }
+            .bn-report-card.bn-merge { transform: scale(0.6); opacity: 0; }
+            @keyframes bnPop { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+            .bn-token-row { display: flex; align-items: center; gap: 0.5rem; }
+            .bn-token-row label { font-weight: 600; color: var(--color-dark); }
+            .bn-info { width: 1.15rem; height: 1.15rem; border-radius: 50%; border: 1px solid var(--color-info-dark); color: var(--color-info-dark); font-size: 0.78rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; cursor: help; position: relative; }
+            .bn-info::after { content: attr(data-tip); position: absolute; bottom: 140%; left: 50%; transform: translateX(-50%); background: #1f2330; color: #e7e9ee; font-size: 0.72rem; font-weight: 400; line-height: 1.3; padding: 0.45rem 0.6rem; border-radius: 0.45rem; border: 1px solid rgba(255,255,255,0.12); width: 220px; text-align: center; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 20; }
+            .bn-info:hover::after { opacity: 1; }
+            #bn-token { width: 100%; padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical; word-break: break-all; }
+            #bn-jwt-status { font-size: 0.85rem; min-height: 1.1rem; }
+            .bn-start-btn { padding: 0.8rem 1.6rem; border: none; border-radius: 0.6rem; background: var(--color-success); color: #fff; cursor: pointer; font-weight: 700; font-size: 0.95rem; align-self: flex-start; transition: opacity .2s ease, transform .1s ease; }
+            .bn-start-btn:disabled { opacity: 0.5; cursor: default; }
+            .bn-start-btn:not(:disabled):active { transform: translateY(1px); }
+            #bn-stage-download { animation: bnFadeIn .45s ease; }
+            @keyframes bnFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+            .bn-unified { position: relative; background: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: 1.4rem 1.4rem 0.9rem; display: flex; flex-direction: column; gap: 1rem; min-height: 300px; }
+            .bn-rings { display: grid; gap: 1.1rem; justify-items: center; align-items: center; flex: 1; }
+            .bn-ring { position: relative; width: 100%; max-width: 220px; aspect-ratio: 1 / 1; container-type: inline-size; }
+            .bn-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            .bn-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
+            .bn-ring .bn-track { stroke: rgba(125,141,161,0.20); }
+            .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .25s ease; }
+            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .25s ease; }
+            .bn-ring.done .bn-arc-yellow { stroke: #2bb673; }
+            .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.1rem; }
+            .bn-ring-pct { font-weight: 700; color: var(--color-dark); font-size: clamp(0.95rem, 18cqw, 1.7rem); }
+            .bn-ring-name { font-size: 0.72rem; color: var(--color-info-dark); text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .bn-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid rgba(125,141,161,0.18); padding-top: 0.7rem; }
+            .bn-footer-text { font-size: 0.85rem; color: var(--color-dark); font-weight: 600; }
+            .bn-footer-text .bn-err { color: var(--color-danger); }
+            .bn-mini-ring { position: relative; width: 34px; height: 34px; flex: 0 0 auto; }
+            .bn-mini-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            .bn-mini-ring circle { fill: none; stroke-width: 5; stroke-linecap: round; }
+            .bn-add { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--color-primary); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.18); z-index: 5; display: flex; align-items: center; justify-content: center; transition: transform .12s ease; }
+            .bn-add:hover { transform: translateY(-50%) scale(1.1); }
+            .bn-tooltip { position: absolute; top: 0.8rem; right: 0.8rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+            .bn-unified:hover .bn-tooltip { opacity: 1; }
+            .bn-tooltip-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .bn-aux { display: flex; flex-direction: column; gap: 0.5rem; }
+            .bn-aux textarea { width: 100%; padding: 0.6rem; border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.76rem; resize: vertical; }
+        </style>
+        <div class="bn-shell">
+            <div id="bn-stage-select" style="display: flex; flex-direction: column; gap: 1.2rem;">
+                <div id="bn-dropzone" class="bn-dropzone">
+                    <div id="bn-dz-empty" class="bn-dz-empty">
+                        <span class="material-icons-sharp">cloud_upload</span>
+                        <div style="font-weight: 600; color: var(--color-dark);">Clique ou arraste os relatórios</div>
+                        <div style="font-size: 0.82rem;">Um ou mais arquivos .xls / .xlsx (SIGA/SIGET) — uma empresa por relatório</div>
                     </div>
+                    <div id="bn-report-grid" class="bn-report-grid" style="display: none;"></div>
+                </div>
+                <input type="file" id="bn-file" accept=".xls,.xlsx,.csv,.txt" multiple style="display: none;">
+
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                    <div class="bn-token-row">
+                        <label for="bn-token">Token JWT</label>
+                        <span class="bn-info" data-tip="URL usada para baixar um único XML da NFCe da SEFAZ-CE">!</span>
+                    </div>
+                    <textarea id="bn-token" rows="2" placeholder="Cole o token JWT (vale 24h), ou a URL completa do /xml/ contendo apiKey=…"></textarea>
+                    <div id="bn-jwt-status"></div>
                 </div>
 
-                <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.4rem;">
-                    <button id="bn-test-btn" type="button"
-                        style="padding: 0.7rem 1.4rem; border: 1px solid var(--color-primary); border-radius: 0.5rem; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 600;">Testar 1 chave</button>
-                    <button id="bn-download-btn" type="button"
-                        style="padding: 0.7rem 1.4rem; border: none; border-radius: 0.5rem; background: var(--color-success); color: #fff; cursor: pointer; font-weight: 600;">Baixar XMLs (ZIP)</button>
-                </div>
-
-                <div id="bn-test-result" style="font-size: 0.85rem; white-space: pre-wrap; color: var(--color-dark);"></div>
+                <button id="bn-start" type="button" class="bn-start-btn" disabled>Iniciar Download NFCe</button>
             </div>
 
-            <div id="bn-progress-wrap" class="box animate-section" style="display: none; animation-delay: 0.1s; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); flex-direction: column; gap: 0.9rem;">
-                <div style="height: 1.1rem; background: rgba(125,141,161,0.25); border-radius: 0.6rem; overflow: hidden;">
-                    <div id="bn-progress-bar" style="height: 100%; width: 0%; background: var(--color-primary); transition: width 0.2s ease;"></div>
-                </div>
-                <div id="bn-progress-text" style="font-size: 0.9rem; color: var(--color-dark);">Aguardando…</div>
-                <div id="bn-fail-wrap" style="display: none; flex-direction: column; gap: 0.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-weight: 600; color: var(--color-danger);">Chaves que falharam</span>
-                        <button id="bn-copy-fails" type="button"
-                            style="padding: 0.35rem 0.8rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); cursor: pointer; font-size: 0.8rem;">Copiar chaves</button>
+            <div id="bn-stage-download" style="display: none;">
+                <div id="bn-unified" class="bn-unified">
+                    <button id="bn-add" type="button" class="bn-add" title="Adicionar mais relatórios ao processo">+</button>
+                    <div id="bn-tooltip" class="bn-tooltip"></div>
+                    <div id="bn-rings" class="bn-rings"></div>
+                    <div class="bn-footer">
+                        <span id="bn-footer-text" class="bn-footer-text">0 erros | 0%</span>
+                        <div id="bn-mini-ring" class="bn-mini-ring"></div>
                     </div>
-                    <textarea id="bn-fail-list" rows="6" readonly
-                        style="padding: 0.6rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.78rem; resize: vertical;"></textarea>
                 </div>
-                <div id="bn-conf-wrap" style="display: none; flex-direction: column; gap: 0.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;">
-                        <span id="bn-conf-summary" style="font-weight: 600; color: var(--color-dark);">Conferência</span>
-                        <button id="bn-copy-conf" type="button"
-                            style="padding: 0.35rem 0.8rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); cursor: pointer; font-size: 0.8rem;">Copiar divergências</button>
-                    </div>
-                    <textarea id="bn-conf-list" rows="7" readonly
-                        style="padding: 0.6rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.78rem; resize: vertical;"></textarea>
-                </div>
+                <div id="bn-aux" class="bn-aux" style="margin-top: 1rem; display: none;"></div>
             </div>
         </div>
     `;
 
+    // ---------- refs de DOM (estágio seleção + estágio download) ----------
     const tokenInput = document.getElementById('bn-token');
-    const keysInput = document.getElementById('bn-keys');
     const fileInput = document.getElementById('bn-file');
-    const uploadBtn = document.getElementById('bn-upload-btn');
-    const keysCount = document.getElementById('bn-keys-count');
+    const dropzone = document.getElementById('bn-dropzone');
+    const dzEmpty = document.getElementById('bn-dz-empty');
+    const reportGrid = document.getElementById('bn-report-grid');
     const jwtStatus = document.getElementById('bn-jwt-status');
-    const testBtn = document.getElementById('bn-test-btn');
-    const downloadBtn = document.getElementById('bn-download-btn');
-    const testResult = document.getElementById('bn-test-result');
-    const progressWrap = document.getElementById('bn-progress-wrap');
-    const progressBar = document.getElementById('bn-progress-bar');
-    const progressText = document.getElementById('bn-progress-text');
-    const failWrap = document.getElementById('bn-fail-wrap');
-    const failList = document.getElementById('bn-fail-list');
-    const copyFailsBtn = document.getElementById('bn-copy-fails');
-    const confWrap = document.getElementById('bn-conf-wrap');
-    const confSummary = document.getElementById('bn-conf-summary');
-    const confList = document.getElementById('bn-conf-list');
-    const copyConfBtn = document.getElementById('bn-copy-conf');
+    const startBtn = document.getElementById('bn-start');
+    const stageSelect = document.getElementById('bn-stage-select');
+    const stageDownload = document.getElementById('bn-stage-download');
+    const unifiedBox = document.getElementById('bn-unified');
+    const ringsWrap = document.getElementById('bn-rings');
+    const footerText = document.getElementById('bn-footer-text');
+    const miniRingWrap = document.getElementById('bn-mini-ring');
+    const addBtn = document.getElementById('bn-add');
+    const tooltipEl = document.getElementById('bn-tooltip');
+    const auxWrap = document.getElementById('bn-aux');
 
-    let lastFailures = [];
-    // Metadados esperados por chave, vindos de um relatório SIGA/SIGET carregado.
-    // Map<chave(44díg), { nNF, dhEmi:YYYY-MM-DD, vNF (string crua do relatório) }>.
-    // Null/vazio = modo simples (só chaves, sem conferência).
-    let reportMeta = null;
+    // ---------- estado ----------
+    // Relatórios lidos no estágio de seleção (1 card por arquivo).
+    // { id, fileName, keys:[chave], meta:Map<chave,{nNF,dhEmi,vNF}> }
+    let reports = [];
+    let reportSeq = 0;
+    // Empresas no estágio de download, agrupadas pelo CNPJ embutido na chave (pos 7-20).
+    // cnpj14 -> { cnpj, nome, nomeResolved, keys:Set, total, downloaded, errors,
+    //             phase:'download'|'zip'|'done', zipProgress, zip, failures:[], meta:Map,
+    //             confChecked, confOk, confDiverg, confResults:[], ringEl, els:{...} }
+    const companies = new Map();
+    // Mapa CNPJ(14díg) -> Razão Social, dos contribuintes cadastrados (preenchido async).
+    const contributorsByCnpj = new Map();
+    // Pool dinâmico de requisições (aceita novos itens via botão +).
+    const pool = { concurrency: CONCURRENCY, active: 0, queue: [], aborted: false, abortReason: '', running: false };
 
     // ---------- helpers ----------
     const cleanDigits = (s) => String(s || '').replace(/\D/g, '');
@@ -7993,8 +8032,8 @@ function createBaixarNfcePage(mainContent) {
 
     // Confere um XML baixado contra os metadados esperados do relatório.
     // Retorna lista de divergências [{ campo, esperado, obtido }] (vazia = OK).
-    function conferirXml(chave, xml) {
-        const exp = reportMeta.get(chave);
+    function conferirXml(chave, xml, meta) {
+        const exp = meta.get(chave);
         const diffs = [];
         // nNF — comparar como inteiro (remove zeros à esquerda)
         if (exp.nNF) {
@@ -8063,17 +8102,19 @@ function createBaixarNfcePage(mainContent) {
 
     function refreshJwtStatus() {
         const token = extractToken(tokenInput.value);
-        if (!token) { jwtStatus.textContent = ''; return; }
+        if (!token) { jwtStatus.textContent = ''; updateStartButton(); return; }
         const v = validateJwt(token);
         jwtStatus.textContent = v.message;
         jwtStatus.style.color = v.ok ? (v.warning ? '#c47f00' : 'var(--color-success)') : 'var(--color-danger)';
+        updateStartButton();
     }
 
-    function refreshKeysCount() {
-        const n = parseKeys(keysInput.value).length;
-        let txt = n + (n === 1 ? ' chave detectada' : ' chaves detectadas');
-        if (reportMeta && reportMeta.size) txt += ' • ' + reportMeta.size + ' com metadados (relatório)';
-        keysCount.textContent = txt;
+    // Habilita "Iniciar" só com token válido + ao menos uma chave lida de relatório.
+    function updateStartButton() {
+        const token = extractToken(tokenInput.value);
+        const tokenOk = token && validateJwt(token).ok;
+        const totalKeys = reports.reduce((acc, r) => acc + r.keys.length, 0);
+        startBtn.disabled = !(tokenOk && totalKeys > 0);
     }
 
     function jsonHeaders(token, cnpj) {
@@ -8125,271 +8166,402 @@ function createBaixarNfcePage(mainContent) {
         return await res.text();
     }
 
-    // pool de concorrência limitada; respeita abort por token morto (401/403)
-    async function runPool(items, worker, concurrency, onProgress, state) {
-        let idx = 0;
-        let done = 0;
-        const results = new Array(items.length);
-        async function runner() {
-            while (idx < items.length && !state.aborted) {
-                const myIdx = idx++;
-                const item = items[myIdx];
-                try {
-                    results[myIdx] = { ok: true, value: await worker(item), item };
-                } catch (err) {
-                    results[myIdx] = { ok: false, error: err, item };
-                    if (err && err.kind === 'auth') { state.aborted = true; state.abortReason = err.message; }
-                }
-                done++;
-                onProgress(done, items.length);
-            }
-        }
-        const runners = [];
-        for (let i = 0; i < Math.min(concurrency, items.length); i++) runners.push(runner());
-        await Promise.all(runners);
-        return results;
+    // ====================== orquestração multi-empresa ======================
+    const MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const RING_R = 52, RING_C = 2 * Math.PI * RING_R;
+    const MINI_R = 14.5, MINI_C = 2 * Math.PI * MINI_R;
+    let activeToken = '', activeCnpj = '';
+    let miniBlue = null, miniYellow = null;
+
+    const clamp01 = (x) => Math.max(0, Math.min(1, x));
+    const cnpjFromKey = (chave) => String(chave).substring(6, 20);          // pos 7-20 (1-based) = emissor
+    function monthYearFromKey(chave) {
+        const aa = String(chave).substring(2, 4);                            // pos 3-4 = AA
+        const mm = parseInt(String(chave).substring(4, 6), 10);              // pos 5-6 = MM
+        const mes = (mm >= 1 && mm <= 12) ? MESES_PT[mm - 1] : '???';
+        return mes + '-20' + aa;
     }
+    const sanitizeFileName = (s) => String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'EMPRESA';
+    const setArc = (circleEl, frac, circ) => { if (circleEl) circleEl.style.strokeDashoffset = String(circ * (1 - clamp01(frac))); };
 
-    function setBusy(busy) {
-        testBtn.disabled = busy;
-        downloadBtn.disabled = busy;
-        downloadBtn.style.opacity = busy ? '0.6' : '1';
-        testBtn.style.opacity = busy ? '0.6' : '1';
-        downloadBtn.style.cursor = busy ? 'default' : 'pointer';
-        testBtn.style.cursor = busy ? 'default' : 'pointer';
-    }
-
-    function validateInputs() {
-        const token = extractToken(tokenInput.value);
-        const keys = parseKeys(keysInput.value);
-        if (!token) return { error: 'Cole o token JWT ou a URL de download.' };
-        const v = validateJwt(token);
-        if (!v.ok) return { error: v.message };
-        if (!keys.length) return { error: 'Nenhuma chave de 44 dígitos detectada.' };
-        // Conferência leve: o CNPJ embutido na 1ª chave (posições 7-20) deve bater com o do token
-        const chaveCnpj = keys[0].substring(6, 20);
-        const warn = (chaveCnpj !== v.cnpj)
-            ? 'Atenção: CNPJ da 1ª chave (' + chaveCnpj + ') ≠ CNPJ do token (' + v.cnpj + '). Lista pode ser de outra empresa.'
-            : '';
-        return { cnpj: v.cnpj, token, keys, jwt: v, warn };
-    }
-
-    // ---------- ações de UI ----------
-    uploadBtn.addEventListener('click', () => fileInput.click());
-
-    function appendKeysToTextarea(keys) {
-        if (!keys.length) return 0;
-        keysInput.value += (keysInput.value && !keysInput.value.endsWith('\n') ? '\n' : '') + keys.join('\n');
-        return keys.length;
-    }
-
-    fileInput.addEventListener('change', async () => {
-        const files = Array.from(fileInput.files || []);
-        if (!files.length) return;
-        let appended = 0;
-        let metaAdded = 0;
+    // ---------- leitura de relatórios (SIGA texto/CSV ou SIGET .xls/.xlsx) ----------
+    // Retorna lista de { id, fileName, keys:[chave], meta:Map<chave,{nNF,dhEmi,vNF}> }.
+    async function readFiles(files) {
+        const out = [];
         for (const f of files) {
             try {
-                // SIGA vem em CSV/texto; SIGET vem em .xls/.xlsx binário (SheetJS).
-                // Em ambos, detecta o relatório, guarda metadados p/ conferência e extrai chaves.
                 const name = (f.name || '').toLowerCase();
                 const isBinary = name.endsWith('.xls') || name.endsWith('.xlsx');
-                let reportMap = null;
-                let fallbackText = '';
+                let reportMap = null, fallbackText = '';
                 if (isBinary) {
                     const parsed = parseReportWorkbook(await f.arrayBuffer());
-                    reportMap = parsed.map;
-                    fallbackText = parsed.text;
+                    reportMap = parsed.map; fallbackText = parsed.text;
                 } else {
                     fallbackText = await f.text();
                     reportMap = parseReportText(fallbackText);
                 }
-                if (reportMap) {
-                    if (!reportMeta) reportMeta = new Map();
-                    const keys = [];
-                    reportMap.forEach((meta, key) => { reportMeta.set(key, meta); keys.push(key); });
-                    appended += appendKeysToTextarea(keys);
-                    metaAdded += keys.length;
-                } else {
-                    appended += appendKeysToTextarea(parseKeys(fallbackText));
-                }
+                const meta = new Map();
+                let keys = [];
+                if (reportMap) { reportMap.forEach((m, k) => { meta.set(k, m); keys.push(k); }); }
+                else { keys = parseKeys(fallbackText); }
+                if (!keys.length) { console.warn('Nenhuma chave de 44 díg em ' + f.name); continue; }
+                out.push({ id: ++reportSeq, fileName: f.name, keys, meta });
             } catch (e) {
-                console.warn('Falha ao ler ' + f.name + ': ' + e.message);
+                console.warn('Falha ao ler ' + f.name + ': ' + (e && e.message));
             }
         }
-        refreshKeysCount();
-        console.log('Arquivos carregados: +' + appended + ' chaves' + (metaAdded ? ' (' + metaAdded + ' com metadados de relatório)' : ''));
-        fileInput.value = '';
-    });
+        return out;
+    }
 
-    keysInput.addEventListener('input', refreshKeysCount);
-    tokenInput.addEventListener('input', refreshJwtStatus);
-
-    copyFailsBtn.addEventListener('click', () => {
-        if (!lastFailures.length) return;
-        const txt = lastFailures.map((f) => f.chave).join('\n');
-        navigator.clipboard.writeText(txt).then(
-            () => { copyFailsBtn.textContent = 'Copiado!'; setTimeout(() => { copyFailsBtn.textContent = 'Copiar chaves'; }, 1500); },
-            () => { failList.select(); }
-        );
-    });
-
-    copyConfBtn.addEventListener('click', () => {
-        if (!confList.value) return;
-        navigator.clipboard.writeText(confList.value).then(
-            () => { copyConfBtn.textContent = 'Copiado!'; setTimeout(() => { copyConfBtn.textContent = 'Copiar divergências'; }, 1500); },
-            () => { confList.select(); }
-        );
-    });
-
-    testBtn.addEventListener('click', async () => {
-        const v = validateInputs();
-        if (v.error) { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ ' + v.error; return; }
-        setBusy(true);
-        testResult.style.color = 'var(--color-dark)';
-        testResult.textContent = (v.warn ? '⚠ ' + v.warn + '\n' : '') + 'Testando com a 1ª chave: ' + v.keys[0] + '…';
-        try {
-            const idNfe = await resolveIdNfe(v.keys[0], v.token, v.cnpj);
-            // Confirma o ponto em aberto da spec: o /xml/ aceita só apiKey na query?
-            let viaQuery = false;
-            try {
-                const r1 = await fetch(xmlUrl(idNfe, v.keys[0], v.token));
-                viaQuery = r1.ok;
-            } catch (e) { viaQuery = false; }
-            let viaHeaders = false;
-            if (!viaQuery) {
-                try {
-                    const r2 = await fetch(xmlUrl(idNfe, v.keys[0], v.token), { headers: xmlHeaders(v.token, v.cnpj) });
-                    viaHeaders = r2.ok;
-                } catch (e) { viaHeaders = false; }
-            }
-            testResult.style.color = 'var(--color-success)';
-            testResult.textContent =
-                '✓ idNfe (protocolo) resolvido: ' + idNfe + '\n' +
-                '✓ XML acessível: ' + ((viaQuery || viaHeaders) ? 'sim' : 'NÃO') + '\n' +
-                'Headers no /xml/: ' + (viaQuery ? 'dispensáveis (apiKey na query basta)' : (viaHeaders ? 'NECESSÁRIOS (query sozinha não bastou)' : 'indefinido — verifique o token')) + '\n' +
-                'Pode rodar o lote.';
-        } catch (err) {
-            testResult.style.color = 'var(--color-danger)';
-            testResult.textContent = '✗ Falhou: ' + (err.kind === 'auth' ? err.message + ' (gere novo token)' : err.message);
-        } finally {
-            setBusy(false);
+    // ---------- estágio de seleção: cards de relatório ----------
+    function renderReportCards() {
+        if (!reports.length) {
+            reportGrid.style.display = 'none';
+            dzEmpty.style.display = 'flex';
+            dropzone.classList.remove('has-reports');
+            return;
         }
-    });
+        dzEmpty.style.display = 'none';
+        reportGrid.style.display = 'grid';
+        dropzone.classList.add('has-reports');
+        const n = reports.length;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+        reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+        reportGrid.innerHTML = reports.map((r) => {
+            const cnpj = r.keys.length ? cnpjFromKey(r.keys[0]) : '';
+            const emp = (cnpj && contributorsByCnpj.get(cnpj)) || (cnpj ? 'CNPJ ' + cnpj : '');
+            const nKeys = r.keys.length;
+            return '<div class="bn-report-card">' +
+                '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
+                '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + '</div>' +
+                (emp ? '<div class="bn-rc-emp">' + escapeHtml(emp) + '</div>' : '') +
+                '</div>';
+        }).join('');
+    }
 
-    downloadBtn.addEventListener('click', async () => {
-        const v = validateInputs();
-        if (v.error) { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ ' + v.error; return; }
-        if (typeof JSZip === 'undefined') { testResult.style.color = 'var(--color-danger)'; testResult.textContent = '✗ JSZip não carregado.'; return; }
+    async function handleSelectStageFiles(files) {
+        const novos = await readFiles(files);
+        if (!novos.length) return;
+        reports.push(...novos);
+        renderReportCards();
+        updateStartButton();
+    }
 
-        setBusy(true);
-        if (v.warn) { testResult.style.color = '#c47f00'; testResult.textContent = '⚠ ' + v.warn; } else { testResult.textContent = ''; }
-        progressWrap.style.display = 'flex';
-        failWrap.style.display = 'none';
-        failList.value = '';
-        confWrap.style.display = 'none';
-        confList.value = '';
-        lastFailures = [];
-        progressBar.style.width = '0%';
-        progressBar.style.background = 'var(--color-primary)';
-        const total = v.keys.length;
-        progressText.textContent = '0 / ' + total + ' • sucesso: 0 • erro: 0';
+    // ---------- empresas + anéis ----------
+    function ringSvg() {
+        return '<svg viewBox="0 0 120 120">' +
+            '<circle class="bn-track" cx="60" cy="60" r="' + RING_R + '"></circle>' +
+            '<circle class="bn-arc-blue" cx="60" cy="60" r="' + RING_R + '" stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '"></circle>' +
+            '<circle class="bn-arc-yellow" cx="60" cy="60" r="' + RING_R + '" stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '"></circle>' +
+            '</svg>';
+    }
 
-        const state = { aborted: false, abortReason: '' };
-        const zip = new JSZip();
-        let success = 0;
-        let errors = 0;
-        // Conferência contra relatório (só ativa se houve relatório carregado)
-        const hasReport = !!(reportMeta && reportMeta.size);
-        const confResults = [];
-        let confChecked = 0, confOk = 0, confDiverg = 0;
+    function layoutRings() {
+        const n = companies.size;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : n <= 9 ? 3 : 4;
+        ringsWrap.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+    }
 
-        const onProgress = (doneCount) => {
-            const pct = Math.round((doneCount / total) * 100);
-            progressBar.style.width = pct + '%';
-            progressText.textContent = doneCount + ' / ' + total + ' • sucesso: ' + success + ' • erro: ' + errors;
+    function createCompany(cnpj, sampleKey) {
+        const nomeCad = contributorsByCnpj.get(cnpj) || '';
+        const comp = {
+            cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
+            monthLabel: monthYearFromKey(sampleKey),
+            keys: new Set(), total: 0, downloaded: 0, errors: 0,
+            phase: 'download', zipProgress: 0, zip: new JSZip(),
+            failures: [], meta: new Map(),
+            confChecked: 0, confOk: 0, confDiverg: 0, confResults: [],
+            els: null,
         };
+        companies.set(cnpj, comp);
+        const el = document.createElement('div');
+        el.className = 'bn-ring';
+        el.innerHTML = ringSvg() + '<div class="bn-ring-center"><div class="bn-ring-pct">0%</div><div class="bn-ring-name"></div></div>';
+        ringsWrap.appendChild(el);
+        comp.els = {
+            root: el,
+            blue: el.querySelector('.bn-arc-blue'),
+            yellow: el.querySelector('.bn-arc-yellow'),
+            pct: el.querySelector('.bn-ring-pct'),
+            name: el.querySelector('.bn-ring-name'),
+        };
+        comp.els.name.textContent = comp.nome || ('CNPJ ' + cnpj);
+        layoutRings();
+        return comp;
+    }
 
-        const worker = async (chave) => {
-            const idNfe = await resolveIdNfe(chave, v.token, v.cnpj);
-            const xml = await fetchXml(idNfe, chave, v.token, v.cnpj);
-            // Salvaguarda: a chave interna do XML tem que bater com a chave pedida.
-            // Protege contra duplicata silenciosa (2 chaves resolvendo p/ o mesmo idNfe).
+    function updateRing(comp) {
+        const els = comp.els; if (!els) return;
+        const dlFrac = comp.total ? (comp.downloaded + comp.errors) / comp.total : 0;
+        if (comp.phase === 'download') {
+            setArc(els.blue, dlFrac, RING_C);
+            setArc(els.yellow, 0, RING_C);
+            els.pct.textContent = Math.round(dlFrac * 100) + '%';
+            els.root.classList.remove('done');
+        } else {
+            setArc(els.blue, 1, RING_C);
+            setArc(els.yellow, comp.zipProgress, RING_C);
+            els.pct.textContent = Math.round(comp.zipProgress * 100) + '%';
+            if (comp.phase === 'done') { els.root.classList.add('done'); els.pct.textContent = '100%'; }
+        }
+        if (comp.nome) els.name.textContent = comp.nome;
+    }
+
+    function tryResolveNameFromXml(comp, xml) {
+        const m = xml.match(/<emit>[\s\S]*?<xNome>([^<]+)<\/xNome>/) || xml.match(/<emit>[\s\S]*?<xFant>([^<]+)<\/xFant>/);
+        if (m && m[1]) {
+            comp.nome = m[1].trim();
+            comp.nomeResolved = true;
+            if (comp.els) comp.els.name.textContent = comp.nome;
+            updateTooltip();
+        }
+    }
+
+    // ---------- rodapé + mini anel + tooltip ----------
+    function buildMiniRing() {
+        miniRingWrap.innerHTML = '<svg viewBox="0 0 40 40">' +
+            '<circle cx="20" cy="20" r="' + MINI_R + '" style="stroke:rgba(125,141,161,0.20)"></circle>' +
+            '<circle class="mb" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-primary)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:#f5b301" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '</svg>';
+        miniBlue = miniRingWrap.querySelector('.mb');
+        miniYellow = miniRingWrap.querySelector('.my');
+    }
+
+    function updateFooter() {
+        let totErr = 0, totKeys = 0, totDl = 0, zipSum = 0, allDownloaded = true;
+        const n = companies.size;
+        companies.forEach((c) => {
+            totErr += c.errors;
+            totKeys += c.total;
+            totDl += (c.downloaded + c.errors);
+            zipSum += c.zipProgress;
+            if (c.phase === 'download') allDownloaded = false;
+        });
+        const dlFrac = totKeys ? totDl / totKeys : 0;
+        const pct = Math.round(dlFrac * 100);
+        footerText.innerHTML = '<span class="bn-err">' + totErr + ' ' + (totErr === 1 ? 'erro' : 'erros') + '</span> | ' + pct + '%';
+        setArc(miniBlue, dlFrac, MINI_C);
+        setArc(miniYellow, (allDownloaded && n) ? zipSum / n : 0, MINI_C);
+    }
+
+    function updateTooltip() {
+        const rows = [];
+        companies.forEach((c) => {
+            const nm = c.nome || ('CNPJ ' + c.cnpj);
+            rows.push('<div class="bn-tooltip-row">' + escapeHtml(nm) + ': ' + c.downloaded + ' | ' + c.total + '</div>');
+        });
+        tooltipEl.innerHTML = rows.join('') || '—';
+    }
+
+    // ---------- relatório auxiliar (falhas + conferência por empresa) ----------
+    function renderAux() {
+        let anyFail = false, anyConf = false;
+        companies.forEach((c) => { if (c.failures.length) anyFail = true; if (c.confChecked) anyConf = true; });
+        if (!anyFail && !anyConf) { auxWrap.style.display = 'none'; return; }
+        const heads = [], detail = [];
+        companies.forEach((c) => {
+            const nm = c.nome || ('CNPJ ' + c.cnpj);
+            if (c.failures.length) {
+                heads.push('<div><strong style="color:var(--color-danger)">' + escapeHtml(nm) + ' — ' + c.failures.length + ' falha(s) no download</strong></div>');
+                detail.push('# ' + nm + ' — falhas\n' + c.failures.map((f) => f.chave + '\t' + f.motivo).join('\n'));
+            }
+            if (c.confChecked) {
+                const cor = c.confDiverg ? 'var(--color-danger)' : 'var(--color-success)';
+                heads.push('<div><strong style="color:' + cor + '">' + escapeHtml(nm) + ' — conferência: ' + c.confChecked + ' conferidos • ' + c.confOk + ' OK • ' + c.confDiverg + ' divergentes</strong></div>');
+                if (c.confResults.length) {
+                    detail.push('# ' + nm + ' — divergências\n' + c.confResults.map((cr) =>
+                        cr.chave + '\n' + cr.diffs.map((d) => '  • ' + d.campo + ': esperado ' + d.esperado + ' | obtido ' + d.obtido).join('\n')
+                    ).join('\n'));
+                }
+            }
+        });
+        auxWrap.style.display = 'flex';
+        auxWrap.innerHTML = heads.join('') +
+            (detail.length ? '<textarea rows="8" readonly style="border:1px solid var(--color-info-dark);">' + escapeHtml(detail.join('\n\n')) + '</textarea>' : '');
+    }
+
+    // ---------- pool dinâmico ----------
+    function enqueueJob(comp, chave) { pool.queue.push({ comp, chave }); }
+
+    // Agrupa chaves de relatórios por CNPJ e enfileira. Mesmo CNPJ → mesmo anel
+    // (incrementa o total existente); CNPJ novo → anel novo.
+    function intakeReports(list) {
+        for (const rep of list) {
+            for (const chave of rep.keys) {
+                const cnpj = cnpjFromKey(chave);
+                let comp = companies.get(cnpj);
+                if (!comp) comp = createCompany(cnpj, chave);
+                if (comp.keys.has(chave)) continue;        // dedup global por empresa
+                comp.keys.add(chave);
+                comp.total++;
+                if (comp.phase !== 'download') comp.phase = 'download'; // reabre empresa já fechada
+                const m = rep.meta && rep.meta.get(chave);
+                if (m) comp.meta.set(chave, m);
+                enqueueJob(comp, chave);
+                updateRing(comp);
+            }
+        }
+        updateFooter();
+        updateTooltip();
+    }
+
+    function pumpPool() {
+        while (pool.active < pool.concurrency && pool.queue.length && !pool.aborted) {
+            const job = pool.queue.shift();
+            pool.active++;
+            processJob(job).then(() => {
+                pool.active--;
+                if (pool.aborted && !pool.abortHandled) { pool.abortHandled = true; handleAbort(); }
+                pumpPool();
+            });
+        }
+    }
+
+    async function processJob(job) {
+        const { comp, chave } = job;
+        try {
+            const idNfe = await resolveIdNfe(chave, activeToken, activeCnpj);
+            const xml = await fetchXml(idNfe, chave, activeToken, activeCnpj);
+            // Salvaguarda: a chave interna do XML tem que bater com a pedida (evita duplicata
+            // silenciosa de 2 chaves resolvendo p/ o mesmo idNfe).
             let innerKey = '';
             let mk = xml.match(/Id="NFe(\d{44})"/);
             if (!mk) mk = xml.match(/<chNFe>(\d{44})<\/chNFe>/);
             if (mk) innerKey = mk[1];
-            if (innerKey && innerKey !== chave) {
-                throw makeErr('mismatch', 'XML retornou chave ' + innerKey + ', esperado ' + chave);
+            if (innerKey && innerKey !== chave) throw makeErr('mismatch', 'XML retornou chave ' + innerKey + ', esperado ' + chave);
+            comp.zip.file(chave + '.xml', xml);
+            comp.downloaded++;
+            if (!comp.nomeResolved) tryResolveNameFromXml(comp, xml);
+            // Conferência: divergência NÃO é erro de download — o XML válido já está no ZIP.
+            if (comp.meta.has(chave)) {
+                comp.confChecked++;
+                const diffs = conferirXml(chave, xml, comp.meta);
+                if (diffs.length) { comp.confDiverg++; comp.confResults.push({ chave, diffs }); }
+                else comp.confOk++;
             }
-            return { chave, xml };
-        };
-
-        const results = await runPool(v.keys, async (chave) => {
-            try {
-                const r = await worker(chave);
-                zip.file(chave + '.xml', r.xml);
-                success++;
-                // Conferência: divergência NÃO é erro de download — XML válido vai pro ZIP,
-                // só entra no relatório de conferência (pode indicar erro no próprio SIGA).
-                if (hasReport && reportMeta.has(chave)) {
-                    confChecked++;
-                    const diffs = conferirXml(chave, r.xml);
-                    if (diffs.length) { confDiverg++; confResults.push({ chave, diffs }); }
-                    else confOk++;
-                }
-                return r;
-            } catch (err) {
-                errors++;
-                throw err;
-            }
-        }, CONCURRENCY, onProgress, state);
-
-        for (const r of results) {
-            if (r && !r.ok) lastFailures.push({ chave: r.item, motivo: (r.error && r.error.message) || 'erro' });
+        } catch (err) {
+            comp.errors++;
+            comp.failures.push({ chave, motivo: (err && err.message) || 'erro' });
+            if (err && err.kind === 'auth') { pool.aborted = true; pool.abortReason = err.message; }
         }
+        updateRing(comp);
+        updateFooter();
+        updateTooltip();
+        maybeFinalizeCompany(comp);
+    }
 
-        if (state.aborted) {
-            progressBar.style.background = 'var(--color-danger)';
-            progressText.textContent = 'ABORTADO: ' + state.abortReason + ' • baixados antes de abortar: ' + success + ' • restantes não tentados.';
-        } else {
-            progressText.textContent = 'Concluído • sucesso: ' + success + ' • erro: ' + errors + ' de ' + total;
+    // Token morto: o que sobrou na fila vira erro "não tentado" e cada empresa é fechada
+    // com o que já baixou (ZIP parcial entregue na mesma hora).
+    function handleAbort() {
+        for (const job of pool.queue) {
+            job.comp.errors++;
+            job.comp.failures.push({ chave: job.chave, motivo: 'não tentado (abortado: ' + pool.abortReason + ')' });
+            updateRing(job.comp);
         }
+        pool.queue.length = 0;
+        updateFooter();
+        companies.forEach((c) => maybeFinalizeCompany(c));
+    }
 
-        if (success > 0) {
-            try {
-                const blob = await zip.generateAsync({ type: 'blob' });
-                const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-                triggerDownload(blob, 'NFCe_XMLs_' + ts + '.zip');
-            } catch (e) {
-                progressText.textContent += ' • Erro ao gerar ZIP: ' + e.message;
-            }
+    // Empresa terminou o download (e não há mais chaves dela na fila) → zipa e entrega já.
+    function maybeFinalizeCompany(comp) {
+        if (comp.phase !== 'download') return;
+        if (comp.downloaded + comp.errors < comp.total) return;
+        if (pool.queue.some((j) => j.comp === comp)) return; // botão + pode ter enfileirado mais
+        if (comp.downloaded === 0) { comp.phase = 'done'; comp.zipProgress = 1; updateRing(comp); updateFooter(); renderAux(); return; }
+        comp.phase = 'zip';
+        updateRing(comp);
+        comp.zip.generateAsync({ type: 'blob' }, (m) => {
+            comp.zipProgress = (m.percent || 0) / 100;
+            updateRing(comp);
+            updateFooter();
+        }).then((blob) => {
+            comp.zipProgress = 1; comp.phase = 'done';
+            updateRing(comp); updateFooter();
+            const empNome = sanitizeFileName(comp.nome || ('CNPJ ' + comp.cnpj));
+            triggerDownload(blob, 'NFCe ' + comp.monthLabel + '_' + empNome + '.zip');
+            renderAux();
+        }).catch((e) => {
+            comp.phase = 'done'; comp.zipProgress = 1;
+            updateRing(comp); updateFooter();
+            console.error('Erro ao gerar ZIP de ' + comp.cnpj + ': ' + (e && e.message));
+        });
+    }
+
+    // ---------- início do download (estágio seleção → download) ----------
+    async function startDownload() {
+        const token = extractToken(tokenInput.value);
+        const v = validateJwt(token);
+        if (!v.ok) { jwtStatus.textContent = v.message; jwtStatus.style.color = 'var(--color-danger)'; return; }
+        if (typeof JSZip === 'undefined') { jwtStatus.textContent = 'JSZip não carregado.'; jwtStatus.style.color = 'var(--color-danger)'; return; }
+        if (!reports.length) return;
+        activeToken = token; activeCnpj = v.cnpj;
+        startBtn.disabled = true;
+
+        // anima os cards "fundindo" e troca de estágio
+        Array.from(reportGrid.children).forEach((c) => c.classList.add('bn-merge'));
+        await delay(360);
+        stageSelect.style.display = 'none';
+        stageDownload.style.display = 'block';
+        buildMiniRing();
+
+        intakeReports(reports);
+        pool.running = true;
+        pumpPool();
+    }
+
+    // ---------- carga de contribuintes (CNPJ → razão social) ----------
+    async function loadContributors() {
+        try {
+            const list = await loadDataSync('contributors', []);
+            (list || []).forEach((c) => {
+                const cnpj = String(c.cnpj || '').replace(/\D/g, '');
+                if (cnpj.length === 14 && c.razaoSocial) contributorsByCnpj.set(cnpj, c.razaoSocial);
+            });
+        } catch (e) {
+            console.warn('Não foi possível carregar contribuintes: ' + (e && e.message));
         }
+    }
 
-        if (lastFailures.length) {
-            failWrap.style.display = 'flex';
-            failList.value = lastFailures.map((f) => f.chave + '\t' + f.motivo).join('\n');
-        }
-
-        if (hasReport) {
-            confWrap.style.display = 'flex';
-            confSummary.textContent = 'Conferência: ' + confChecked + ' conferidos • ' + confOk + ' OK • ' + confDiverg + ' divergentes';
-            confSummary.style.color = confDiverg ? 'var(--color-danger)' : 'var(--color-success)';
-            if (confResults.length) {
-                confList.value = confResults.map((c) =>
-                    c.chave + '\n' + c.diffs.map((d) => '  • ' + d.campo + ': esperado ' + d.esperado + ' | obtido ' + d.obtido).join('\n')
-                ).join('\n\n');
-            } else {
-                confList.value = confChecked
-                    ? 'Sem divergências. Todos os ' + confOk + ' XMLs conferidos batem com o relatório.'
-                    : 'Nenhuma das chaves baixadas estava no relatório carregado.';
-            }
-        }
-
-        setBusy(false);
+    // ====================== wiring ======================
+    dropzone.addEventListener('click', () => {
+        if (stageDownload.style.display === 'block') return;
+        fileInput.click();
+    });
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('bn-dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('bn-dragover'));
+    dropzone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('bn-dragover');
+        const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+        if (files.length) await handleSelectStageFiles(files);
     });
 
-    refreshKeysCount();
+    fileInput.addEventListener('change', async () => {
+        const files = Array.from(fileInput.files || []);
+        fileInput.value = '';
+        if (!files.length) return;
+        if (stageDownload.style.display === 'block') {
+            // botão + durante o processo: lê, agrupa e injeta no pool em andamento
+            const novos = await readFiles(files);
+            if (novos.length) {
+                pool.abortHandled = pool.aborted ? pool.abortHandled : false;
+                intakeReports(novos);
+                pumpPool();
+            }
+        } else {
+            await handleSelectStageFiles(files);
+        }
+    });
+
+    addBtn.addEventListener('click', () => fileInput.click());
+    startBtn.addEventListener('click', () => { startDownload(); });
+    tokenInput.addEventListener('input', refreshJwtStatus);
+
+    loadContributors().then(() => { renderReportCards(); });
+    renderReportCards();
+    updateStartButton();
 }
 //---------------------------------- FIM Baixar NFCe ----------------------------------//
 
