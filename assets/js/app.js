@@ -7803,17 +7803,18 @@ function createBaixarNfcePage(mainContent) {
             #bn-stage-download { animation: bnFadeIn .45s ease; }
             @keyframes bnFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
             .bn-unified { position: relative; background: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: 1.4rem 1.4rem 0.9rem; display: flex; flex-direction: column; gap: 1rem; min-height: 300px; }
-            .bn-rings { display: grid; gap: 1.1rem; justify-items: center; align-items: center; flex: 1; }
-            .bn-ring { position: relative; width: 100%; max-width: 220px; aspect-ratio: 1 / 1; container-type: inline-size; }
+            .bn-rings { display: grid; gap: 1.2rem 1.4rem; justify-items: center; align-items: start; flex: 1; padding-top: 0.4rem; }
+            .bn-ring-item { display: flex; flex-direction: column; align-items: center; gap: 0.55rem; width: 100%; }
+            .bn-ring { position: relative; width: 100%; max-width: 200px; aspect-ratio: 1 / 1; container-type: inline-size; }
             .bn-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
             .bn-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
             .bn-ring .bn-track { stroke: rgba(125,141,161,0.20); }
-            .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .25s ease; }
-            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .25s ease; }
-            .bn-ring.done .bn-arc-yellow { stroke: #2bb673; }
-            .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.1rem; }
+            .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .1s linear; }
+            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .1s linear; }
+            .bn-ring-item.done .bn-arc-yellow { stroke: #2bb673; }
+            .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
             .bn-ring-pct { font-weight: 700; color: var(--color-dark); font-size: clamp(0.95rem, 18cqw, 1.7rem); }
-            .bn-ring-name { font-size: 0.72rem; color: var(--color-info-dark); text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .bn-ring-label { font-size: 0.78rem; color: var(--color-dark); text-align: center; line-height: 1.25; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
             .bn-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid rgba(125,141,161,0.18); padding-top: 0.7rem; }
             .bn-footer-text { font-size: 0.85rem; color: var(--color-dark); font-weight: 600; }
             .bn-footer-text .bn-err { color: var(--color-danger); }
@@ -7822,7 +7823,7 @@ function createBaixarNfcePage(mainContent) {
             .bn-mini-ring circle { fill: none; stroke-width: 5; stroke-linecap: round; }
             .bn-add { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--color-primary); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.18); z-index: 5; display: flex; align-items: center; justify-content: center; transition: transform .12s ease; }
             .bn-add:hover { transform: translateY(-50%) scale(1.1); }
-            .bn-tooltip { position: absolute; top: 0.8rem; right: 0.8rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
             .bn-unified:hover .bn-tooltip { opacity: 1; }
             .bn-tooltip-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .bn-aux { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -8262,30 +8263,34 @@ function createBaixarNfcePage(mainContent) {
         ringsWrap.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
     }
 
+    const cnpjLabel = (cnpj) => 'CNPJ ' + (typeof formatCNPJ === 'function' ? formatCNPJ(cnpj) : cnpj);
+
     function createCompany(cnpj, sampleKey) {
         const nomeCad = contributorsByCnpj.get(cnpj) || '';
         const comp = {
             cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
             monthLabel: monthYearFromKey(sampleKey),
-            keys: new Set(), total: 0, downloaded: 0, errors: 0,
+            keys: new Set(), pending: [], total: 0, downloaded: 0, errors: 0,
             phase: 'download', zipProgress: 0, zip: new JSZip(),
             failures: [], meta: new Map(),
             confChecked: 0, confOk: 0, confDiverg: 0, confResults: [],
             els: null,
         };
         companies.set(cnpj, comp);
-        const el = document.createElement('div');
-        el.className = 'bn-ring';
-        el.innerHTML = ringSvg() + '<div class="bn-ring-center"><div class="bn-ring-pct">0%</div><div class="bn-ring-name"></div></div>';
-        ringsWrap.appendChild(el);
+        const item = document.createElement('div');
+        item.className = 'bn-ring-item';
+        item.innerHTML =
+            '<div class="bn-ring">' + ringSvg() + '<div class="bn-ring-center"><div class="bn-ring-pct">0%</div></div></div>' +
+            '<div class="bn-ring-label"></div>';
+        ringsWrap.appendChild(item);
         comp.els = {
-            root: el,
-            blue: el.querySelector('.bn-arc-blue'),
-            yellow: el.querySelector('.bn-arc-yellow'),
-            pct: el.querySelector('.bn-ring-pct'),
-            name: el.querySelector('.bn-ring-name'),
+            root: item,
+            blue: item.querySelector('.bn-arc-blue'),
+            yellow: item.querySelector('.bn-arc-yellow'),
+            pct: item.querySelector('.bn-ring-pct'),
+            name: item.querySelector('.bn-ring-label'),
         };
-        comp.els.name.textContent = comp.nome || ('CNPJ ' + cnpj);
+        comp.els.name.textContent = comp.nome || cnpjLabel(cnpj);
         layoutRings();
         return comp;
     }
@@ -8348,44 +8353,43 @@ function createBaixarNfcePage(mainContent) {
     function updateTooltip() {
         const rows = [];
         companies.forEach((c) => {
-            const nm = c.nome || ('CNPJ ' + c.cnpj);
+            const nm = c.nome || cnpjLabel(c.cnpj);
             rows.push('<div class="bn-tooltip-row">' + escapeHtml(nm) + ': ' + c.downloaded + ' | ' + c.total + '</div>');
         });
         tooltipEl.innerHTML = rows.join('') || '—';
     }
 
-    // ---------- relatório auxiliar (falhas + conferência por empresa) ----------
-    function renderAux() {
-        let anyFail = false, anyConf = false;
-        companies.forEach((c) => { if (c.failures.length) anyFail = true; if (c.confChecked) anyConf = true; });
-        if (!anyFail && !anyConf) { auxWrap.style.display = 'none'; return; }
-        const heads = [], detail = [];
-        companies.forEach((c) => {
-            const nm = c.nome || ('CNPJ ' + c.cnpj);
-            if (c.failures.length) {
-                heads.push('<div><strong style="color:var(--color-danger)">' + escapeHtml(nm) + ' — ' + c.failures.length + ' falha(s) no download</strong></div>');
-                detail.push('# ' + nm + ' — falhas\n' + c.failures.map((f) => f.chave + '\t' + f.motivo).join('\n'));
-            }
-            if (c.confChecked) {
-                const cor = c.confDiverg ? 'var(--color-danger)' : 'var(--color-success)';
-                heads.push('<div><strong style="color:' + cor + '">' + escapeHtml(nm) + ' — conferência: ' + c.confChecked + ' conferidos • ' + c.confOk + ' OK • ' + c.confDiverg + ' divergentes</strong></div>');
-                if (c.confResults.length) {
-                    detail.push('# ' + nm + ' — divergências\n' + c.confResults.map((cr) =>
-                        cr.chave + '\n' + cr.diffs.map((d) => '  • ' + d.campo + ': esperado ' + d.esperado + ' | obtido ' + d.obtido).join('\n')
-                    ).join('\n'));
-                }
-            }
-        });
-        auxWrap.style.display = 'flex';
-        auxWrap.innerHTML = heads.join('') +
-            (detail.length ? '<textarea rows="8" readonly style="border:1px solid var(--color-info-dark);">' + escapeHtml(detail.join('\n\n')) + '</textarea>' : '');
+    // ---------- download dos ZIPs ----------
+    // Espaça os downloads e adia o revokeObjectURL: o revoke imediato matava o blob grande
+    // antes do navegador terminar de lê-lo (causa do "erro ao baixar o 2º ZIP").
+    const downloadQueue = [];
+    let downloadDraining = false;
+    function enqueueDownload(blob, name) {
+        downloadQueue.push({ blob, name });
+        drainDownloads();
+    }
+    async function drainDownloads() {
+        if (downloadDraining) return;
+        downloadDraining = true;
+        while (downloadQueue.length) {
+            const { blob, name } = downloadQueue.shift();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = name; a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            await delay(1200);                                  // espaça p/ não disparar throttle de múltiplos downloads
+            if (a.parentNode) document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 60000);  // revoga tarde: deixa o browser ler o blob
+        }
+        downloadDraining = false;
     }
 
-    // ---------- pool dinâmico ----------
-    function enqueueJob(comp, chave) { pool.queue.push({ comp, chave }); }
+    // ---------- pool dinâmico (round-robin entre empresas → baixam ao mesmo tempo) ----------
+    let rrCursor = 0;
 
-    // Agrupa chaves de relatórios por CNPJ e enfileira. Mesmo CNPJ → mesmo anel
-    // (incrementa o total existente); CNPJ novo → anel novo.
+    // Agrupa chaves por CNPJ. Mesmo CNPJ → mesmo anel (incrementa total + pending);
+    // CNPJ novo → anel novo. As chaves vão para comp.pending (não uma fila global FIFO).
     function intakeReports(list) {
         for (const rep of list) {
             for (const chave of rep.keys) {
@@ -8395,10 +8399,10 @@ function createBaixarNfcePage(mainContent) {
                 if (comp.keys.has(chave)) continue;        // dedup global por empresa
                 comp.keys.add(chave);
                 comp.total++;
+                comp.pending.push(chave);
                 if (comp.phase !== 'download') comp.phase = 'download'; // reabre empresa já fechada
                 const m = rep.meta && rep.meta.get(chave);
                 if (m) comp.meta.set(chave, m);
-                enqueueJob(comp, chave);
                 updateRing(comp);
             }
         }
@@ -8406,9 +8410,21 @@ function createBaixarNfcePage(mainContent) {
         updateTooltip();
     }
 
+    // Próximo job em round-robin: alterna entre as empresas que ainda têm chaves pendentes,
+    // p/ todas progredirem juntas em vez de uma empresa de cada vez.
+    function nextJob() {
+        const ativos = [];
+        companies.forEach((c) => { if (c.pending.length) ativos.push(c); });
+        if (!ativos.length) return null;
+        const comp = ativos[rrCursor % ativos.length];
+        rrCursor++;
+        return { comp, chave: comp.pending.shift() };
+    }
+
     function pumpPool() {
-        while (pool.active < pool.concurrency && pool.queue.length && !pool.aborted) {
-            const job = pool.queue.shift();
+        while (pool.active < pool.concurrency && !pool.aborted) {
+            const job = nextJob();
+            if (!job) break;
             pool.active++;
             processJob(job).then(() => {
                 pool.active--;
@@ -8451,25 +8467,27 @@ function createBaixarNfcePage(mainContent) {
         maybeFinalizeCompany(comp);
     }
 
-    // Token morto: o que sobrou na fila vira erro "não tentado" e cada empresa é fechada
+    // Token morto: o que sobrou em pending vira erro "não tentado" e cada empresa é fechada
     // com o que já baixou (ZIP parcial entregue na mesma hora).
     function handleAbort() {
-        for (const job of pool.queue) {
-            job.comp.errors++;
-            job.comp.failures.push({ chave: job.chave, motivo: 'não tentado (abortado: ' + pool.abortReason + ')' });
-            updateRing(job.comp);
-        }
-        pool.queue.length = 0;
+        companies.forEach((c) => {
+            while (c.pending.length) {
+                const chave = c.pending.shift();
+                c.errors++;
+                c.failures.push({ chave, motivo: 'não tentado (abortado: ' + pool.abortReason + ')' });
+            }
+            updateRing(c);
+        });
         updateFooter();
         companies.forEach((c) => maybeFinalizeCompany(c));
     }
 
-    // Empresa terminou o download (e não há mais chaves dela na fila) → zipa e entrega já.
+    // Empresa terminou o download (sem chaves pendentes nem jobs em voo) → zipa e entrega já.
     function maybeFinalizeCompany(comp) {
         if (comp.phase !== 'download') return;
-        if (comp.downloaded + comp.errors < comp.total) return;
-        if (pool.queue.some((j) => j.comp === comp)) return; // botão + pode ter enfileirado mais
-        if (comp.downloaded === 0) { comp.phase = 'done'; comp.zipProgress = 1; updateRing(comp); updateFooter(); renderAux(); return; }
+        if (comp.pending.length) return;                          // ainda há chaves (inclui botão +)
+        if (comp.downloaded + comp.errors < comp.total) return;   // jobs ainda em voo
+        if (comp.downloaded === 0) { comp.phase = 'done'; comp.zipProgress = 1; updateRing(comp); updateFooter(); return; }
         comp.phase = 'zip';
         updateRing(comp);
         comp.zip.generateAsync({ type: 'blob' }, (m) => {
@@ -8480,8 +8498,7 @@ function createBaixarNfcePage(mainContent) {
             comp.zipProgress = 1; comp.phase = 'done';
             updateRing(comp); updateFooter();
             const empNome = sanitizeFileName(comp.nome || ('CNPJ ' + comp.cnpj));
-            triggerDownload(blob, 'NFCe ' + comp.monthLabel + '_' + empNome + '.zip');
-            renderAux();
+            enqueueDownload(blob, 'NFCe ' + comp.monthLabel + '_' + empNome + '.zip');
         }).catch((e) => {
             comp.phase = 'done'; comp.zipProgress = 1;
             updateRing(comp); updateFooter();
