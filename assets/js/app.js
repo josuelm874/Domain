@@ -7175,6 +7175,9 @@ function fixTraCount(lines) {
     let ti = -1;
     for (let i = lines.length - 1; i >= 0; i--) { if (lines[i].indexOf('TRA|') === 0) { ti = i; break; } }
     if (ti === -1) return lines;
+    // TRA deve ser a última linha: remove qualquer linha órfã após ele (ex.: INM mal
+    // posicionada de uma execução anterior, antes do fix de posicionamento da INM).
+    if (ti < lines.length - 1) lines = lines.slice(0, ti + 1);
     const f = lines[ti].split('|');
     const orig = f[1] || '';
     const count = lines.length;
@@ -7195,7 +7198,7 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         const ln = lines[i];
         if (ln.indexOf('NFM|') !== 0) { out.push(ln); i++; continue; }
         let j = i + 1;
-        while (j < lines.length && lines[j].indexOf('NFM|') !== 0) j++;
+        while (j < lines.length && lines[j].indexOf('NFM|') !== 0 && lines[j].indexOf('TRA|') !== 0) j++;
         const nfm = ln.split('|');
         const chave = (nfm[66] || '').replace(/\D/g, '');
         const valorTotal = reportMap.get(chave);
@@ -7214,10 +7217,17 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
-        let despC = 0;
-        pnms.forEach(b => { despC += Math.round((parseFortesNumber(b.f[61]) || 0) * 100); });
+        let despC = 0, desonC = 0;
+        pnms.forEach(b => {
+            despC += Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
+            desonC += Math.round((parseFortesNumber(b.f[42]) || 0) * 100); // desoneração do produto (idx42)
+        });
         const totC = Math.round(valorTotal * 100);
-        const liqC = totC - despC;
+        // Desoneração: líquido = total - despesas + desoneração; o bruto (idx8/38/39) soma ao
+        // líquido e idx43 (= bruto + despesa - desoneração) volta a somar exatamente o total.
+        // Confirmado em 3 notas reais desoneradas (relatório = total = soma dos idx43). Sem
+        // desoneração (desonC=0) cai no caso normal: líquido = total - despesas.
+        const liqC = totC - despC + desonC;
         const bru = pnms.map(b => Math.round((parseFortesNumber(b.f[8]) || 0) * 100));
         const sb = bru.reduce((a, c) => a + c, 0);
         const dd = distributeCentsRR(liqC - sb, pnms.length);
@@ -7226,7 +7236,8 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const s = fsNum2(nb / 100);
             b.f[8] = s; b.f[38] = s; b.f[39] = s;
             const dc = Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
-            b.f[43] = fsNum2((nb + dc) / 100);
+            const dnc = Math.round((parseFortesNumber(b.f[42]) || 0) * 100); // desoneração (idx42), não muda
+            b.f[43] = fsNum2((nb + dc - dnc) / 100);
             const cf = (b.f[2] || '').replace(/\D/g, '');
             const cad = cadastro[cf];
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
