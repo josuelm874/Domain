@@ -1355,7 +1355,17 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section" style="animation-delay: 0.2s"></div>
+                    <div class="box animate-section cfop-cst-box" style="animation-delay: 0.2s; cursor: pointer;">
+                        <div class="box-content">
+                            <div class="box-icon">
+                                <span class="material-icons-sharp">rule</span>
+                            </div>
+                            <div class="box-info">
+                                <h3>Padrões CFOP &rarr; CST</h3>
+                                <p>Definir CST e CST PIS/COFINS por CFOP (correção .fs)</p>
+                            </div>
+                        </div>
+                    </div>
                     <div class="box animate-section" style="animation-delay: 0.25s"></div>
                     <div class="box animate-section" style="animation-delay: 0.3s"></div>
                     <div class="box animate-section" style="animation-delay: 0.35s"></div>
@@ -1392,6 +1402,14 @@
             if (pythonLibraryBox) {
                 pythonLibraryBox.addEventListener('click', () => {
                     showPythonLibraryModal();
+                });
+            }
+
+            // Adicionar evento de clique ao box de padrões CFOP → CST (Feature B)
+            const cfopCstBox = document.querySelector('.cfop-cst-box');
+            if (cfopCstBox) {
+                cfopCstBox.addEventListener('click', () => {
+                    showCfopCstModal();
                 });
             }
         }
@@ -2031,6 +2049,173 @@ async function saveCestData() {
 function updateCestArrays() {
     const cestVencidos = JSON.parse(localStorage.getItem('cest_vencidos') || '[]');
     window.cestsVencidos = cestVencidos.map(c => sanitizarCodigoCest(c)).filter(Boolean);
+}
+
+//---------------------------------- CADASTRO CFOP → CST (Feature B) --------------------------------------//
+//
+// Mapa compartilhado CFOP → { cst, pis } armazenado no Supabase (KV em system_data, chave
+// `cfop_cst_patterns`) via saveDataSync/loadDataSync — mesmo backend dos demais cadastros,
+// sem tabela nem migration novas. Consumido pela correção do .fs (Feature A): por CFOP do
+// produto, seta CST e os 2 campos CST-PIS/COFINS. Estratégia de escrita: last-write-wins
+// (config pequena, editada raramente por admin — não precisa do merge append-only do CEST).
+
+const CFOP_CST_KEY = 'cfop_cst_patterns';
+
+/** Só dígitos, limitado a `max` chars. */
+function _sanitizeDigits(v, max) {
+    return String(v == null ? '' : v).replace(/\D/g, '').slice(0, max);
+}
+
+/** Lê o mapa do localStorage (cache local do KV). Retorna objeto {cfop:{cst,pis}}. */
+function getCfopCstPatterns() {
+    try {
+        const obj = JSON.parse(localStorage.getItem(CFOP_CST_KEY) || '{}');
+        return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function showCfopCstModal() {
+    const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
+    const currentUserData = registeredUsers.find(u => u.username === window.currentUser);
+    const isAdmin = window.currentUser === 'adm' || (currentUserData && currentUserData.control === 'administrador');
+    if (!isAdmin) {
+        alert('Apenas administradores podem acessar o cadastro CFOP → CST.');
+        return;
+    }
+
+    const existingModal = document.querySelector('.cfop-cst-modal');
+    if (existingModal) existingModal.remove();
+
+    const modal = document.createElement('div');
+    modal.className = 'cest-modal cfop-cst-modal'; // reusa o overlay/estilo do modal CEST
+    if (document.body.classList.contains('dark-mode-variables')) {
+        modal.classList.add('dark-mode-variables');
+    }
+
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Padrões CFOP → CST</h2>
+                <button class="close-btn" onclick="closeCfopCstModal()">
+                    <span class="material-icons-sharp">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="cest-container">
+                    <div class="cest-column" style="grid-column: 1 / -1;">
+                        <div class="cest-section">
+                            <p style="font-size: 0.85rem; color: var(--color-info-dark, #666); margin-bottom: 0.75rem;">
+                                Por CFOP, define o <strong>CST</strong> e o <strong>CST PIS/COFINS</strong> aplicados
+                                automaticamente na correção do arquivo .fs. Adicionar um CFOP já existente
+                                <strong>sobrescreve</strong> (edição). Compartilhado entre todas as máquinas.
+                            </p>
+                            <div class="input-group" style="gap: 0.5rem; flex-wrap: wrap;">
+                                <input type="text" id="cfop-cst-cfop" placeholder="CFOP (ex: 1403)" maxlength="4" inputmode="numeric" style="max-width: 140px;">
+                                <input type="text" id="cfop-cst-cst" placeholder="CST (ex: 90)" maxlength="3" inputmode="numeric" style="max-width: 130px;">
+                                <input type="text" id="cfop-cst-pis" placeholder="CST PIS/COFINS (ex: 73)" maxlength="2" inputmode="numeric" style="max-width: 200px;">
+                                <button onclick="addCfopCstPattern()" class="add-btn">
+                                    <span class="material-icons-sharp">add</span>
+                                </button>
+                            </div>
+                            <div class="product-list" id="cfop-cst-list">
+                                <!-- padrões carregados aqui -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    if (window.supabaseSync && window.supabaseSync.isConfigured()) {
+        window.supabaseSync.syncAll([CFOP_CST_KEY]).then(() => loadCfopCstData()).catch(() => loadCfopCstData());
+    } else {
+        loadCfopCstData();
+    }
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeCfopCstModal();
+    });
+
+    // Enter em qualquer um dos inputs adiciona.
+    ['cfop-cst-cfop', 'cfop-cst-cst', 'cfop-cst-pis'].forEach(id => {
+        const el = modal.querySelector('#' + id);
+        if (el) el.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); addCfopCstPattern(); }
+        });
+    });
+}
+
+function closeCfopCstModal() {
+    const modal = document.querySelector('.cfop-cst-modal');
+    if (modal) modal.remove();
+}
+
+/** Renderiza a lista a partir do mapa local e injeta nas linhas. */
+function loadCfopCstData() {
+    const list = document.getElementById('cfop-cst-list');
+    if (!list) return;
+    const map = getCfopCstPatterns();
+    const cfops = Object.keys(map).sort();
+    list.innerHTML = '';
+    if (cfops.length === 0) {
+        list.innerHTML = '<p style="color: var(--color-info-dark, #666); padding: 0.5rem;">Nenhum padrão cadastrado ainda.</p>';
+        return;
+    }
+    cfops.forEach(cfop => {
+        const entry = map[cfop] || {};
+        const item = document.createElement('div');
+        item.className = 'product-item';
+        item.innerHTML = `
+            <span class="product-name"><strong>${cfop}</strong> &rarr; CST ${entry.cst || '—'} &middot; PIS/COFINS ${entry.pis || '—'}</span>
+            <button onclick="removeCfopCstPattern('${cfop}')" class="remove-btn">
+                <span class="material-icons-sharp">delete</span>
+            </button>
+        `;
+        list.appendChild(item);
+    });
+}
+
+/** Upsert (adicionar/editar) um padrão e persistir. */
+function addCfopCstPattern() {
+    const cfopEl = document.getElementById('cfop-cst-cfop');
+    const cstEl = document.getElementById('cfop-cst-cst');
+    const pisEl = document.getElementById('cfop-cst-pis');
+    if (!cfopEl || !cstEl || !pisEl) return;
+
+    const cfop = _sanitizeDigits(cfopEl.value, 4);
+    const cst = _sanitizeDigits(cstEl.value, 3);
+    const pis = _sanitizeDigits(pisEl.value, 2);
+
+    if (cfop.length !== 4) { alert('CFOP deve ter 4 dígitos (ex: 1403).'); return; }
+    if (!cst) { alert('Informe o CST (ex: 90).'); return; }
+    if (!pis) { alert('Informe o CST PIS/COFINS (ex: 73).'); return; }
+
+    const map = getCfopCstPatterns();
+    map[cfop] = { cst, pis };
+    cfopEl.value = ''; cstEl.value = ''; pisEl.value = '';
+    saveCfopCstData(map);
+}
+
+function removeCfopCstPattern(cfop) {
+    const map = getCfopCstPatterns();
+    delete map[cfop];
+    saveCfopCstData(map);
+}
+
+/** Persiste o mapa (localStorage + Supabase KV, last-write-wins) e re-renderiza. */
+async function saveCfopCstData(map) {
+    localStorage.setItem(CFOP_CST_KEY, JSON.stringify(map));
+    window.cfopCstPatterns = map;
+    loadCfopCstData();
+    if (typeof saveDataSync === 'function') {
+        try { await saveDataSync(CFOP_CST_KEY, map); }
+        catch (e) { console.warn('Erro ao sincronizar CFOP→CST com Supabase:', e); }
+    }
 }
 
 // Função para exportar backup dos CEST
@@ -6891,20 +7076,28 @@ function createNfeCfeComparisonPage(mainContent) {
         return parsedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
-    function formatSpreadsheetOrTextValue(value) {
-        if (!value) return null;
-        const stringValue = String(value).trim().replace(/^R\$\s*/, ''); // Remove "R$" e espaços iniciais
-        if (!stringValue) return null;
-
-        const ptBRRegex = /^(\d{1,3}(\.\d{3})*,\d{2})$/;
-        if (ptBRRegex.test(stringValue)) {
-            return stringValue;
+    // Parser numérico tolerante a locale. O separador DECIMAL é o último '.' ou ',' que
+    // aparecer; o outro é tratado como separador de milhar e removido. Cobre tanto o BR
+    // ("1.036,88") quanto o US ("1,036.88") — este último é o que o SheetJS gera no cell.w
+    // ao renderizar o código de formato da planilha, e era a origem do bug "1.036,88 → 1,03"
+    // (o replace ingênuo de uma única vírgula virava parseFloat("1.036.88") = 1.036).
+    function parseLocaleNumber(value) {
+        let s = String(value == null ? '' : value).replace(/[^\d.,-]/g, '');
+        if (!s) return NaN;
+        const lastComma = s.lastIndexOf(',');
+        const lastDot = s.lastIndexOf('.');
+        if (lastComma !== -1 || lastDot !== -1) {
+            const decSep = lastComma > lastDot ? ',' : '.';
+            const thousSep = decSep === ',' ? '.' : ',';
+            s = s.split(thousSep).join('').replace(decSep, '.');
         }
+        return parseFloat(s);
+    }
 
-        const cleanedValue = stringValue.replace(',', '.');
-        const parsedValue = parseFloat(cleanedValue);
+    function formatSpreadsheetOrTextValue(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const parsedValue = parseLocaleNumber(value);
         if (isNaN(parsedValue)) return null;
-
         return parsedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
