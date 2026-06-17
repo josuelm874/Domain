@@ -7148,8 +7148,11 @@ function applyInstructionsLean(lines, text, summary) {
     return out;
 }
 
-// Grupo 1 (proativo seguro): varre o arquivo aplicando só correções determinísticas de fix
-// conhecido, sem depender do relatório de importação (qtd 0→1.00 em OUM; logradouro S/N em PAR).
+// Grupo 1 (proativo seguro): só a correção determinística que pode ser detectada SEM
+// ambiguidade pelo próprio arquivo — quantidade equivalente 0 em registro OUM → 1.00.
+// O logradouro "S/N" NÃO entra aqui: o campo correto varia (8/18) e blindar pelo conteúdo
+// gera falso positivo (testado: apagava campos PAR com valor "S"). Para logradouro, use o
+// Grupo 2 (relatório de importação colado), que informa a linha/campo exatos.
 function applyGrupo1Scan(lines, summary) {
     for (let k = 0; k < lines.length; k++) {
         const L = lines[k];
@@ -7159,11 +7162,26 @@ function applyGrupo1Scan(lines, summary) {
                 const nl = fixQuantityError(L, 4, f[3], '1.00');
                 if (nl !== L) { lines[k] = nl; summary.grupo1++; }
             }
-        } else if (L.indexOf('PAR|') === 0) {
-            const nl = fixLogradouroError(L, 8);
-            if (nl !== L) { lines[k] = nl; summary.grupo1++; }
         }
     }
+}
+
+// Atualiza o contador de linhas da última linha TRA (campo 2 = total de linhas, incluindo a
+// própria TRA, excluindo linha vazia final). Preserva o formato do arquivo: se o original
+// vinha com zeros à esquerda, mantém a largura; senão, sem padding (ex.: "TRA|8546").
+// Recomputa do array atual — qualquer linha adicionada/removida (rebuild de INM, etc.) reflete.
+function fixTraCount(lines) {
+    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+    let ti = -1;
+    for (let i = lines.length - 1; i >= 0; i--) { if (lines[i].indexOf('TRA|') === 0) { ti = i; break; } }
+    if (ti === -1) return lines;
+    const f = lines[ti].split('|');
+    const orig = f[1] || '';
+    const count = lines.length;
+    const cs = String(count);
+    f[1] = (/^0\d/.test(orig) && orig.length > cs.length) ? cs.padStart(orig.length, '0') : cs;
+    lines[ti] = f.join('|');
+    return lines;
 }
 
 // Correção de valores por bloco NFM. Mapa de campos (0-based) confirmado por harness:
@@ -7252,7 +7270,7 @@ function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
     lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary);
-    lines = updateTraLine(lines);
+    lines = fixTraCount(lines);
     return { text: lines.join('\n'), summary };
 }
 
