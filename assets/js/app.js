@@ -7217,17 +7217,12 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
-        let despC = 0, desonC = 0;
-        pnms.forEach(b => {
-            despC += Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
-            desonC += Math.round((parseFortesNumber(b.f[42]) || 0) * 100); // desoneração do produto (idx42)
-        });
+        let despC = 0;
+        pnms.forEach(b => { despC += Math.round((parseFortesNumber(b.f[61]) || 0) * 100); });
         const totC = Math.round(valorTotal * 100);
-        // Desoneração: líquido = total - despesas + desoneração; o bruto (idx8/38/39) soma ao
-        // líquido e idx43 (= bruto + despesa - desoneração) volta a somar exatamente o total.
-        // Confirmado em 3 notas reais desoneradas (relatório = total = soma dos idx43). Sem
-        // desoneração (desonC=0) cai no caso normal: líquido = total - despesas.
-        const liqC = totC - despC + desonC;
+        // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
+        // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
+        const liqC = totC - despC;
         const bru = pnms.map(b => Math.round((parseFortesNumber(b.f[8]) || 0) * 100));
         const sb = bru.reduce((a, c) => a + c, 0);
         const dd = distributeCentsRR(liqC - sb, pnms.length);
@@ -7252,7 +7247,9 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const key = cf + '|' + cs;
             let g = gm.get(key);
             if (!g) { g = { cf, cs, c: 0 }; gm.set(key, g); groups.push(g); }
-            g.c += Math.round((parseFortesNumber(b.f[43]) || 0) * 100);
+            // INM = soma de (bruto + despesa) do grupo, SEM desoneração (a desoneração só
+            // afeta o idx43 do produto). Σ INM = líquido + despesas = total = relatório.
+            g.c += Math.round((parseFortesNumber(b.f[8]) || 0) * 100) + Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
         });
         const tplArr = tpl || ['INM', '0.00', 'CE', '', '', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '', '', '', '', '0', '', '', '', '', '', '', 'N', ''];
         const newInm = groups.map(g => {
