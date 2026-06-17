@@ -7053,6 +7053,32 @@ function distributeCentsRR(diffCents, n) {
     return out;
 }
 
+// Garante que nenhum bruto (em centavos) fique abaixo de `minC` (mínimo 0,01 = 1 centavo),
+// preservando EXATAMENTE a soma total (= líquido da nota). Produtos abaixo do piso são
+// elevados ao piso; o déficit é retirado, centavo a centavo (round-robin), apenas dos
+// produtos com folga (> minC) da MESMA nota. Retorna `null` se for impossível — quando o
+// líquido é menor que nº de produtos × minC, caso em que dar o piso a todos exigiria bruto
+// negativo em algum outro produto. Converge sempre que Σ ≥ n·minC: a folga liberada ao
+// elevar os abaixo-do-piso é (Σ − n·minC) + déficit ≥ déficit.
+function enforceMinBrutoCents(targets, minC) {
+    const n = targets.length;
+    const total = targets.reduce((a, c) => a + c, 0);
+    if (total < n * minC) return null;
+    const out = targets.slice();
+    let deficit = 0;
+    for (let k = 0; k < n; k++) {
+        if (out[k] < minC) { deficit += minC - out[k]; out[k] = minC; }
+    }
+    while (deficit > 0) {
+        let moved = false;
+        for (let k = 0; k < n && deficit > 0; k++) {
+            if (out[k] > minC) { out[k]--; deficit--; moved = true; }
+        }
+        if (!moved) break; // salvaguarda: não ocorre quando total >= n*minC
+    }
+    return deficit === 0 ? out : null;
+}
+
 // CSV com aspas (aceita vírgula OU ponto-e-vírgula como separador) → células.
 function _fortesCsvSplit(line) {
     const out = []; let cur = '', q = false;
@@ -7226,8 +7252,18 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         const bru = pnms.map(b => Math.round((parseFortesNumber(b.f[8]) || 0) * 100));
         const sb = bru.reduce((a, c) => a + c, 0);
         const dd = distributeCentsRR(liqC - sb, pnms.length);
+        // Piso de 1 centavo por produto: o round-robin pode deixar um bruto <= 0 (inválido —
+        // o Fortes recusa a nota). Eleva os abaixo do piso e retira o déficit dos produtos com
+        // folga da mesma nota, mantendo Σ bruto = líquido. Se inviável (líquido < nº produtos),
+        // não emite nota inválida: registra e deixa a nota INTOCADA.
+        const targets = enforceMinBrutoCents(bru.map((b, x) => b + dd[x]), 1);
+        if (!targets) {
+            summary.brutoInviavel.push({ chave: chave || '(sem chave)', liquido: liqC / 100, produtos: pnms.length });
+            for (let k = i; k < j; k++) out.push(lines[k]);
+            i = j; continue;
+        }
         pnms.forEach((b, x) => {
-            const nb = bru[x] + dd[x];
+            const nb = targets[x];
             const s = fsNum2(nb / 100);
             b.f[8] = s; b.f[38] = s; b.f[39] = s;
             const dc = Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
@@ -7274,7 +7310,7 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
 function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const parsed = parseFortesFile(fsText);
     let lines = parsed.lines.slice();
-    const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [] };
+    const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [], brutoInviavel: [] };
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
     lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary);
@@ -7299,6 +7335,11 @@ function processFortesFullCorrection() {
         msg += `\nNotas SEM valor no relatório (não tocadas): ${summary.notasSemRelatorio.length}\n`;
         summary.notasSemRelatorio.slice(0, 5).forEach(c => { msg += `  - ${c}\n`; });
         if (summary.notasSemRelatorio.length > 5) msg += `  ... e mais ${summary.notasSemRelatorio.length - 5}\n`;
+    }
+    if (summary.brutoInviavel && summary.brutoInviavel.length) {
+        msg += `\n⚠ Notas NÃO corrigidas (líquido menor que 0,01 × nº de produtos — bruto mínimo impossível): ${summary.brutoInviavel.length}\n`;
+        summary.brutoInviavel.slice(0, 5).forEach(d => { msg += `  - ${d.chave}: líquido ${d.liquido.toFixed(2)} para ${d.produtos} produto(s)\n`; });
+        if (summary.brutoInviavel.length > 5) msg += `  ... e mais ${summary.brutoInviavel.length - 5}\n`;
     }
     if (summary.recheck.length) {
         msg += `\n⚠ Divergências na checagem final (${summary.recheck.length}):\n`;
