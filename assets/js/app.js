@@ -4586,6 +4586,7 @@ async function processSpedContribuicao(file, resultsList, progressBar, progressP
 
 let fortesFileData = null;
 let fortesAdjustmentsText = '';
+let fortesReportMap = null; // Feature A: Map<chave44, valorTotal> do relatório (autoridade)
 
 function createFortesCorrectionPage(mainContent) {
     console.log('createFortesCorrectionPage chamado');
@@ -4604,8 +4605,24 @@ function createFortesCorrectionPage(mainContent) {
                 </div>
             </div>
             
-            <!-- Box Inferior: Textarea para Instruções de Ajuste -->
-            <div class="box animate-section fortes-instructions-box" style="animation-delay: 0.1s; width: 100%; max-width: 800px; height: 500px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column;">
+            <!-- Stack: Relatório de Valores (frente) + Instruções de Ajuste (verso) -->
+            <div class="fortes-stack" style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
+                <button id="fortes-toggle-cards" type="button" title="Alternar Relatório / Instruções" style="position: absolute; top: -0.6rem; right: -0.6rem; background: var(--color-primary); color: #fff; border: none; border-radius: 50%; width: 42px; height: 42px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: var(--box-shadow); z-index: 20;">
+                    <span class="material-icons-sharp">swap_vert</span>
+                </button>
+                <!-- Card Relatório (frente) -->
+                <div class="box fortes-report-box" id="fortes-report-box" style="width: 100%; height: 500px; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform 0.4s ease, opacity 0.4s ease; z-index: 2;">
+                    <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">request_quote</span>
+                    <span id="fortes-report-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Solte o relatório de valores (CSV / XLSX)</span>
+                    <span style="font-size: 0.9rem; color: var(--color-dark-variant); text-align: center; max-width: 90%;">SIGA — colunas "Chave NF-e" e "Valor R$". Fonte de verdade dos valores.</span>
+                    <input type="file" id="fortes-report-input" accept=".csv,.xls,.xlsx,.txt" style="display: none;">
+                    <div id="fortes-report-info" style="display: none; margin-top: 1rem; text-align: center;">
+                        <span class="material-icons-sharp" style="font-size: 2rem; color: var(--color-success);">check_circle</span>
+                        <p id="fortes-report-name" style="margin-top: 0.5rem; color: var(--color-success); font-weight: 500;"></p>
+                    </div>
+                </div>
+                <!-- Card Instruções (verso) -->
+                <div class="box animate-section fortes-instructions-box" id="fortes-instructions-box" style="position: absolute; top: 0; left: 0; width: 100%; height: 500px; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column; transition: transform 0.4s ease, opacity 0.4s ease; transform: translateY(18px) scale(0.96); opacity: 0; pointer-events: none; z-index: 1;">
                 <label for="fortes-adjustments-textarea" style="font-size: 1.1rem; font-weight: 600; color: var(--color-dark); margin-bottom: 1rem;">
                     <span class="material-icons-sharp" style="vertical-align: middle; margin-right: 0.5rem;">edit_note</span>
                     Instruções de Ajuste
@@ -4615,16 +4632,17 @@ function createFortesCorrectionPage(mainContent) {
                     placeholder="Cole aqui as linhas de erro do relatório de importação...&#10;&#10;Exemplo de erro de CEST:&#10;0000000885 Valor do campo &quot;Código Especificador da Substituição Tributária - CEST&quot; não é válido (0016214). Campo 41. Registro PRO.&#10;&#10;Exemplo de erro de Quantidade:&#10;0000001498 Valor do campo Quantidade equivalente padrão deve ser maior que zero (0.00). Campo 4. Registro OUM.&#10;&#10;Exemplo de erro de Inscrição Estadual:&#10;0000000051 Inscrição Estadual do participante inválida (63759837). Campo 6. Registro PAR.&#10;&#10;Exemplo de erro de CST:&#10;0000001579 Campo CST(PIS) em branco. Esse campo será necessário para a geração do SPED Fiscal. Campo 38. Registro PNM.&#10;&#10;Exemplo de erro de Duplicidade:&#10;0000001154 Código do Produto(10115) em duplicidade no arquivo. Registro PRO.&#10;&#10;Exemplo de erro de NF1:&#10;0000001795 AIDF não encontrada para o documento (Estab.: 0001; AIDF: ; Espécie: NF1; Série: 2; Subs.: ; Núm./Form.: 0000026).&#10;&#10;Exemplo de erro de Valor Total:&#10;0000007011 Documento:000848622; Data:04/06/2025: Valor Total difere da Base de Cálculo, Isentas e Outras.&#10;&#10;Exemplo de erro de Soma CFOP:&#10;0000012362 A soma dos valores do CFOP 1910 do registro INM (19,77) difere da soma do valor líquido do registro PNM (17,71).&#10;&#10;O sistema irá automaticamente:&#10;- Identificar o tipo de erro&#10;- Localizar a linha e o campo&#10;- Aplicar a correção apropriada&#10;- Atualizar o total de linhas no final do arquivo&#10;&#10;Você pode colar múltiplos erros, um por linha."
                     style="flex: 1; width: 100%; padding: 1rem; border: 2px solid var(--color-light); border-radius: var(--border-radius-1); font-family: 'Poppins', sans-serif; font-size: 0.95rem; color: var(--color-dark); background: var(--color-background); resize: none; outline: none; transition: border-color 0.3s ease;"
                 ></textarea>
-                <div style="margin-top: 1rem; display: flex; gap: 1rem; justify-content: flex-end;">
-                    <button id="fortes-process-btn" class="btn-process" style="padding: 0.75rem 2rem; background: var(--color-primary); color: var(--color-white); border: none; border-radius: var(--border-radius-1); cursor: pointer; font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 1rem; transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem;" disabled>
-                        <span class="material-icons-sharp">build</span>
-                        Processar Ajustes
-                    </button>
-                    <button id="fortes-download-btn" class="btn-download" style="padding: 0.75rem 2rem; background: var(--color-success); color: var(--color-white); border: none; border-radius: var(--border-radius-1); cursor: pointer; font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 1rem; transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem; display: none;">
-                        <span class="material-icons-sharp">download</span>
-                        Baixar Arquivo Corrigido
-                    </button>
-                </div>
+                </div><!-- /fortes-instructions-box -->
+            </div><!-- /fortes-stack -->
+            <div style="width: 100%; max-width: 800px; margin: 0.75rem auto 0; display: flex; gap: 1rem; justify-content: flex-end;">
+                <button id="fortes-process-btn" class="btn-process" style="padding: 0.75rem 2rem; background: var(--color-primary); color: var(--color-white); border: none; border-radius: var(--border-radius-1); cursor: pointer; font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 1rem; transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem;" disabled>
+                    <span class="material-icons-sharp">build</span>
+                    Processar
+                </button>
+                <button id="fortes-download-btn" class="btn-download" style="padding: 0.75rem 2rem; background: var(--color-success); color: var(--color-white); border: none; border-radius: var(--border-radius-1); cursor: pointer; font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 1rem; transition: all 0.3s ease; display: flex; align-items: center; gap: 0.5rem; display: none;">
+                    <span class="material-icons-sharp">download</span>
+                    Baixar Arquivo Corrigido
+                </button>
             </div>
         </div>
     `;
@@ -4696,6 +4714,62 @@ function createFortesCorrectionPage(mainContent) {
         reader.readAsText(file, 'latin1'); // Usar latin1 para preservar caracteres especiais
     }
 
+    // --- Feature A: dropzone do relatório de valores + alternância de cards ---
+    const fortesReportBox = document.getElementById('fortes-report-box');
+    const fortesReportInput = document.getElementById('fortes-report-input');
+    const fortesReportLabel = document.getElementById('fortes-report-label');
+    const fortesReportInfo = document.getElementById('fortes-report-info');
+    const fortesReportName = document.getElementById('fortes-report-name');
+    const fortesInstrBox = document.getElementById('fortes-instructions-box');
+    const fortesToggle = document.getElementById('fortes-toggle-cards');
+
+    function handleFortesReport(file) {
+        if (!file) return;
+        parseFortesReport(file).then((map) => {
+            fortesReportMap = (map && map.size) ? map : null;
+            if (fortesReportMap) {
+                if (fortesReportLabel) { fortesReportLabel.textContent = 'Relatório carregado!'; fortesReportLabel.style.color = 'var(--color-success)'; }
+                if (fortesReportInfo) fortesReportInfo.style.display = 'block';
+                if (fortesReportName) fortesReportName.textContent = `${file.name} — ${fortesReportMap.size} nota(s)`;
+                if (fortesFileData && fortesProcessBtn) fortesProcessBtn.disabled = false;
+            } else {
+                alert('Não encontrei colunas "Chave NF-e" e "Valor" no relatório.');
+            }
+        });
+    }
+    if (fortesReportBox && fortesReportInput) {
+        fortesReportBox.addEventListener('click', (e) => { if (e.target.closest('#fortes-toggle-cards')) return; fortesReportInput.click(); });
+        fortesReportBox.addEventListener('dragover', (e) => { e.preventDefault(); fortesReportBox.classList.add('dragover'); });
+        fortesReportBox.addEventListener('dragleave', () => fortesReportBox.classList.remove('dragover'));
+        fortesReportBox.addEventListener('drop', (e) => { e.preventDefault(); fortesReportBox.classList.remove('dragover'); if (e.dataTransfer.files.length) handleFortesReport(e.dataTransfer.files[0]); });
+        fortesReportInput.addEventListener('change', (e) => { if (e.target.files.length) handleFortesReport(e.target.files[0]); });
+    }
+
+    // Stack: define qual card fica na frente (relativo, opaco) e qual no verso (absoluto, esmaecido).
+    function setStackFront(front, back) {
+        front.style.position = 'relative';
+        front.style.transform = 'translateY(0) scale(1)';
+        front.style.opacity = '1';
+        front.style.pointerEvents = 'auto';
+        front.style.zIndex = '2';
+        back.style.position = 'absolute';
+        back.style.top = '0'; back.style.left = '0';
+        back.style.transform = 'translateY(18px) scale(0.96)';
+        back.style.opacity = '0';
+        back.style.pointerEvents = 'none';
+        back.style.zIndex = '1';
+    }
+    let reportOnFront = true;
+    if (fortesToggle && fortesReportBox && fortesInstrBox) {
+        setStackFront(fortesReportBox, fortesInstrBox);
+        fortesToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            reportOnFront = !reportOnFront;
+            if (reportOnFront) setStackFront(fortesReportBox, fortesInstrBox);
+            else setStackFront(fortesInstrBox, fortesReportBox);
+        });
+    }
+
     // Monitorar mudanças no textarea
     fortesAdjustmentsTextarea.addEventListener('input', () => {
         fortesAdjustmentsText = fortesAdjustmentsTextarea.value.trim();
@@ -4706,17 +4780,20 @@ function createFortesCorrectionPage(mainContent) {
         }
     });
 
-    // Botão de processar ajustes
+    // Botão de processar: relatório presente → pipeline completo (Feature A);
+    // só instruções → fluxo de instruções legado.
     fortesProcessBtn.addEventListener('click', () => {
         if (!fortesFileData) {
             alert('Por favor, carregue um arquivo .fs primeiro.');
             return;
         }
-        if (!fortesAdjustmentsText) {
-            alert('Por favor, insira as instruções de ajuste.');
-            return;
+        if (fortesReportMap && fortesReportMap.size) {
+            processFortesFullCorrection();
+        } else if (fortesAdjustmentsText) {
+            processFortesAdjustments();
+        } else {
+            alert('Carregue o relatório de valores (CSV/XLSX) ou cole instruções de ajuste.');
         }
-        processFortesAdjustments();
     });
 
     // Botão de download
@@ -6941,6 +7018,270 @@ function downloadCorrectedFortesFile() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+// ============ Feature A: correção de valores do .fs guiada por relatório ============
+// Pipeline: (1) Grupo 2 — instruções coladas (in-place, ANTES do rebuild de INM para
+//   não invalidar números de linha); (2) Grupo 1 — varredura proativa segura (OUM qtd=0
+//   →1.00, PAR logradouro S/N); (3) correção de valores por bloco NFM (relatório = autoridade)
+//   + CST/PIS via cadastro CFOP→CST + reconstrução das INM por (CFOP,CST); (4) re-checagem
+//   final dos totais contra o relatório. Validado em harness (794,60 / líquido 791,60 / INM 794,60).
+
+// Número tolerante a locale (BR "1.036,88" e US "1,036.88"). O .fs usa ponto decimal.
+function parseFortesNumber(v) {
+    let s = String(v == null ? '' : v).replace(/[^\d.,-]/g, '');
+    if (!s) return NaN;
+    const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.');
+    if (lc !== -1 || ld !== -1) {
+        const d = lc > ld ? ',' : '.';
+        const t = d === ',' ? '.' : ',';
+        s = s.split(t).join('').replace(d, '.');
+    }
+    return parseFloat(s);
+}
+
+// Número → "xxxx.xx" (ponto decimal, sem milhar) — formato do .fs.
+function fsNum2(n) { return (Math.round(n * 100) / 100).toFixed(2); }
+
+// Distribui `diffCents` (com sinal) centavo a centavo, round-robin de cima p/ baixo.
+function distributeCentsRR(diffCents, n) {
+    const out = new Array(n).fill(0);
+    if (!n || !diffCents) return out;
+    const sign = diffCents > 0 ? 1 : -1;
+    let rem = Math.abs(diffCents), i = 0;
+    while (rem > 0) { out[i % n] += sign; rem--; i++; }
+    return out;
+}
+
+// CSV com aspas (aceita vírgula OU ponto-e-vírgula como separador) → células.
+function _fortesCsvSplit(line) {
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+        else { if (c === '"') q = true; else if (c === ',' || c === ';') { out.push(cur); cur = ''; } else cur += c; }
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+}
+
+// Linhas de células → Map<chave44, valorNumber>. Detecta colunas por cabeçalho.
+function _fortesRowsToReportMap(rows) {
+    const map = new Map();
+    if (!rows || !rows.length) return map;
+    let hIdx = -1, iCh = -1, iVal = -1;
+    const lim = Math.min(rows.length, 25);
+    for (let h = 0; h < lim; h++) {
+        const cells = (rows[h] || []).map(c => String(c == null ? '' : c).toLowerCase());
+        const ic = cells.findIndex(c => c.includes('chave'));
+        const iv = cells.findIndex(c => c.includes('valor'));
+        if (ic !== -1 && iv !== -1) { hIdx = h; iCh = ic; iVal = iv; break; }
+    }
+    if (hIdx === -1) return map;
+    for (let r = hIdx + 1; r < rows.length; r++) {
+        const cols = rows[r] || [];
+        const key = String(cols[iCh] == null ? '' : cols[iCh]).replace(/\D/g, '');
+        if (!/^\d{44}$/.test(key)) continue;
+        const val = parseFortesNumber(cols[iVal]);
+        if (!isNaN(val)) map.set(key, val);
+    }
+    return map;
+}
+
+// Lê o relatório (CSV SIGA ou XLSX) → Promise<Map<chave44, valorNumber>>. XLSX via cell.w||cell.v.
+function parseFortesReport(file) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        const name = (file.name || '').toLowerCase();
+        const isText = /\.csv$|\.txt$/.test(name) || file.type === 'text/csv';
+        reader.onload = (e) => {
+            try {
+                let rows;
+                if (isText) {
+                    rows = String(e.target.result).split(/\r?\n/).filter(l => l.trim() !== '').map(l => _fortesCsvSplit(l));
+                } else {
+                    const wb = XLSX.read(e.target.result, { type: 'array' });
+                    rows = [];
+                    for (const sn of wb.SheetNames) {
+                        const sh = wb.Sheets[sn];
+                        if (sh) rows = rows.concat(XLSX.utils.sheet_to_json(sh, { header: 1, raw: false, defval: '' }));
+                    }
+                }
+                resolve(_fortesRowsToReportMap(rows));
+            } catch (err) {
+                console.warn('Erro ao ler relatório de valores:', err);
+                resolve(new Map());
+            }
+        };
+        reader.onerror = () => resolve(new Map());
+        if (isText) reader.readAsText(file, 'utf-8'); else reader.readAsArrayBuffer(file);
+    });
+}
+
+// Grupo 2 (híbrido): aplica instruções coladas reusando parseErrorLine + fix* (in-place).
+// DUPLICITY/NF1 (apagam linhas) e TOTAL_VALUE/CFOP_SUM (cobertos pela correção de valores)
+// ficam fora deste passe — para esses, use o fluxo de instruções dedicado (botão sem relatório).
+function applyInstructionsLean(lines, text, summary) {
+    const out = lines.slice();
+    String(text || '').split('\n').forEach((instr) => {
+        const t = instr.trim();
+        if (!t || t.startsWith('//') || t.startsWith('#')) return;
+        const e = parseErrorLine(t);
+        if (!e || !e.lineNumber) return;
+        const idx = e.lineNumber - 1;
+        if (idx < 0 || idx >= out.length) return;
+        const L = out[idx];
+        let nl = L;
+        switch (e.type) {
+            case 'CST': nl = fixCstError(L, e.fieldNumber); break;
+            case 'IE': nl = fixIeError(L, e.fieldNumber, e.invalidIe); break;
+            case 'CEST': nl = fixCestError(L, e.fieldNumber, e.invalidCest); break;
+            case 'QUANTITY': nl = fixQuantityError(L, e.fieldNumber, e.invalidValue, e.replacementValue); break;
+            case 'LOGRADOURO': nl = fixLogradouroError(L, e.fieldNumber); break;
+            case 'GRUPO': nl = fixGrupoError(L, e.fieldNumber, e.invalidValue); break;
+            case 'ESTABELECIMENTO': nl = fixEstabelecimentoError(L, e.fieldNumber, e.invalidValue); break;
+            case 'TRIBUTACAO': nl = fixTributacaoError(L); break;
+            default: return;
+        }
+        if (nl !== L) { out[idx] = nl; summary.grupo2++; }
+    });
+    return out;
+}
+
+// Grupo 1 (proativo seguro): varre o arquivo aplicando só correções determinísticas de fix
+// conhecido, sem depender do relatório de importação (qtd 0→1.00 em OUM; logradouro S/N em PAR).
+function applyGrupo1Scan(lines, summary) {
+    for (let k = 0; k < lines.length; k++) {
+        const L = lines[k];
+        if (L.indexOf('OUM|') === 0) {
+            const f = L.split('|');
+            if (f.length > 3 && parseFortesNumber(f[3]) === 0) {
+                const nl = fixQuantityError(L, 4, f[3], '1.00');
+                if (nl !== L) { lines[k] = nl; summary.grupo1++; }
+            }
+        } else if (L.indexOf('PAR|') === 0) {
+            const nl = fixLogradouroError(L, 8);
+            if (nl !== L) { lines[k] = nl; summary.grupo1++; }
+        }
+    }
+}
+
+// Correção de valores por bloco NFM. Mapa de campos (0-based) confirmado por harness:
+//   NFM: chave=66, somatórioDespesas=28, valorLíquido=25/51/52, valorTotal=35
+//   PNM: CFOP=2, CST=5, valorBruto=8/38/39, CST-PIS/COFINS=36/37, bruto+despesa=43, despesa=61
+//   INM: total=1/9, CFOP=3, CST=19, campos 6º–9º (idx5..8)=0.00
+function applyValueCorrection(lines, reportMap, cadastro, summary) {
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+        const ln = lines[i];
+        if (ln.indexOf('NFM|') !== 0) { out.push(ln); i++; continue; }
+        let j = i + 1;
+        while (j < lines.length && lines[j].indexOf('NFM|') !== 0) j++;
+        const nfm = ln.split('|');
+        const chave = (nfm[66] || '').replace(/\D/g, '');
+        const valorTotal = reportMap.get(chave);
+        if (valorTotal == null || isNaN(valorTotal)) {
+            summary.notasSemRelatorio.push(chave || '(sem chave)');
+            for (let k = i; k < j; k++) out.push(lines[k]);
+            i = j; continue;
+        }
+        const body = [];
+        let tpl = null;
+        for (let k = i + 1; k < j; k++) {
+            const L = lines[k];
+            if (L.indexOf('PNM|') === 0) body.push({ t: 'PNM', f: L.split('|') });
+            else if (L.indexOf('INM|') === 0) { if (!tpl) tpl = L.split('|'); }
+            else body.push({ t: 'O', raw: L });
+        }
+        const pnms = body.filter(b => b.t === 'PNM');
+        if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
+        let despC = 0;
+        pnms.forEach(b => { despC += Math.round((parseFortesNumber(b.f[61]) || 0) * 100); });
+        const totC = Math.round(valorTotal * 100);
+        const liqC = totC - despC;
+        const bru = pnms.map(b => Math.round((parseFortesNumber(b.f[8]) || 0) * 100));
+        const sb = bru.reduce((a, c) => a + c, 0);
+        const dd = distributeCentsRR(liqC - sb, pnms.length);
+        pnms.forEach((b, x) => {
+            const nb = bru[x] + dd[x];
+            const s = fsNum2(nb / 100);
+            b.f[8] = s; b.f[38] = s; b.f[39] = s;
+            const dc = Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
+            b.f[43] = fsNum2((nb + dc) / 100);
+            const cf = (b.f[2] || '').replace(/\D/g, '');
+            const cad = cadastro[cf];
+            if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
+        });
+        nfm[28] = fsNum2(despC / 100);
+        nfm[35] = fsNum2(totC / 100);
+        const lq = fsNum2(liqC / 100);
+        nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
+        const groups = []; const gm = new Map();
+        pnms.forEach(b => {
+            const cf = (b.f[2] || '').replace(/\D/g, ''), cs = b.f[5] || '';
+            const key = cf + '|' + cs;
+            let g = gm.get(key);
+            if (!g) { g = { cf, cs, c: 0 }; gm.set(key, g); groups.push(g); }
+            g.c += Math.round((parseFortesNumber(b.f[43]) || 0) * 100);
+        });
+        const tplArr = tpl || ['INM', '0.00', 'CE', '', '', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '', '', '', '', '0', '', '', '', '', '', '', 'N', ''];
+        const newInm = groups.map(g => {
+            const f = tplArr.slice();
+            const tt = fsNum2(g.c / 100);
+            f[1] = tt; f[9] = tt; f[3] = g.cf; f[19] = g.cs;
+            f[5] = '0.00'; f[6] = '0.00'; f[7] = '0.00'; f[8] = '0.00';
+            return f.join('|');
+        });
+        out.push(nfm.join('|'));
+        body.forEach(b => out.push(b.t === 'PNM' ? b.f.join('|') : b.raw));
+        newInm.forEach(s => out.push(s));
+        const gsum = groups.reduce((a, g) => a + g.c, 0);
+        if (Math.abs(gsum - totC) > 1) summary.recheck.push({ chave, esperado: valorTotal, obtido: gsum / 100 });
+        summary.notasCorrigidas++;
+        i = j;
+    }
+    return out;
+}
+
+// Orquestra o pipeline completo. Puro (sem DOM) — testável isoladamente.
+function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
+    const parsed = parseFortesFile(fsText);
+    let lines = parsed.lines.slice();
+    const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [] };
+    if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
+    applyGrupo1Scan(lines, summary);
+    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary);
+    lines = updateTraLine(lines);
+    return { text: lines.join('\n'), summary };
+}
+
+// Handler do botão Processar quando há relatório carregado.
+function processFortesFullCorrection() {
+    if (!fortesFileData) { alert('Carregue um arquivo .fs primeiro.'); return; }
+    if (!fortesReportMap || !fortesReportMap.size) { alert('Carregue o relatório de valores.'); return; }
+    const cadastro = (typeof getCfopCstPatterns === 'function') ? getCfopCstPatterns() : {};
+    const { text, summary } = runFortesCorrection(fortesFileData, fortesReportMap, cadastro, fortesAdjustmentsText);
+    fortesFileData = text;
+    const dl = document.getElementById('fortes-download-btn');
+    if (dl) dl.style.display = 'flex';
+    let msg = 'Correção concluída!\n\n';
+    msg += `Notas corrigidas (valores): ${summary.notasCorrigidas}\n`;
+    msg += `Ajustes Grupo 1 (varredura proativa): ${summary.grupo1}\n`;
+    msg += `Ajustes Grupo 2 (instruções coladas): ${summary.grupo2}\n`;
+    if (summary.notasSemRelatorio.length) {
+        msg += `\nNotas SEM valor no relatório (não tocadas): ${summary.notasSemRelatorio.length}\n`;
+        summary.notasSemRelatorio.slice(0, 5).forEach(c => { msg += `  - ${c}\n`; });
+        if (summary.notasSemRelatorio.length > 5) msg += `  ... e mais ${summary.notasSemRelatorio.length - 5}\n`;
+    }
+    if (summary.recheck.length) {
+        msg += `\n⚠ Divergências na checagem final (${summary.recheck.length}):\n`;
+        summary.recheck.slice(0, 5).forEach(d => { msg += `  - ${d.chave}: esperado ${d.esperado.toFixed(2)}, obtido ${d.obtido.toFixed(2)}\n`; });
+    } else {
+        msg += `\n✓ Checagem final: todos os totais batem com o relatório.\n`;
+    }
+    msg += '\nVocê pode baixar o arquivo corrigido.';
+    alert(msg);
 }
 
 //------------------------------------ FIM Fortes Correction ------------------------------------//
