@@ -7257,9 +7257,15 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         // restante. (Não validável pelo relatório, que só dá o total da nota; testar no Fortes.)
         const cNfm = (idx) => Math.round((parseFortesNumber(nfm[idx]) || 0) * 100);
         const cfopOf = (b) => (b.f[2] || '').replace(/\D/g, '');
-        const isMulti = new Set(pnms.map(cfopOf)).size >= 2;
+        const cfopsSet = new Set(pnms.map(cfopOf));
+        const isMulti = cfopsSet.size >= 2;
         const fixo = pnms.map(b => isMulti && cfopOf(b) === '1910'); // 1910 multi-CFOP = valor cheio
-        const despC = cNfm(26) + cNfm(27) + cNfm(28) + cNfm(31) + cNfm(32) + cNfm(33) - cNfm(34);
+        // Nota SÓ-1910 (bonificação/doação pura): sem despesa — valor cheio = total do relatório.
+        // Zera TODOS os campos de despesa do NFM (frete/seguro/outras/IPI/ST/serviços/desconto)
+        // e despC=0, de modo que líquido = total = relatório (decisão do Josué, 2026-06-18).
+        const so1910 = cfopsSet.size === 1 && cfopsSet.has('1910');
+        if (so1910) { [26, 27, 28, 31, 32, 33, 34].forEach(ix => { nfm[ix] = '0.00'; }); }
+        const despC = so1910 ? 0 : (cNfm(26) + cNfm(27) + cNfm(28) + cNfm(31) + cNfm(32) + cNfm(33) - cNfm(34));
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
