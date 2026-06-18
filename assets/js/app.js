@@ -7243,8 +7243,13 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
-        let despC = 0;
-        pnms.forEach(b => { despC += Math.round((parseFortesNumber(b.f[61]) || 0) * 100); });
+        // Despesas vêm dos campos do NFM ORIGINAL (não mais Σ idx61 dos produtos):
+        // frete(26)+seguro(27)+outras(28)+IPI(31)+ST(32)+serviços(33) − desconto(34).
+        // ICMS importação (idx29/30) NÃO entra. Cada campo em centavos antes de somar
+        // para evitar erro de ponto flutuante. Desconto entra NEGATIVO → aumenta o líquido
+        // (relatório 300 + desconto 50 → líquido 350: o Fortes abate o desconto na entrada).
+        const cNfm = (idx) => Math.round((parseFortesNumber(nfm[idx]) || 0) * 100);
+        const despC = cNfm(26) + cNfm(27) + cNfm(28) + cNfm(31) + cNfm(32) + cNfm(33) - cNfm(34);
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
@@ -7273,8 +7278,8 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const cad = cadastro[cf];
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
         });
-        nfm[28] = fsNum2(despC / 100);
-        nfm[35] = fsNum2(totC / 100);
+        // idx28 (outras despesas) é PRESERVADO — agora é fonte de cálculo, não destino.
+        nfm[35] = fsNum2(liqC / 100); // campo 36 = LÍQUIDO (era o total do documento)
         const lq = fsNum2(liqC / 100);
         nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
         const groups = []; const gm = new Map();
@@ -7283,9 +7288,9 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const key = cf + '|' + cs;
             let g = gm.get(key);
             if (!g) { g = { cf, cs, c: 0 }; gm.set(key, g); groups.push(g); }
-            // INM = soma de (bruto + despesa) do grupo, SEM desoneração (a desoneração só
-            // afeta o idx43 do produto). Σ INM = líquido + despesas = total = relatório.
-            g.c += Math.round((parseFortesNumber(b.f[8]) || 0) * 100) + Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
+            // INM = Σ bruto do grupo (SÓ idx8, sem idx61 nem desoneração). Como Σ bruto = líquido
+            // por construção (distribuição acima), Σ INM = líquido = nfm[35].
+            g.c += Math.round((parseFortesNumber(b.f[8]) || 0) * 100);
         });
         const tplArr = tpl || ['INM', '0.00', 'CE', '', '', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '', '', '', '', '0', '', '', '', '', '', '', 'N', ''];
         const newInm = groups.map(g => {
@@ -7299,7 +7304,7 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         body.forEach(b => out.push(b.t === 'PNM' ? b.f.join('|') : b.raw));
         newInm.forEach(s => out.push(s));
         const gsum = groups.reduce((a, g) => a + g.c, 0);
-        if (Math.abs(gsum - totC) > 1) summary.recheck.push({ chave, esperado: valorTotal, obtido: gsum / 100 });
+        if (Math.abs(gsum - liqC) > 1) summary.recheck.push({ chave, esperado: liqC / 100, obtido: gsum / 100 });
         summary.notasCorrigidas++;
         i = j;
     }
