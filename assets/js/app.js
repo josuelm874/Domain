@@ -7243,30 +7243,46 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
-        // Despesas vêm dos campos do NFM ORIGINAL (não mais Σ idx61 dos produtos):
-        // frete(26)+seguro(27)+outras(28)+IPI(31)+ST(32)+serviços(33) − desconto(34).
-        // ICMS importação (idx29/30) NÃO entra. Cada campo em centavos antes de somar
-        // para evitar erro de ponto flutuante. Desconto entra NEGATIVO → aumenta o líquido
-        // (relatório 300 + desconto 50 → líquido 350: o Fortes abate o desconto na entrada).
+        // Despesa = campos do NFM ORIGINAL para TODA nota (mono ou multi-CFOP):
+        // frete(26)+seguro(27)+outras(28)+IPI(31)+ST(32)+serviços(33) − desconto(34). ICMS
+        // importação (29/30) não entra. Cada campo em centavos antes de somar (evita erro de
+        // ponto flutuante). Desconto entra NEGATIVO → aumenta o líquido (relatório 300 +
+        // desconto 50 → líquido 350: o Fortes abate o desconto na entrada).
+        // COMPROVADO PELO RELATÓRIO REAL (A & R, 2026-06-18): em 63/63 notas multi-CFOP com
+        // gabarito, despesa = relatório − Σbruto = despNFM. A hipótese Σidx61 batia em só 42/63
+        // (perdia IPI/ST/desconto reais; idx61 é 0,00 no arquivo). Logo multi-CFOP NÃO muda a
+        // despesa — usa a mesma fonte do mono.
+        // Única especialização multi-CFOP: o produto 1910 (bonificação/doação) recebe VALOR
+        // CHEIO — seu bruto original fica FORA do rateio do líquido; só os demais distribuem o
+        // restante. (Não validável pelo relatório, que só dá o total da nota; testar no Fortes.)
         const cNfm = (idx) => Math.round((parseFortesNumber(nfm[idx]) || 0) * 100);
+        const cfopOf = (b) => (b.f[2] || '').replace(/\D/g, '');
+        const isMulti = new Set(pnms.map(cfopOf)).size >= 2;
+        const fixo = pnms.map(b => isMulti && cfopOf(b) === '1910'); // 1910 multi-CFOP = valor cheio
         const despC = cNfm(26) + cNfm(27) + cNfm(28) + cNfm(31) + cNfm(32) + cNfm(33) - cNfm(34);
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
         const liqC = totC - despC;
         const bru = pnms.map(b => Math.round((parseFortesNumber(b.f[8]) || 0) * 100));
-        const sb = bru.reduce((a, c) => a + c, 0);
-        const dd = distributeCentsRR(liqC - sb, pnms.length);
-        // Piso de 1 centavo por produto: o round-robin pode deixar um bruto <= 0 (inválido —
-        // o Fortes recusa a nota). Eleva os abaixo do piso e retira o déficit dos produtos com
-        // folga da mesma nota, mantendo Σ bruto = líquido. Se inviável (líquido < nº produtos),
-        // não emite nota inválida: registra e deixa a nota INTOCADA.
-        const targets = enforceMinBrutoCents(bru.map((b, x) => b + dd[x]), 1);
-        if (!targets) {
+        // Produtos 1910 (multi-CFOP) mantêm o bruto cheio; só os demais entram no rateio.
+        const bruFixo = bru.reduce((a, c, x) => a + (fixo[x] ? c : 0), 0);
+        const idxAjust = pnms.map((_, x) => x).filter(x => !fixo[x]);
+        const alvoAjust = liqC - bruFixo; // Σ bruto ajustável = líquido − Σ bruto dos 1910 cheios
+        const sbAjust = idxAjust.reduce((a, x) => a + bru[x], 0);
+        const ddAjust = distributeCentsRR(alvoAjust - sbAjust, idxAjust.length);
+        // Piso de 1 centavo por produto ajustável: o round-robin pode deixar um bruto <= 0
+        // (inválido — o Fortes recusa a nota). Eleva os abaixo do piso e retira o déficit dos
+        // ajustáveis com folga da MESMA nota, mantendo Σ bruto ajustável = alvo. Se inviável
+        // (alvo < nº ajustáveis), não emite nota inválida: registra e deixa a nota INTOCADA.
+        const ajustTargets = enforceMinBrutoCents(idxAjust.map((x, k) => bru[x] + ddAjust[k]), 1);
+        if (!ajustTargets) {
             summary.brutoInviavel.push({ chave: chave || '(sem chave)', liquido: liqC / 100, produtos: pnms.length });
             for (let k = i; k < j; k++) out.push(lines[k]);
             i = j; continue;
         }
+        const targets = bru.slice(); // fixos (1910) mantêm bruto; ajustáveis recebem o rateio
+        idxAjust.forEach((x, k) => { targets[x] = ajustTargets[k]; });
         pnms.forEach((b, x) => {
             const nb = targets[x];
             const s = fsNum2(nb / 100);
