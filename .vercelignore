@@ -7,8 +7,11 @@
 .py
 api_icms
 node_modules
+worker
 *.bat
 *.sh
 PROJETO.md
 cest_backup_inicial.json
 desktop.ini
+
+render.yaml

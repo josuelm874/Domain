@@ -1,0 +1,16 @@
+{
+  "name": "softtech-worker",
+  "version": "0.1.0-spike",
+  "private": true,
+  "description": "Sidecar local da SoftTech Fiscal: processa Baixar NFCe e DIRBI fora do navegador. Spike da ponte HTTPS(Vercel)->http(localhost).",
+  "main": "server.js",
+  "bin": {
+    "softtech-worker": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
