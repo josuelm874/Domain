@@ -3,9 +3,8 @@
 Processa **Baixar NFCe** e **DIRBI** fora do navegador. O navegador só configura
 e dispara; o worker faz o trabalho pesado e devolve progresso.
 
-Estado atual: **SPIKE da ponte** — apenas valida que a página HTTPS (Vercel)
-consegue falar com este worker em `http://localhost` no Chrome do trabalho.
-NFCe e DIRBI entram depois que a ponte for confirmada.
+Estado atual: **ponte validada** + **fluxo NFCe implementado**. DIRBI entra depois
+que o NFCe for validado em produção com token vivo.
 
 ## Rodar o worker
 
@@ -16,6 +15,27 @@ node server.js
 ```
 
 Deve imprimir `ouvindo em http://127.0.0.1:47620`. Deixe a janela aberta.
+
+## Rotas
+
+| Rota | Método | Para quê |
+|------|--------|----------|
+| `/health` | GET | health-check (a UI usa p/ detectar o worker) |
+| `/echo` | POST | eco (validação da ponte) |
+| `/nfce/start` | POST | inicia um job NFCe — body `{ concurrency, companies:[{cnpj,token,taxid,keys,meta}] }` → `{ jobId }` |
+| `/nfce/status/{jobId}` | GET | progresso por empresa (polling) |
+| `/nfce/detail/{jobId}/{cnpj}` | GET | falhas + divergências de conferência de uma empresa |
+| `/nfce/zip/{jobId}/{cnpj}` | GET | baixa o ZIP da empresa (montado no worker) |
+
+O worker faz os fetches à SEFAZ-CE (Node não tem CORS) e monta o ZIP por empresa
+com `lib/zip.js` (sem dependências — `zlib` DEFLATE + formato PKZIP). Cada empresa
+traz seu próprio token; no modo "1 token global" a UI replica o mesmo token em todas.
+
+## Arquitetura interna
+
+- `server.js` — roteador HTTP (loopback, CORS+PNA).
+- `lib/nfce.js` — job manager (pool round-robin por empresa, fetch SEFAZ, conferência).
+- `lib/zip.js` — zip-writer zero-deps (reutilizável pelo DIRBI depois).
 
 ## Validar a ponte (sem deploy)
 
