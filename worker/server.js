@@ -15,11 +15,12 @@
 'use strict';
 
 const http = require('http');
+const nfce = require('./lib/nfce');
 
 const HOST = '127.0.0.1';      // só loopback — nunca expor na rede
 const PORT = 47620;            // porta fixa (briefing); alta p/ evitar colisão
 const NAME = 'softtech-worker';
-const VERSION = '0.1.0-spike';
+const VERSION = '0.2.0-nfce';
 
 /**
  * Aplica CORS + Private Network Access em TODA resposta.
@@ -43,6 +44,15 @@ function sendJson(res, status, payload) {
     const body = JSON.stringify(payload);
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(body);
+}
+
+function sendZip(res, buffer, fileName) {
+    res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="' + encodeURIComponent(fileName) + '"',
+        'Content-Length': buffer.length,
+    });
+    res.end(buffer);
 }
 
 function readBody(req, limitBytes = 1_000_000) {
@@ -103,6 +113,47 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // ====================== NFCe ======================
+    // Dispara o job: recebe { companies:[{cnpj,token,taxid,keys,meta}], concurrency }.
+    if (method === 'POST' && path === '/nfce/start') {
+        try {
+            const raw = await readBody(req, 64_000_000); // milhares de chaves de 44 díg
+            const payload = raw ? JSON.parse(raw) : {};
+            const job = nfce.startJob(payload);
+            sendJson(res, 200, { ok: !job.error, jobId: job.id, error: job.error || '' });
+        } catch (e) {
+            sendJson(res, 400, { ok: false, error: (e && e.message) || 'payload inválido' });
+        }
+        return;
+    }
+
+    // Progresso (polling): GET /nfce/status/{jobId}
+    if (method === 'GET' && path.startsWith('/nfce/status/')) {
+        const jobId = decodeURIComponent(path.slice('/nfce/status/'.length));
+        const st = nfce.getStatus(jobId);
+        if (!st) { sendJson(res, 404, { ok: false, error: 'job não encontrado' }); return; }
+        sendJson(res, 200, st);
+        return;
+    }
+
+    // Detalhe (falhas + divergências) de uma empresa: GET /nfce/detail/{jobId}/{cnpj}
+    if (method === 'GET' && path.startsWith('/nfce/detail/')) {
+        const rest = path.slice('/nfce/detail/'.length).split('/');
+        const detail = nfce.getCompanyDetail(decodeURIComponent(rest[0] || ''), decodeURIComponent(rest[1] || ''));
+        if (!detail) { sendJson(res, 404, { ok: false, error: 'job/empresa não encontrado' }); return; }
+        sendJson(res, 200, detail);
+        return;
+    }
+
+    // Download do ZIP de uma empresa: GET /nfce/zip/{jobId}/{cnpj}
+    if (method === 'GET' && path.startsWith('/nfce/zip/')) {
+        const rest = path.slice('/nfce/zip/'.length).split('/');
+        const z = nfce.getCompanyZip(decodeURIComponent(rest[0] || ''), decodeURIComponent(rest[1] || ''));
+        if (!z) { sendJson(res, 404, { ok: false, error: 'ZIP indisponível (job/empresa não pronto)' }); return; }
+        sendZip(res, z.buffer, z.name);
+        return;
+    }
+
     sendJson(res, 404, { ok: false, error: 'not found', path });
 });
 
@@ -119,5 +170,6 @@ server.listen(PORT, HOST, () => {
     console.log(`\n  ${NAME} v${VERSION}`);
     console.log(`  ouvindo em http://${HOST}:${PORT}`);
     console.log(`  rotas: GET /health · POST /echo`);
+    console.log(`         POST /nfce/start · GET /nfce/status/{job} · GET /nfce/zip/{job}/{cnpj} · GET /nfce/detail/{job}/{cnpj}`);
     console.log(`  (Ctrl+C para parar)\n`);
 });
