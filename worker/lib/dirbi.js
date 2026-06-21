@@ -104,17 +104,25 @@ function accumulateXml(text, rules, empresas, ctx) {
 // ------------------------------------------------------- leitura inbox ----
 // Itera os arquivos da inbox chamando onXml(text) por XML. .xml lidos um a um
 // (memória baixa); .zip carregado inteiro e expandido (caveat de 2GB).
-function forEachInboxXml(inboxDir, onXml, onProgress) {
-    let entries;
-    try { entries = fs.readdirSync(inboxDir); } catch (e) {
-        throw new Error('inbox não encontrada: ' + inboxDir);
+// Lista .xml/.zip recursivamente (a pasta pode ter subpastas com XML).
+function listFilesRec(dir, acc) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) listFilesRec(full, acc);
+        else if (/\.(xml|zip)$/i.test(e.name)) acc.push(full);
     }
-    const files = entries.filter((f) => /\.(xml|zip)$/i.test(f));
+    return acc;
+}
+
+function forEachInboxXml(inboxDir, onXml, onProgress) {
+    let files;
+    try { files = listFilesRec(inboxDir, []); } catch (e) {
+        throw new Error('pasta não encontrada/ilegível: ' + inboxDir);
+    }
     let done = 0;
-    for (const f of files) {
-        const full = path.join(inboxDir, f);
+    for (const full of files) {
         try {
-            if (/\.zip$/i.test(f)) {
+            if (/\.zip$/i.test(full)) {
                 const items = readZip(fs.readFileSync(full), (n) => /\.xml$/i.test(n));
                 for (const it of items) onXml(it.data.toString('utf8'));
             } else {
@@ -136,6 +144,7 @@ async function makeCompanyXlsx(modelBuffer, emp, rules) {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(modelBuffer);
     const ws = wb.getWorksheet('DIRBI') || wb.worksheets[0];
+    ws.autoFilter = null; // remove o filtro da linha 3 que vem do modelo
     for (const rule of rules) {
         ws.getCell('E' + rule.row).value = Math.round((emp.somas[rule.row] || 0) * 100) / 100;
     }

@@ -3856,8 +3856,8 @@ function createDirbiPage(mainContent) {
         <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
             <div id="dirbi-node-panel" style="display:none; width:100%; max-width:800px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); flex-direction:column; gap:0.8rem;">
                 <div style="display:flex; align-items:center; gap:0.6rem;"><span class="material-icons-sharp" style="color:var(--color-success);">dns</span><strong>Worker Node detectado</strong></div>
-                <small style="color:var(--color-dark-variant);">Coloque os XML (ou .zip) na pasta inbox abaixo e processe pelo Node — aguenta grande escala (lê do disco).</small>
-                <code id="dirbi-inbox-path" style="font-size:0.78rem; background:rgba(0,0,0,0.05); padding:0.4rem 0.6rem; border-radius:0.4rem; word-break:break-all;"></code>
+                <small style="color:var(--color-dark-variant);">Cole o caminho da pasta com os XML ou .zip (subpastas incluídas). O Node lê do disco — aguenta grande escala.</small>
+                <input id="dirbi-inbox-path" type="text" spellcheck="false" placeholder="C:\\caminho\\da\\pasta" style="width:100%; font-family:monospace; font-size:0.78rem; padding:0.5rem 0.6rem; border:1px solid var(--color-info-dark); border-radius:0.4rem; background:transparent; color:var(--color-dark);">
                 <div id="dirbi-template-warn" style="display:none; color:var(--color-danger); font-size:0.8rem;"></div>
                 <button id="dirbi-node-btn" type="button" style="align-self:flex-start; padding:0.7rem 1.4rem; border:none; border-radius:0.6rem; background:var(--color-success); color:#fff; font-weight:700; cursor:pointer;">Processar inbox (Node)</button>
             </div>
@@ -3899,7 +3899,7 @@ function createDirbiPage(mainContent) {
         if (panel) panel.style.display = 'flex';
         if (dropLabel) dropLabel.textContent = 'Ou processe XML/.zip manualmente pelo navegador';
         const info = health.dirbi || {};
-        if (pathEl) pathEl.textContent = info.inbox || '(inbox padrão do worker)';
+        if (pathEl) pathEl.value = info.inbox || '';
         if (warn && info.templateExists === false) {
             warn.style.display = 'block';
             warn.textContent = 'Atenção: modelo DIRBI não encontrado pelo worker (' + (info.template || '') + ').';
@@ -3916,8 +3916,10 @@ async function processDirbiNode() {
     if (btn) btn.disabled = true;
     try {
         setStatus('Iniciando no Node...');
+        const pathEl = document.getElementById('dirbi-inbox-path');
+        const inboxPath = pathEl && pathEl.value.trim() ? pathEl.value.trim() : undefined;
         const start = await (await fetch(DIRBI_WORKER + '/dirbi/start', {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inboxPath }),
         })).json();
         if (!start.ok || !start.jobId) throw new Error(start.error || 'falha ao iniciar');
         const jobId = start.jobId;
@@ -4051,6 +4053,7 @@ async function processDirbiXmls(fileList) {
             const wb = new ExcelJS.Workbook();
             await wb.xlsx.load(modelBuffer);
             const ws = wb.getWorksheet('DIRBI') || wb.worksheets[0];
+            ws.autoFilter = null; // remove o filtro da linha 3 que vem do modelo
 
             // Escreve as somas em E4:E21 (preserva F/G) e a razão social em B2.
             for (const rule of rules) {
