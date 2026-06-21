@@ -23,8 +23,27 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { buildZip, readZip } = require('./zip');
 
-const TEMPLATE_PATH = process.env.DIRBI_TEMPLATE ||
-    path.join(__dirname, '..', '..', 'assets', 'js', 'DIRBI MES-ANO.xlsx');
+// Resolve o modelo na 1ª localização que existir:
+//  1. env DIRBI_TEMPLATE  — override explícito
+//  2. ao lado do .exe     — empacotado com pkg (path.dirname(process.execPath));
+//                           permite trocar o modelo sem rebuildar
+//  3. worker-local        — worker/DIRBI MES-ANO.xlsx (commitado; e no snapshot pkg)
+//  4. repo                — ../../assets/js/DIRBI MES-ANO.xlsx (dev no monorepo)
+const TEMPLATE_NAME = 'DIRBI MES-ANO.xlsx';
+function resolveTemplatePath() {
+    const candidates = [
+        process.env.DIRBI_TEMPLATE,
+        path.join(path.dirname(process.execPath), TEMPLATE_NAME),
+        path.join(__dirname, '..', TEMPLATE_NAME),
+        path.join(__dirname, '..', '..', 'assets', 'js', TEMPLATE_NAME),
+    ].filter(Boolean);
+    for (const c of candidates) {
+        try { if (fs.existsSync(c)) return c; } catch (_) { /* segue */ }
+    }
+    // nenhum existe: devolve o worker-local p/ a mensagem de erro apontar o esperado
+    return path.join(__dirname, '..', TEMPLATE_NAME);
+}
+const TEMPLATE_PATH = resolveTemplatePath();
 const INBOX_DEFAULT = process.env.DIRBI_INBOX || path.join(__dirname, '..', 'inbox');
 
 const jobs = new Map();
