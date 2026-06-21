@@ -19,7 +19,9 @@
 
 const { buildZip } = require('./zip');
 
-const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
+// URL da SEFAZ-CE. Override por env (SEFAZ_BASE) só p/ teste local com mock —
+// em produção o default real é usado.
+const API_BASE = process.env.SEFAZ_BASE || 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
 const DEFAULT_CONCURRENCY = 10;
 const MAX_RETRIES = 3;
 

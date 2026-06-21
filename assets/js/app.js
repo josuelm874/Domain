@@ -9021,21 +9021,10 @@ function createBaixarNfcePage(mainContent) {
         } catch { return false; }
     }
 
-    function showWorkerMissing() {
-        startBtn.disabled = false;
-        const msg = 'Worker local não encontrado. Abra o SoftTech Worker (softtech-worker.exe) e tente novamente.';
-        if (stageDownload.style.display === 'block') {
-            footerText.innerHTML = '<span class="bn-err">' + escapeHtml(msg) + '</span>';
-        } else {
-            const ws = document.getElementById('bn-worker-status');
-            if (ws) { ws.textContent = msg; ws.style.color = 'var(--color-danger)'; }
-        }
-    }
 
-    // Dispara um job no worker para a lista de relatórios e cria 1 anel por empresa.
-    async function launchJob(reportsList) {
-        const companiesPayload = buildCompanies(reportsList);
-        if (!companiesPayload.length) return false;
+    // Dispara um job no worker para os grupos (empresas) já montados e cria 1 anel por empresa.
+    async function launchJob(companiesPayload) {
+        if (!companiesPayload || !companiesPayload.length) return false;
         let resp;
         try {
             const res = await fetch(WORKER_BASE + '/nfce/start', {
@@ -9044,7 +9033,7 @@ function createBaixarNfcePage(mainContent) {
                 body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
             });
             resp = await res.json();
-        } catch (e) { showWorkerMissing(); return false; }
+        } catch (e) { return false; }
         if (!resp || !resp.ok || !resp.jobId) {
             footerText.innerHTML = '<span class="bn-err">' + escapeHtml((resp && resp.error) || 'falha ao iniciar o worker') + '</span>';
             return false;
@@ -9121,12 +9110,204 @@ function createBaixarNfcePage(mainContent) {
         }
     }
 
-    // ---------- início do download (estágio seleção → download) ----------
+    // ====================== fallback BROWSER (worker ausente) ======================
+    // Se o worker Node não responder, o download roda no próprio navegador — o
+    // caminho do "sucesso inicial". Mesma SEFAZ, mesmo ZIP por empresa (JSZip),
+    // mas com token POR EMPRESA (paridade com o modo novo). Só usado quando
+    // detectWorker() falha.
+    const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
+    const MAX_RETRIES = 3;
+    const backoff = (attempt) => 500 * Math.pow(2, attempt);
+    const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
+    const browserPool = { active: 0, concurrency: CONCURRENCY };
+    let brRr = 0;
+
+    function jsonHeaders(token, taxid) {
+        return { 'x-authentication-token': token, 'x-authentication-taxid': taxid, 'accept': 'application/json' };
+    }
+    function xmlHeaders(token, taxid) {
+        return { 'x-authentication-token': token, 'x-authentication-taxid': taxid, 'accept': '*/*' };
+    }
+    async function fetchWithRetry(url, options, attempt) {
+        attempt = attempt || 0;
+        try {
+            const res = await fetch(url, options);
+            if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
+            if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
+            if (!res.ok) {
+                if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+                throw makeErr('http', 'HTTP ' + res.status);
+            }
+            return res;
+        } catch (err) {
+            if (err && err.kind) {
+                if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+                throw err;
+            }
+            if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+            throw makeErr('network', (err && err.message) ? err.message : 'Falha de rede');
+        }
+    }
+    async function resolveIdNfe(chave, token, taxid) {
+        const url = API_BASE + '/coupons/extract/' + encodeURIComponent(chave);
+        const res = await fetchWithRetry(url, { headers: jsonHeaders(token, taxid) });
+        const data = await res.json();
+        const idNfe = data && (data.idNfe || (data.coupon && data.coupon.idNfe));
+        if (!idNfe) throw makeErr('parse', 'Resposta sem idNfe');
+        return String(idNfe);
+    }
+    function xmlUrl(idNfe, chave, token) {
+        return API_BASE + '/fiscal-coupons/xml/' + encodeURIComponent(idNfe) +
+            '?chaveAcesso=' + encodeURIComponent(chave) + '&apiKey=' + encodeURIComponent(token);
+    }
+    async function fetchXml(idNfe, chave, token, taxid) {
+        const res = await fetchWithRetry(xmlUrl(idNfe, chave, token), { headers: xmlHeaders(token, taxid) });
+        return await res.text();
+    }
+    // Conferência (divergência ≠ erro de download). Mesma lógica do worker.
+    function conferirXmlBrowser(xml, exp) {
+        const diffs = [];
+        if (exp.nNF) {
+            const mN = xml.match(/<nNF>(\d+)<\/nNF>/);
+            const e = parseInt(String(exp.nNF).replace(/\D/g, ''), 10);
+            const g = mN ? parseInt(mN[1], 10) : NaN;
+            if (!Number.isNaN(e) && (Number.isNaN(g) || e !== g)) diffs.push({ campo: 'nNF', esperado: String(exp.nNF), obtido: mN ? mN[1] : '(ausente)' });
+        }
+        if (exp.dhEmi) {
+            const mD = xml.match(/<dhEmi>([^<]+)<\/dhEmi>/);
+            const xmlD = mD ? normalizeDate(mD[1].slice(0, 10)) : '';
+            if (!xmlD || xmlD !== normalizeDate(exp.dhEmi)) diffs.push({ campo: 'data', esperado: exp.dhEmi, obtido: xmlD || '(ausente)' });
+        }
+        if (exp.vNF) {
+            const mV = xml.match(/<vNF>([\d.]+)<\/vNF>/);
+            const e = parseBrlValue(exp.vNF);
+            const g = mV ? parseFloat(mV[1]) : NaN;
+            if (Number.isNaN(g) || Number.isNaN(e) || Math.abs(e - g) > 0.01) diffs.push({ campo: 'valor', esperado: exp.vNF, obtido: mV ? mV[1] : '(ausente)' });
+        }
+        return diffs;
+    }
+
+    // Cria/abastece as empresas para o pool do browser e dispara o pool.
+    function runBrowser(groups) {
+        if (typeof JSZip === 'undefined') {
+            footerText.innerHTML = '<span class="bn-err">JSZip não carregou — não dá p/ baixar pelo navegador.</span>';
+            return false;
+        }
+        for (const g of groups) {
+            const compKey = 'browser|' + g.cnpj;
+            let comp = companies.get(compKey);
+            if (!comp) comp = createCompany(compKey, g.cnpj, g.keys[0], 0);
+            comp.token = g.token;
+            comp.taxid = g.taxid;
+            if (!comp.pending) comp.pending = [];
+            if (!comp.meta) comp.meta = new Map();
+            if (!comp._seen) comp._seen = new Set();
+            if (!comp.zip) comp.zip = new JSZip();
+            comp.phase = 'download';
+            for (const chave of g.keys) {
+                if (comp._seen.has(chave)) continue;
+                comp._seen.add(chave);
+                comp.pending.push(chave);
+                if (g.meta && g.meta[chave]) comp.meta.set(chave, g.meta[chave]);
+            }
+            comp.total = comp._seen.size;
+            updateRing(comp);
+        }
+        updateFooter();
+        updateTooltip();
+        pumpBrowser();
+        return true;
+    }
+
+    function nextBrowserJob() {
+        const ativos = [];
+        companies.forEach((c) => { if (c.pending && c.pending.length) ativos.push(c); });
+        if (!ativos.length) return null;
+        const comp = ativos[brRr % ativos.length];
+        brRr++;
+        return { comp, chave: comp.pending.shift() };
+    }
+
+    function pumpBrowser() {
+        while (browserPool.active < browserPool.concurrency) {
+            const job = nextBrowserJob();
+            if (!job) break;
+            browserPool.active++;
+            processBrowserJob(job).then(() => { browserPool.active--; pumpBrowser(); });
+        }
+    }
+
+    async function processBrowserJob(job) {
+        const { comp, chave } = job;
+        try {
+            const idNfe = await resolveIdNfe(chave, comp.token, comp.taxid);
+            const xml = await fetchXml(idNfe, chave, comp.token, comp.taxid);
+            let innerKey = '';
+            const mk = xml.match(/Id="NFe(\d{44})"/) || xml.match(/<chNFe>(\d{44})<\/chNFe>/);
+            if (mk) innerKey = mk[1];
+            if (innerKey && innerKey !== chave) throw makeErr('mismatch', 'XML retornou chave ' + innerKey + ', esperado ' + chave);
+            comp.zip.file(chave + '.xml', xml);
+            comp.downloaded++;
+            if (!comp.nomeResolved) {
+                const m = xml.match(/<emit>[\s\S]*?<xNome>([^<]+)<\/xNome>/) || xml.match(/<emit>[\s\S]*?<xFant>([^<]+)<\/xFant>/);
+                if (m && m[1]) { comp.nome = m[1].trim(); comp.nomeResolved = true; if (comp.els) comp.els.name.textContent = comp.nome; }
+            }
+            if (comp.meta.has(chave)) conferirXmlBrowser(xml, comp.meta.get(chave));
+        } catch (err) {
+            comp.errors++;
+            if (err && err.kind === 'auth') {
+                // token morto desta empresa: o resto vira erro "não tentado"
+                while (comp.pending.length) { comp.pending.shift(); comp.errors++; }
+            }
+        }
+        updateRing(comp);
+        updateFooter();
+        updateTooltip();
+        finalizeBrowser(comp);
+    }
+
+    function finalizeBrowser(comp) {
+        if (comp.phase !== 'download') return;
+        if (comp.pending && comp.pending.length) return;
+        if (comp.downloaded + comp.errors < comp.total) return;
+        if (comp.downloaded === 0) { comp.phase = 'done'; comp.zipProgress = 1; updateRing(comp); updateFooter(); return; }
+        comp.phase = 'zip';
+        updateRing(comp);
+        comp.zip.generateAsync({ type: 'blob' }, (m) => {
+            comp.zipProgress = (m.percent || 0) / 100;
+            updateRing(comp); updateFooter();
+        }).then((blob) => {
+            comp.zipProgress = 1; comp.phase = 'done';
+            updateRing(comp); updateFooter();
+            const empNome = sanitizeFileName(comp.nome || ('CNPJ ' + comp.cnpj));
+            enqueueDownload(blob, 'NFCe ' + comp.monthLabel + '_' + empNome + '.zip');
+        }).catch((e) => {
+            comp.phase = 'done'; comp.zipProgress = 1;
+            updateRing(comp); updateFooter();
+            console.error('Erro ao gerar ZIP de ' + comp.cnpj + ': ' + (e && e.message));
+        });
+    }
+
+    // ---------- início do download (worker se houver; senão, browser) ----------
+    let useWorker = null;
+
+    // Dispara a lista de relatórios: worker se disponível, senão browser.
+    async function routeAndRun(reportsList) {
+        const groups = buildCompanies(reportsList);
+        if (!groups.length) return false;
+        if (useWorker === null) useWorker = await detectWorker();
+        if (useWorker) {
+            const ok = await launchJob(groups);
+            if (ok) return true;
+            useWorker = false; // worker detectado mas falhou → cai p/ browser
+        }
+        return runBrowser(groups);
+    }
+
     async function startDownload() {
         if (!reports.length) return;
         startBtn.disabled = true;
-        const has = await detectWorker();
-        if (!has) { showWorkerMissing(); return; }
+        useWorker = await detectWorker();
 
         // anima os cards "fundindo" e troca de estágio
         Array.from(reportGrid.children).forEach((c) => c.classList.add('bn-merge'));
@@ -9135,8 +9316,15 @@ function createBaixarNfcePage(mainContent) {
         stageDownload.style.display = 'block';
         buildMiniRing();
 
-        const ok = await launchJob(reports);
-        if (!ok && !jobIds.length) {
+        const groups = buildCompanies(reports);
+        let ok = false;
+        if (useWorker) {
+            ok = await launchJob(groups);
+            if (!ok) { useWorker = false; ok = runBrowser(groups); }
+        } else {
+            ok = runBrowser(groups);
+        }
+        if (!ok && !companies.size) {
             // nada disparou: volta ao estágio de seleção
             stageDownload.style.display = 'none';
             stageSelect.style.display = 'flex';
@@ -9178,7 +9366,7 @@ function createBaixarNfcePage(mainContent) {
         if (stageDownload.style.display === 'block') {
             // botão + durante o processo: lê os novos relatórios e dispara um job adicional
             const novos = await readFiles(files);
-            if (novos.length) { reports.push(...novos); launchJob(novos); }
+            if (novos.length) { reports.push(...novos); routeAndRun(novos); }
         } else {
             await handleSelectStageFiles(files);
         }
