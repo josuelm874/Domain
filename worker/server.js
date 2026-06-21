@@ -16,11 +16,12 @@
 
 const http = require('http');
 const nfce = require('./lib/nfce');
+const dirbi = require('./lib/dirbi');
 
 const HOST = '127.0.0.1';      // só loopback — nunca expor na rede
 const PORT = 47620;            // porta fixa (briefing); alta p/ evitar colisão
 const NAME = 'softtech-worker';
-const VERSION = '0.2.0-nfce';
+const VERSION = '0.3.0-nfce-dirbi';
 
 /**
  * Aplica CORS + Private Network Access em TODA resposta.
@@ -90,7 +91,7 @@ const server = http.createServer(async (req, res) => {
 
     // Health-check: a UI usa isto para detectar "worker ausente" e instruir o uso.
     if (method === 'GET' && path === '/health') {
-        sendJson(res, 200, { ok: true, name: NAME, version: VERSION, time: new Date().toISOString() });
+        sendJson(res, 200, { ok: true, name: NAME, version: VERSION, time: new Date().toISOString(), dirbi: dirbi.inboxInfo() });
         return;
     }
 
@@ -154,6 +155,43 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // ====================== DIRBI ======================
+    // Processa a inbox (XMLs no disco): { inboxPath? } -> { jobId }.
+    if (method === 'POST' && path === '/dirbi/start') {
+        try {
+            const raw = await readBody(req, 1_000_000);
+            const payload = raw ? JSON.parse(raw) : {};
+            const job = dirbi.startJob(payload);
+            sendJson(res, 200, { ok: !job.error, jobId: job.id, error: job.error || '' });
+        } catch (e) {
+            sendJson(res, 400, { ok: false, error: (e && e.message) || 'payload inválido' });
+        }
+        return;
+    }
+
+    if (method === 'GET' && path.startsWith('/dirbi/status/')) {
+        const jobId = decodeURIComponent(path.slice('/dirbi/status/'.length));
+        const st = dirbi.getStatus(jobId);
+        if (!st) { sendJson(res, 404, { ok: false, error: 'job não encontrado' }); return; }
+        sendJson(res, 200, st);
+        return;
+    }
+
+    // Resultado: .xlsx (1 empresa) ou .zip (várias).
+    if (method === 'GET' && path.startsWith('/dirbi/result/')) {
+        const jobId = decodeURIComponent(path.slice('/dirbi/result/'.length));
+        const r = dirbi.getResult(jobId);
+        if (!r) { sendJson(res, 404, { ok: false, error: 'resultado indisponível' }); return; }
+        const ctype = r.isZip ? 'application/zip' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        res.writeHead(200, {
+            'Content-Type': ctype,
+            'Content-Disposition': 'attachment; filename="' + encodeURIComponent(r.name) + '"',
+            'Content-Length': r.buffer.length,
+        });
+        res.end(r.buffer);
+        return;
+    }
+
     sendJson(res, 404, { ok: false, error: 'not found', path });
 });
 
@@ -171,5 +209,6 @@ server.listen(PORT, HOST, () => {
     console.log(`  ouvindo em http://${HOST}:${PORT}`);
     console.log(`  rotas: GET /health · POST /echo`);
     console.log(`         POST /nfce/start · GET /nfce/status/{job} · GET /nfce/zip/{job}/{cnpj} · GET /nfce/detail/{job}/{cnpj}`);
+    console.log(`         POST /dirbi/start · GET /dirbi/status/{job} · GET /dirbi/result/{job}`);
     console.log(`  (Ctrl+C para parar)\n`);
 });

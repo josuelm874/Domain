@@ -146,4 +146,51 @@ function buildZip(entries) {
     return w.end();
 }
 
-module.exports = { ZipWriter, buildZip, crc32, METHOD_STORE, METHOD_DEFLATE };
+/**
+ * Leitor de ZIP zero-dep (zlib inflateRaw). Lê o EOCD → diretório central →
+ * cada entrada (STORE ou DEFLATE). Carrega o buffer inteiro em memória — bom p/
+ * ZIPs moderados (lote de XMLs); p/ volume gigante (~2GB) prefira XMLs soltos
+ * na inbox (lidos um a um), não um único .zip enorme.
+ *
+ * `filter(name)` opcional: se devolver false, a entrada é pulada (não inflada).
+ * Retorna [{ name, data: Buffer }] (só arquivos, ignora diretórios).
+ */
+function readZip(buffer, filter) {
+    const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    // Acha o EOCD (assinatura 0x06054b50) varrendo de trás pra frente.
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 65536; i--) {
+        if (buf.readUInt32LE(i) === SIG_EOCD) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('ZIP inválido: EOCD não encontrado');
+    const total = buf.readUInt16LE(eocd + 10);
+    let p = buf.readUInt32LE(eocd + 16); // offset do diretório central
+    const out = [];
+    for (let n = 0; n < total; n++) {
+        if (buf.readUInt32LE(p) !== SIG_CENTRAL) break;
+        const method = buf.readUInt16LE(p + 10);
+        const compSize = buf.readUInt32LE(p + 20);
+        const nameLen = buf.readUInt16LE(p + 28);
+        const extraLen = buf.readUInt16LE(p + 30);
+        const commentLen = buf.readUInt16LE(p + 32);
+        const localOff = buf.readUInt32LE(p + 42);
+        const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+        p += 46 + nameLen + extraLen + commentLen;
+        if (name.endsWith('/')) continue;               // diretório
+        if (filter && !filter(name)) continue;
+        // Local header: assinatura + campos; nome/extra próprios do local.
+        if (buf.readUInt32LE(localOff) !== SIG_LOCAL) continue;
+        const lNameLen = buf.readUInt16LE(localOff + 26);
+        const lExtraLen = buf.readUInt16LE(localOff + 28);
+        const dataStart = localOff + 30 + lNameLen + lExtraLen;
+        const comp = buf.subarray(dataStart, dataStart + compSize);
+        let data;
+        if (method === METHOD_STORE) data = Buffer.from(comp);
+        else if (method === METHOD_DEFLATE) data = zlib.inflateRawSync(comp);
+        else throw new Error('ZIP: método de compressão não suportado (' + method + ') em ' + name);
+        out.push({ name, data });
+    }
+    return out;
+}
+
+module.exports = { ZipWriter, buildZip, readZip, crc32, METHOD_STORE, METHOD_DEFLATE };

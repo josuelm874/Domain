@@ -3835,12 +3835,33 @@ function matchDirbiRow(ncm, rules) {
     return null;
 }
 
-// Cria a aba DIRBI: box de upload de múltiplos XML de NFC-e + status.
+// Worker local (mesmo do NFCe). DIRBI tenta o Node primeiro; sem resposta, cai
+// pro navegador (caminho do "sucesso inicial", empresa por empresa).
+const DIRBI_WORKER = 'http://127.0.0.1:47620';
+
+async function detectDirbiWorker() {
+    try {
+        const res = await fetch(DIRBI_WORKER + '/health', { method: 'GET' });
+        if (!res.ok) return null;
+        const j = await res.json();
+        return (j && j.ok) ? j : null;
+    } catch { return null; }
+}
+
+// Cria a aba DIRBI: painel Node (inbox no disco) quando o worker existe; senão,
+// dropzone do navegador (XML/.zip avulsos).
 function createDirbiPage(mainContent) {
     mainContent.innerHTML = `
         <h1>DIRBI</h1>
-        <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.6rem; max-width:1000px; margin:0 auto; padding:2rem;">
-            <div id="dirbi-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:300px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+        <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
+            <div id="dirbi-node-panel" style="display:none; width:100%; max-width:800px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); flex-direction:column; gap:0.8rem;">
+                <div style="display:flex; align-items:center; gap:0.6rem;"><span class="material-icons-sharp" style="color:var(--color-success);">dns</span><strong>Worker Node detectado</strong></div>
+                <small style="color:var(--color-dark-variant);">Coloque os XML (ou .zip) na pasta inbox abaixo e processe pelo Node — aguenta grande escala (lê do disco).</small>
+                <code id="dirbi-inbox-path" style="font-size:0.78rem; background:rgba(0,0,0,0.05); padding:0.4rem 0.6rem; border-radius:0.4rem; word-break:break-all;"></code>
+                <div id="dirbi-template-warn" style="display:none; color:var(--color-danger); font-size:0.8rem;"></div>
+                <button id="dirbi-node-btn" type="button" style="align-self:flex-start; padding:0.7rem 1.4rem; border:none; border-radius:0.6rem; background:var(--color-success); color:#fff; font-weight:700; cursor:pointer;">Processar inbox (Node)</button>
+            </div>
+            <div id="dirbi-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:240px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
                 <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">request_quote</span>
                 <p id="dirbi-drop-label" style="font-weight:600;">Selecione os XML das NFC-e (ou arquivos .zip)</p>
                 <small style="color:var(--color-dark-variant);">Aceita XML avulsos e .zip. Múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip quando houver mais de uma). As fórmulas de Pis/Cofins são preservadas.</small>
@@ -3852,6 +3873,7 @@ function createDirbiPage(mainContent) {
 
     const box = document.getElementById('dirbi-drop');
     const input = document.getElementById('dirbi-file-input');
+    const dropLabel = document.getElementById('dirbi-drop-label');
     if (!box || !input) return;
 
     box.addEventListener('click', () => input.click());
@@ -3865,6 +3887,68 @@ function createDirbiPage(mainContent) {
     input.addEventListener('change', () => {
         if (input.files && input.files.length) processDirbiXmls(input.files);
     });
+
+    // Detecta o worker: presente → mostra painel Node e rotula a dropzone como
+    // alternativa manual; ausente → só navegador (fluxo original).
+    detectDirbiWorker().then((health) => {
+        if (!health) return; // sem Node: segue só navegador
+        const panel = document.getElementById('dirbi-node-panel');
+        const pathEl = document.getElementById('dirbi-inbox-path');
+        const btn = document.getElementById('dirbi-node-btn');
+        const warn = document.getElementById('dirbi-template-warn');
+        if (panel) panel.style.display = 'flex';
+        if (dropLabel) dropLabel.textContent = 'Ou processe XML/.zip manualmente pelo navegador';
+        const info = health.dirbi || {};
+        if (pathEl) pathEl.textContent = info.inbox || '(inbox padrão do worker)';
+        if (warn && info.templateExists === false) {
+            warn.style.display = 'block';
+            warn.textContent = 'Atenção: modelo DIRBI não encontrado pelo worker (' + (info.template || '') + ').';
+        }
+        if (btn) btn.addEventListener('click', () => processDirbiNode());
+    });
+}
+
+// Dispara o processamento DIRBI no worker (lê a inbox do disco) e baixa o resultado.
+async function processDirbiNode() {
+    const status = document.getElementById('dirbi-status');
+    const setStatus = (html) => { if (status) status.innerHTML = html; };
+    const btn = document.getElementById('dirbi-node-btn');
+    if (btn) btn.disabled = true;
+    try {
+        setStatus('Iniciando no Node...');
+        const start = await (await fetch(DIRBI_WORKER + '/dirbi/start', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+        })).json();
+        if (!start.ok || !start.jobId) throw new Error(start.error || 'falha ao iniciar');
+        const jobId = start.jobId;
+        let st;
+        for (;;) {
+            st = await (await fetch(DIRBI_WORKER + '/dirbi/status/' + encodeURIComponent(jobId))).json();
+            if (st.error) throw new Error(st.error);
+            const prog = st.phase === 'lendo'
+                ? `Lendo XML... ${st.filesDone}/${st.filesTotal} arquivo(s)`
+                : `Gerando ${st.empresas} planilha(s)...`;
+            setStatus(prog);
+            if (st.done) break;
+            await new Promise((r) => setTimeout(r, 600));
+        }
+        // baixa o resultado (xlsx ou zip)
+        const res = await fetch(DIRBI_WORKER + '/dirbi/result/' + encodeURIComponent(jobId));
+        if (!res.ok) throw new Error('resultado indisponível');
+        const blob = await res.blob();
+        triggerDownload(blob, st.resultName || 'DIRBI.xlsx');
+        setStatus(
+            `<div style="background:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:1rem;">` +
+            `<strong>Concluído (Node).</strong> ${st.empresas} empresa(s)` +
+            `${st.xmlInvalidos ? ` &middot; ${st.xmlInvalidos} XML ignorado(s)` : ''}.<br>` +
+            (st.resumo || []).map((l) => '&bull; ' + escapeHtml(l)).join('<br>') + `<br>` +
+            `Arquivo <strong>${escapeHtml(st.resultName)}</strong> baixado.</div>`
+        );
+    } catch (e) {
+        setStatus(`<span style="color:var(--color-danger);">Falha no Node: ${escapeHtml(e.message || String(e))}. Use o navegador (arraste os XML/.zip abaixo).</span>`);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 // Processa o lote de XMLs (avulsos e/ou .zip), agrupa por CNPJ do emitente e gera
