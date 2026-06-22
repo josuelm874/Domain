@@ -3839,6 +3839,26 @@ function matchDirbiRow(ncm, rules) {
 // pro navegador (caminho do "sucesso inicial", empresa por empresa).
 const DIRBI_WORKER = 'http://127.0.0.1:47620';
 
+// Pacote do worker servido pelo próprio site (gerado por scripts/bundle-worker.js).
+// Máquina com Node baixa, roda start.bat/start.sh e habilita NFCe/DIRBI no Node.
+const WORKER_DOWNLOAD_URL = 'download/softtech-worker.zip';
+
+// Banner mostrado quando o worker Node NÃO está rodando: link de download + passos.
+// Os fluxos seguem funcionando pelo navegador; o Node é o ganho de escala.
+function workerHintHtml() {
+    return (
+        '<div style="background:var(--color-white); border:1px solid var(--color-info-light); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:0.9rem 1rem; display:flex; gap:0.7rem; align-items:flex-start;">' +
+        '<span class="material-icons-sharp" style="color:var(--color-info-dark);">bolt</span>' +
+        '<div style="font-size:0.85rem; color:var(--color-dark-variant); line-height:1.45;">' +
+        '<strong style="color:var(--color-dark);">Modo Node (opcional, recomendado p/ grande volume).</strong> ' +
+        'Não detectei o worker. Funciona normal pelo navegador; para usar o Node: ' +
+        '<a href="' + WORKER_DOWNLOAD_URL + '" download style="color:var(--color-primary); font-weight:700;">baixar o worker</a>, ' +
+        'extrair e rodar <code>start.bat</code> (Windows) ou <code>start.sh</code> (Linux/Mac). ' +
+        'Precisa de <strong>Node.js</strong> instalado. Depois recarregue esta página.' +
+        '</div></div>'
+    );
+}
+
 async function detectDirbiWorker() {
     try {
         const res = await fetch(DIRBI_WORKER + '/health', { method: 'GET' });
@@ -3867,6 +3887,7 @@ function createDirbiPage(mainContent) {
                 <small style="color:var(--color-dark-variant);">Aceita XML avulsos e .zip. Múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip quando houver mais de uma). As fórmulas de Pis/Cofins são preservadas.</small>
                 <input type="file" id="dirbi-file-input" accept=".xml,.zip" multiple style="display:none;">
             </div>
+            <div id="dirbi-worker-hint" style="max-width:800px; margin:0 auto; width:100%; display:none;"></div>
             <div id="dirbi-status" style="max-width:800px; margin:0 auto; width:100%; color:var(--color-dark-variant);"></div>
         </div>
     `;
@@ -3891,7 +3912,12 @@ function createDirbiPage(mainContent) {
     // Detecta o worker: presente → mostra painel Node e rotula a dropzone como
     // alternativa manual; ausente → só navegador (fluxo original).
     detectDirbiWorker().then((health) => {
-        if (!health) return; // sem Node: segue só navegador
+        if (!health) {
+            // sem Node: segue só navegador, mas oferece o download do worker
+            const hint = document.getElementById('dirbi-worker-hint');
+            if (hint) { hint.innerHTML = workerHintHtml(); hint.style.display = 'block'; }
+            return;
+        }
         const panel = document.getElementById('dirbi-node-panel');
         const pathEl = document.getElementById('dirbi-inbox-path');
         const btn = document.getElementById('dirbi-node-btn');
@@ -9470,6 +9496,16 @@ function createBaixarNfcePage(mainContent) {
     loadContributors().then(() => { renderReportCards(); });
     renderReportCards();
     updateStartButton();
+
+    // Detecta o worker no load: presente → badge; ausente → banner de download
+    // (o fluxo segue funcionando pelo navegador de qualquer forma).
+    detectWorker().then((ok) => {
+        const ws = document.getElementById('bn-worker-status');
+        if (!ws) return;
+        ws.innerHTML = ok
+            ? '<span style="color:var(--color-success); font-weight:600;">● Worker Node detectado — download em alta escala (sem CORS).</span>'
+            : workerHintHtml();
+    });
 }
 //---------------------------------- FIM Baixar NFCe ----------------------------------//
 
