@@ -133,7 +133,42 @@ function listFilesRec(dir, acc) {
     return acc;
 }
 
-function forEachInboxXml(inboxDir, onXml, onProgress) {
+// Registra um erro de arquivo no diagnóstico (limita a 8 p/ não inflar o status).
+function pushErr(stats, full, e) {
+    if (!stats) return;
+    if (stats.erros.length < 8) stats.erros.push(path.basename(full) + ': ' + ((e && e.message) || 'erro'));
+}
+
+// Extrai os .xml de um buffer de zip chamando `onXmlBuf(buf)` por XML. Desce
+// RECURSIVAMENTE em .zip aninhados (zip-de-zips) — caso real: o usuário aponta o
+// Node p/ uma pasta com um zip que contém outros zips (cada um com os XMLs). Sem
+// isso, o filtro só-.xml descartava os zips internos → "nenhum XML válido" mudo.
+// Streaming (não acumula todos os XMLs em memória); trava de profundidade evita
+// zip-bomba. `depth` máx 6 níveis.
+function forEachXmlInZip(buf, onXmlBuf, stats, label, depth) {
+    if (depth > 6) { pushErr(stats, label, new Error('zip aninhado fundo demais (>6 níveis)')); return; }
+    const items = readZip(buf, (n) => /\.(xml|zip)$/i.test(n));
+    for (const it of items) {
+        if (/\.zip$/i.test(it.name)) {
+            try {
+                forEachXmlInZip(it.data, onXmlBuf, stats, label + ' > ' + it.name, depth + 1);
+                if (stats) stats.zipsOk++;
+            } catch (e) {
+                if (stats) stats.zipsFail++;
+                pushErr(stats, label + ' > ' + it.name, e);
+            }
+        } else {
+            if (stats) stats.xmlDeZip++;
+            onXmlBuf(it.data);
+        }
+    }
+}
+
+// `stats` (opcional) acumula diagnóstico: zips lidos/falhos, XML extraídos, erros.
+// ANTES o try/catch engolia TODA falha por arquivo (zip não suportado, leitura
+// ilegível) sem registro → no fim só restava "nenhum XML válido" mudo. Agora cada
+// falha é contada e o 1º motivo fica exposto no /dirbi/status.
+function forEachInboxXml(inboxDir, onXml, onProgress, stats) {
     let files;
     try { files = listFilesRec(inboxDir, []); } catch (e) {
         throw new Error('pasta não encontrada/ilegível: ' + inboxDir);
@@ -142,12 +177,20 @@ function forEachInboxXml(inboxDir, onXml, onProgress) {
     for (const full of files) {
         try {
             if (/\.zip$/i.test(full)) {
-                const items = readZip(fs.readFileSync(full), (n) => /\.xml$/i.test(n));
-                for (const it of items) onXml(it.data.toString('utf8'));
+                try {
+                    // recursa em zips aninhados; cada XML vira texto e segue p/ onXml
+                    forEachXmlInZip(fs.readFileSync(full), (xmlBuf) => onXml(xmlBuf.toString('utf8')),
+                        stats, path.basename(full), 0);
+                    if (stats) stats.zipsOk++;
+                } catch (e) {
+                    if (stats) stats.zipsFail++;
+                    pushErr(stats, full, e); // zip de topo falhou (método? ZIP64? corrompido?)
+                }
             } else {
+                if (stats) stats.xmlSoltos++;
                 onXml(fs.readFileSync(full, 'utf8'));
             }
-        } catch (e) { /* arquivo ilegível: ignora, segue */ }
+        } catch (e) { pushErr(stats, full, e); /* leitura ilegível: conta e segue */ }
         done++;
         if (onProgress) onProgress(done, files.length);
     }
@@ -186,6 +229,7 @@ function startJob(payload) {
     const job = {
         id, inbox, createdAt: Date.now(), phase: 'lendo',
         filesDone: 0, filesTotal: 0, empresas: 0, xmlInvalidos: 0,
+        stats: { zipsOk: 0, zipsFail: 0, xmlDeZip: 0, xmlSoltos: 0, erros: [] },
         done: false, error: '', resultName: '', resultBuffer: null, isZip: false, resumo: [],
     };
     jobs.set(id, job);
@@ -215,11 +259,18 @@ async function runJob(job) {
             if (!ok) job.xmlInvalidos++;
         }, (done, total) => {
             job.filesDone = done; job.filesTotal = total;
-        });
+        }, job.stats);
     } catch (e) { job.error = e.message; job.done = true; return; }
 
     const cnpjs = Object.keys(empresas);
-    if (!cnpjs.length) { job.error = 'nenhum XML válido de NFC-e na inbox'; job.done = true; return; }
+    if (!cnpjs.length) {
+        const s = job.stats;
+        job.error = 'nenhum XML válido de NFC-e na inbox (arquivos: ' + job.filesTotal +
+            ', xml soltos: ' + s.xmlSoltos + ', zips OK: ' + s.zipsOk + ', zips com erro: ' + s.zipsFail +
+            ', xml extraídos de zip: ' + s.xmlDeZip + ', xml inválidos: ' + job.xmlInvalidos +
+            (s.erros.length ? ' | erros: ' + s.erros.join(' ; ') : '') + ')';
+        job.done = true; return;
+    }
 
     // Gera as planilhas.
     job.phase = 'planilhas';
@@ -253,7 +304,7 @@ function getStatus(jobId) {
     return {
         ok: true, jobId: job.id, done: job.done, error: job.error || '', phase: job.phase,
         filesDone: job.filesDone, filesTotal: job.filesTotal, empresas: job.empresas,
-        xmlInvalidos: job.xmlInvalidos, resultName: job.resultName, isZip: job.isZip,
+        xmlInvalidos: job.xmlInvalidos, stats: job.stats, resultName: job.resultName, isZip: job.isZip,
         resultReady: !!job.resultBuffer, resumo: job.resumo,
     };
 }

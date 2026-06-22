@@ -3942,7 +3942,9 @@ async function processDirbiNode() {
         setStatus(
             `<div style="background:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:1rem;">` +
             `<strong>Concluído (Node).</strong> ${st.empresas} empresa(s)` +
-            `${st.xmlInvalidos ? ` &middot; ${st.xmlInvalidos} XML ignorado(s)` : ''}.<br>` +
+            `${st.xmlInvalidos ? ` &middot; ${st.xmlInvalidos} XML ignorado(s)` : ''}` +
+            `${st.stats && st.stats.zipsFail ? ` &middot; <span style="color:var(--color-danger);">${st.stats.zipsFail} zip(s) com erro</span>` : ''}.<br>` +
+            `${st.stats && st.stats.erros && st.stats.erros.length ? st.stats.erros.map((e) => '&bull; ' + escapeHtml(e)).join('<br>') + '<br>' : ''}` +
             (st.resumo || []).map((l) => '&bull; ' + escapeHtml(l)).join('<br>') + `<br>` +
             `Arquivo <strong>${escapeHtml(st.resultName)}</strong> baixado.</div>`
         );
