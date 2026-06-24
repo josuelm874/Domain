@@ -1307,6 +1307,9 @@
         else if (page === 'sped') {
             createSpedPage(mainContent);
         }
+        else if (page === 'corretor-fiscal') {
+            createCorretorFiscalPage(mainContent);
+        }
         else if (page === 'settings') {
             mainContent.innerHTML = `
                 <h1>Settings</h1>
@@ -3866,6 +3869,149 @@ async function detectDirbiWorker() {
         const j = await res.json();
         return (j && j.ok) ? j : null;
     } catch { return null; }
+}
+
+// Lê um File como string latin1 (ISO-8859-1) byte-a-byte: cada byte vira 1 char
+// (0-255). Não usa TextDecoder('iso-8859-1') de propósito — no navegador ele mapeia
+// para windows-1252 (difere em 0x80-0x9F) e quebraria o round-trip exato dos bytes.
+async function readFileLatin1(file) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let out = '';
+    const CHUNK = 0x8000; // evita estourar o stack em String.fromCharCode com arquivos grandes
+    for (let i = 0; i < buf.length; i += CHUNK) {
+        out += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+    }
+    return out;
+}
+
+// Converte uma string latin1 de volta em bytes (cada char -> 1 byte) para download
+// byte-idêntico ao original nas partes não tocadas.
+function latin1Blob(text) {
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+    return new Blob([bytes], { type: 'text/plain' });
+}
+
+// Acrescenta "_corrigido" ao nome do arquivo, preservando a extensão.
+function nomeCorrigido(nome) {
+    const i = nome.lastIndexOf('.');
+    if (i === -1) return nome + '_corrigido';
+    return nome.slice(0, i) + '_corrigido' + nome.slice(i);
+}
+
+// Aba Corretor Fiscal: corrige arquivos SPED e FS no navegador (transformação de
+// texto determinística). Detecta o tipo pelo conteúdo; para FS, aceita também o
+// relatório de erros (.txt) — necessário só para a regra de documento duplicado.
+function createCorretorFiscalPage(mainContent) {
+    mainContent.innerHTML = `
+        <h1>Corretor Fiscal</h1>
+        <div style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
+            <div id="cf-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:200px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+                <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">build_circle</span>
+                <p id="cf-drop-label" style="font-weight:600;">Selecione o arquivo a corrigir (SPED .txt ou Arquivo FS .fs)</p>
+                <small style="color:var(--color-dark-variant);">O tipo é detectado pelo conteúdo. A correção roda no navegador; o encoding original (ANSI/latin1 ou UTF-8) é preservado.</small>
+                <input type="file" id="cf-file-input" accept=".txt,.fs,.FS" style="display:none;">
+            </div>
+
+            <div id="cf-report-row" style="display:none; max-width:800px; margin:0 auto; width:100%; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:0.9rem 1rem;">
+                <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.4rem;"><span class="material-icons-sharp" style="color:var(--color-info-dark);">description</span><strong>Relatório de erros (.txt)</strong></div>
+                <small style="color:var(--color-dark-variant);">Opcional, mas <strong>necessário para remover documentos duplicados</strong> (regra 5). As demais regras rodam sem ele.</small>
+                <div style="margin-top:0.5rem;"><button id="cf-report-btn" type="button" style="padding:0.5rem 1rem; border:1px solid var(--color-info-dark); border-radius:0.4rem; background:transparent; color:var(--color-dark); cursor:pointer;">Anexar relatório</button> <span id="cf-report-name" style="font-size:0.85rem; color:var(--color-dark-variant);"></span></div>
+                <input type="file" id="cf-report-input" accept=".txt" style="display:none;">
+            </div>
+
+            <button id="cf-run" type="button" disabled style="align-self:center; padding:0.8rem 1.8rem; border:none; border-radius:0.6rem; background:var(--color-primary); color:#fff; font-weight:700; cursor:pointer; opacity:0.5;">Corrigir e baixar</button>
+
+            <div id="cf-status" style="max-width:800px; margin:0 auto; width:100%; color:var(--color-dark-variant);"></div>
+        </div>
+    `;
+
+    const box = document.getElementById('cf-drop');
+    const fileInput = document.getElementById('cf-file-input');
+    const dropLabel = document.getElementById('cf-drop-label');
+    const reportRow = document.getElementById('cf-report-row');
+    const reportBtn = document.getElementById('cf-report-btn');
+    const reportInput = document.getElementById('cf-report-input');
+    const reportName = document.getElementById('cf-report-name');
+    const runBtn = document.getElementById('cf-run');
+    const status = document.getElementById('cf-status');
+    if (!box || !fileInput || !runBtn) return;
+
+    const setStatus = (html) => { if (status) status.innerHTML = html; };
+
+    // Estado da aba.
+    const state = { texto: null, nome: null, tipo: null, relatorio: null };
+
+    const atualizarRun = () => {
+        const pronto = !!state.texto && !!state.tipo;
+        runBtn.disabled = !pronto;
+        runBtn.style.opacity = pronto ? '1' : '0.5';
+    };
+
+    const carregarArquivo = async (file) => {
+        try {
+            setStatus('Lendo arquivo...');
+            const texto = await readFileLatin1(file);
+            const tipo = detectarTipo(texto);
+            if (!tipo) {
+                state.texto = null; state.tipo = null;
+                setStatus('<span style="color:var(--color-danger);">Não reconheci o arquivo como SPED nem como Arquivo FS. Confira o conteúdo.</span>');
+                reportRow.style.display = 'none';
+                atualizarRun();
+                return;
+            }
+            state.texto = texto; state.nome = file.name; state.tipo = tipo;
+            dropLabel.textContent = file.name + '  (' + (tipo === 'sped' ? 'SPED' : 'Arquivo FS') + ' detectado)';
+            // FS pode ter duplicados -> mostra o anexo de relatório. SPED não usa.
+            reportRow.style.display = tipo === 'fs' ? 'block' : 'none';
+            setStatus(tipo === 'fs'
+                ? 'Arquivo FS pronto. Anexe o relatório de erros para remover duplicados (opcional) e clique em Corrigir.'
+                : 'Arquivo SPED pronto. Clique em Corrigir.');
+            atualizarRun();
+        } catch (e) {
+            setStatus('<span style="color:var(--color-danger);">Falha ao ler: ' + escapeHtml(e.message || String(e)) + '</span>');
+        }
+    };
+
+    box.addEventListener('click', () => fileInput.click());
+    box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('dragover'); });
+    box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+    box.addEventListener('drop', (e) => {
+        e.preventDefault();
+        box.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length) carregarArquivo(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files && fileInput.files.length) carregarArquivo(fileInput.files[0]); });
+
+    reportBtn.addEventListener('click', () => reportInput.click());
+    reportInput.addEventListener('change', async () => {
+        if (!reportInput.files || !reportInput.files.length) return;
+        const f = reportInput.files[0];
+        state.relatorio = await readFileLatin1(f);
+        reportName.textContent = f.name;
+    });
+
+    runBtn.addEventListener('click', () => {
+        if (!state.texto || !state.tipo) return;
+        runBtn.disabled = true;
+        try {
+            setStatus('Corrigindo...');
+            const r = state.tipo === 'sped'
+                ? corrigirSped(state.texto)
+                : corrigirFs(state.texto, state.relatorio);
+            triggerDownload(latin1Blob(r.texto), nomeCorrigido(state.nome));
+            setStatus(
+                '<div style="background:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:1rem;">' +
+                '<strong>Concluído.</strong> Arquivo <strong>' + escapeHtml(nomeCorrigido(state.nome)) + '</strong> baixado.<br>' +
+                r.resumo.map((l) => '&bull; ' + escapeHtml(l)).join('<br>') +
+                '</div>'
+            );
+        } catch (e) {
+            setStatus('<span style="color:var(--color-danger);">Falha ao corrigir: ' + escapeHtml(e.message || String(e)) + '</span>');
+        } finally {
+            runBtn.disabled = false;
+        }
+    });
 }
 
 // Cria a aba DIRBI: painel Node (inbox no disco) quando o worker existe; senão,
