@@ -1307,6 +1307,9 @@
         else if (page === 'sped') {
             createSpedPage(mainContent);
         }
+        else if (page === 'corretor-fiscal') {
+            createCorretorFiscalPage(mainContent);
+        }
         else if (page === 'settings') {
             mainContent.innerHTML = `
                 <h1>Settings</h1>
@@ -3835,23 +3838,209 @@ function matchDirbiRow(ncm, rules) {
     return null;
 }
 
-// Cria a aba DIRBI: box de upload de múltiplos XML de NFC-e + status.
+// Worker local (mesmo do NFCe). DIRBI tenta o Node primeiro; sem resposta, cai
+// pro navegador (caminho do "sucesso inicial", empresa por empresa).
+const DIRBI_WORKER = 'http://127.0.0.1:47620';
+
+// Pacote do worker servido pelo próprio site (gerado por scripts/bundle-worker.js).
+// Máquina com Node baixa, roda start.bat/start.sh e habilita NFCe/DIRBI no Node.
+const WORKER_DOWNLOAD_URL = 'download/softtech-worker.zip';
+
+// Banner mostrado quando o worker Node NÃO está rodando: link de download + passos.
+// Os fluxos seguem funcionando pelo navegador; o Node é o ganho de escala.
+function workerHintHtml() {
+    return (
+        '<div style="background:var(--color-white); border:1px solid var(--color-info-light); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:0.9rem 1rem; display:flex; gap:0.7rem; align-items:flex-start;">' +
+        '<span class="material-icons-sharp" style="color:var(--color-info-dark);">bolt</span>' +
+        '<div style="font-size:0.85rem; color:var(--color-dark-variant); line-height:1.45;">' +
+        '<strong style="color:var(--color-dark);">Modo Node (opcional, recomendado p/ grande volume).</strong> ' +
+        'Não detectei o worker. Funciona normal pelo navegador; para usar o Node: ' +
+        '<a href="' + WORKER_DOWNLOAD_URL + '" download style="color:var(--color-primary); font-weight:700;">baixar o worker</a>, ' +
+        'extrair e rodar <code>start.bat</code> (Windows) ou <code>start.sh</code> (Linux/Mac). ' +
+        'Precisa de <strong>Node.js</strong> instalado. Depois recarregue esta página.' +
+        '</div></div>'
+    );
+}
+
+async function detectDirbiWorker() {
+    try {
+        const res = await fetch(DIRBI_WORKER + '/health', { method: 'GET' });
+        if (!res.ok) return null;
+        const j = await res.json();
+        return (j && j.ok) ? j : null;
+    } catch { return null; }
+}
+
+// Lê um File como string latin1 (ISO-8859-1) byte-a-byte: cada byte vira 1 char
+// (0-255). Não usa TextDecoder('iso-8859-1') de propósito — no navegador ele mapeia
+// para windows-1252 (difere em 0x80-0x9F) e quebraria o round-trip exato dos bytes.
+async function readFileLatin1(file) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let out = '';
+    const CHUNK = 0x8000; // evita estourar o stack em String.fromCharCode com arquivos grandes
+    for (let i = 0; i < buf.length; i += CHUNK) {
+        out += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+    }
+    return out;
+}
+
+// Converte uma string latin1 de volta em bytes (cada char -> 1 byte) para download
+// byte-idêntico ao original nas partes não tocadas.
+function latin1Blob(text) {
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+    return new Blob([bytes], { type: 'text/plain' });
+}
+
+// Acrescenta "_corrigido" ao nome do arquivo, preservando a extensão.
+function nomeCorrigido(nome) {
+    const i = nome.lastIndexOf('.');
+    if (i === -1) return nome + '_corrigido';
+    return nome.slice(0, i) + '_corrigido' + nome.slice(i);
+}
+
+// Aba Corretor Fiscal: corrige arquivos SPED e FS no navegador (transformação de
+// texto determinística). Detecta o tipo pelo conteúdo; para FS, aceita também o
+// relatório de erros (.txt) — necessário só para a regra de documento duplicado.
+function createCorretorFiscalPage(mainContent) {
+    mainContent.innerHTML = `
+        <h1>Corretor Fiscal</h1>
+        <div style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
+            <div id="cf-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:200px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+                <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">build_circle</span>
+                <p id="cf-drop-label" style="font-weight:600;">Selecione o arquivo a corrigir (SPED .txt ou Arquivo FS .fs)</p>
+                <small style="color:var(--color-dark-variant);">O tipo é detectado pelo conteúdo. A correção roda no navegador; o encoding original (ANSI/latin1 ou UTF-8) é preservado.</small>
+                <input type="file" id="cf-file-input" accept=".txt,.fs,.FS" style="display:none;">
+            </div>
+
+            <div id="cf-report-row" style="display:none; max-width:800px; margin:0 auto; width:100%; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:0.9rem 1rem;">
+                <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.4rem;"><span class="material-icons-sharp" style="color:var(--color-info-dark);">description</span><strong>Relatório de erros (.txt)</strong></div>
+                <small style="color:var(--color-dark-variant);">Opcional, mas <strong>necessário para remover documentos duplicados</strong> (regra 5). As demais regras rodam sem ele.</small>
+                <div style="margin-top:0.5rem;"><button id="cf-report-btn" type="button" style="padding:0.5rem 1rem; border:1px solid var(--color-info-dark); border-radius:0.4rem; background:transparent; color:var(--color-dark); cursor:pointer;">Anexar relatório</button> <span id="cf-report-name" style="font-size:0.85rem; color:var(--color-dark-variant);"></span></div>
+                <input type="file" id="cf-report-input" accept=".txt" style="display:none;">
+            </div>
+
+            <button id="cf-run" type="button" disabled style="align-self:center; padding:0.8rem 1.8rem; border:none; border-radius:0.6rem; background:var(--color-primary); color:#fff; font-weight:700; cursor:pointer; opacity:0.5;">Corrigir e baixar</button>
+
+            <div id="cf-status" style="max-width:800px; margin:0 auto; width:100%; color:var(--color-dark-variant);"></div>
+        </div>
+    `;
+
+    const box = document.getElementById('cf-drop');
+    const fileInput = document.getElementById('cf-file-input');
+    const dropLabel = document.getElementById('cf-drop-label');
+    const reportRow = document.getElementById('cf-report-row');
+    const reportBtn = document.getElementById('cf-report-btn');
+    const reportInput = document.getElementById('cf-report-input');
+    const reportName = document.getElementById('cf-report-name');
+    const runBtn = document.getElementById('cf-run');
+    const status = document.getElementById('cf-status');
+    if (!box || !fileInput || !runBtn) return;
+
+    const setStatus = (html) => { if (status) status.innerHTML = html; };
+
+    // Estado da aba.
+    const state = { texto: null, nome: null, tipo: null, relatorio: null };
+
+    const atualizarRun = () => {
+        const pronto = !!state.texto && !!state.tipo;
+        runBtn.disabled = !pronto;
+        runBtn.style.opacity = pronto ? '1' : '0.5';
+    };
+
+    const carregarArquivo = async (file) => {
+        try {
+            setStatus('Lendo arquivo...');
+            const texto = await readFileLatin1(file);
+            const tipo = detectarTipo(texto);
+            if (!tipo) {
+                state.texto = null; state.tipo = null;
+                setStatus('<span style="color:var(--color-danger);">Não reconheci o arquivo como SPED nem como Arquivo FS. Confira o conteúdo.</span>');
+                reportRow.style.display = 'none';
+                atualizarRun();
+                return;
+            }
+            state.texto = texto; state.nome = file.name; state.tipo = tipo;
+            dropLabel.textContent = file.name + '  (' + (tipo === 'sped' ? 'SPED' : 'Arquivo FS') + ' detectado)';
+            // FS pode ter duplicados -> mostra o anexo de relatório. SPED não usa.
+            reportRow.style.display = tipo === 'fs' ? 'block' : 'none';
+            setStatus(tipo === 'fs'
+                ? 'Arquivo FS pronto. Anexe o relatório de erros para remover duplicados (opcional) e clique em Corrigir.'
+                : 'Arquivo SPED pronto. Clique em Corrigir.');
+            atualizarRun();
+        } catch (e) {
+            setStatus('<span style="color:var(--color-danger);">Falha ao ler: ' + escapeHtml(e.message || String(e)) + '</span>');
+        }
+    };
+
+    box.addEventListener('click', () => fileInput.click());
+    box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('dragover'); });
+    box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+    box.addEventListener('drop', (e) => {
+        e.preventDefault();
+        box.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length) carregarArquivo(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files && fileInput.files.length) carregarArquivo(fileInput.files[0]); });
+
+    reportBtn.addEventListener('click', () => reportInput.click());
+    reportInput.addEventListener('change', async () => {
+        if (!reportInput.files || !reportInput.files.length) return;
+        const f = reportInput.files[0];
+        state.relatorio = await readFileLatin1(f);
+        reportName.textContent = f.name;
+    });
+
+    runBtn.addEventListener('click', () => {
+        if (!state.texto || !state.tipo) return;
+        runBtn.disabled = true;
+        try {
+            setStatus('Corrigindo...');
+            const r = state.tipo === 'sped'
+                ? corrigirSped(state.texto)
+                : corrigirFs(state.texto, state.relatorio);
+            triggerDownload(latin1Blob(r.texto), nomeCorrigido(state.nome));
+            setStatus(
+                '<div style="background:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:1rem;">' +
+                '<strong>Concluído.</strong> Arquivo <strong>' + escapeHtml(nomeCorrigido(state.nome)) + '</strong> baixado.<br>' +
+                r.resumo.map((l) => '&bull; ' + escapeHtml(l)).join('<br>') +
+                '</div>'
+            );
+        } catch (e) {
+            setStatus('<span style="color:var(--color-danger);">Falha ao corrigir: ' + escapeHtml(e.message || String(e)) + '</span>');
+        } finally {
+            runBtn.disabled = false;
+        }
+    });
+}
+
+// Cria a aba DIRBI: painel Node (inbox no disco) quando o worker existe; senão,
+// dropzone do navegador (XML/.zip avulsos).
 function createDirbiPage(mainContent) {
     mainContent.innerHTML = `
         <h1>DIRBI</h1>
-        <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.6rem; max-width:1000px; margin:0 auto; padding:2rem;">
-            <div id="dirbi-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:300px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+        <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
+            <div id="dirbi-node-panel" style="display:none; width:100%; max-width:800px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); flex-direction:column; gap:0.8rem;">
+                <div style="display:flex; align-items:center; gap:0.6rem;"><span class="material-icons-sharp" style="color:var(--color-success);">dns</span><strong>Worker Node detectado</strong></div>
+                <small style="color:var(--color-dark-variant);">Cole o caminho da pasta com os XML ou .zip (subpastas incluídas). O Node lê do disco — aguenta grande escala.</small>
+                <input id="dirbi-inbox-path" type="text" spellcheck="false" placeholder="C:\\caminho\\da\\pasta" style="width:100%; font-family:monospace; font-size:0.78rem; padding:0.5rem 0.6rem; border:1px solid var(--color-info-dark); border-radius:0.4rem; background:transparent; color:var(--color-dark);">
+                <div id="dirbi-template-warn" style="display:none; color:var(--color-danger); font-size:0.8rem;"></div>
+                <button id="dirbi-node-btn" type="button" style="align-self:flex-start; padding:0.7rem 1.4rem; border:none; border-radius:0.6rem; background:var(--color-success); color:#fff; font-weight:700; cursor:pointer;">Processar inbox (Node)</button>
+            </div>
+            <div id="dirbi-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:240px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
                 <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">request_quote</span>
                 <p id="dirbi-drop-label" style="font-weight:600;">Selecione os XML das NFC-e (ou arquivos .zip)</p>
                 <small style="color:var(--color-dark-variant);">Aceita XML avulsos e .zip. Múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip quando houver mais de uma). As fórmulas de Pis/Cofins são preservadas.</small>
                 <input type="file" id="dirbi-file-input" accept=".xml,.zip" multiple style="display:none;">
             </div>
+            <div id="dirbi-worker-hint" style="max-width:800px; margin:0 auto; width:100%; display:none;"></div>
             <div id="dirbi-status" style="max-width:800px; margin:0 auto; width:100%; color:var(--color-dark-variant);"></div>
         </div>
     `;
 
     const box = document.getElementById('dirbi-drop');
     const input = document.getElementById('dirbi-file-input');
+    const dropLabel = document.getElementById('dirbi-drop-label');
     if (!box || !input) return;
 
     box.addEventListener('click', () => input.click());
@@ -3865,6 +4054,77 @@ function createDirbiPage(mainContent) {
     input.addEventListener('change', () => {
         if (input.files && input.files.length) processDirbiXmls(input.files);
     });
+
+    // Detecta o worker: presente → mostra painel Node e rotula a dropzone como
+    // alternativa manual; ausente → só navegador (fluxo original).
+    detectDirbiWorker().then((health) => {
+        if (!health) {
+            // sem Node: segue só navegador, mas oferece o download do worker
+            const hint = document.getElementById('dirbi-worker-hint');
+            if (hint) { hint.innerHTML = workerHintHtml(); hint.style.display = 'block'; }
+            return;
+        }
+        const panel = document.getElementById('dirbi-node-panel');
+        const pathEl = document.getElementById('dirbi-inbox-path');
+        const btn = document.getElementById('dirbi-node-btn');
+        const warn = document.getElementById('dirbi-template-warn');
+        if (panel) panel.style.display = 'flex';
+        if (dropLabel) dropLabel.textContent = 'Ou processe XML/.zip manualmente pelo navegador';
+        const info = health.dirbi || {};
+        if (pathEl) pathEl.value = info.inbox || '';
+        if (warn && info.templateExists === false) {
+            warn.style.display = 'block';
+            warn.textContent = 'Atenção: modelo DIRBI não encontrado pelo worker (' + (info.template || '') + ').';
+        }
+        if (btn) btn.addEventListener('click', () => processDirbiNode());
+    });
+}
+
+// Dispara o processamento DIRBI no worker (lê a inbox do disco) e baixa o resultado.
+async function processDirbiNode() {
+    const status = document.getElementById('dirbi-status');
+    const setStatus = (html) => { if (status) status.innerHTML = html; };
+    const btn = document.getElementById('dirbi-node-btn');
+    if (btn) btn.disabled = true;
+    try {
+        setStatus('Iniciando no Node...');
+        const pathEl = document.getElementById('dirbi-inbox-path');
+        const inboxPath = pathEl && pathEl.value.trim() ? pathEl.value.trim() : undefined;
+        const start = await (await fetch(DIRBI_WORKER + '/dirbi/start', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inboxPath }),
+        })).json();
+        if (!start.ok || !start.jobId) throw new Error(start.error || 'falha ao iniciar');
+        const jobId = start.jobId;
+        let st;
+        for (;;) {
+            st = await (await fetch(DIRBI_WORKER + '/dirbi/status/' + encodeURIComponent(jobId))).json();
+            if (st.error) throw new Error(st.error);
+            const prog = st.phase === 'lendo'
+                ? `Lendo XML... ${st.filesDone}/${st.filesTotal} arquivo(s)`
+                : `Gerando ${st.empresas} planilha(s)...`;
+            setStatus(prog);
+            if (st.done) break;
+            await new Promise((r) => setTimeout(r, 600));
+        }
+        // baixa o resultado (xlsx ou zip)
+        const res = await fetch(DIRBI_WORKER + '/dirbi/result/' + encodeURIComponent(jobId));
+        if (!res.ok) throw new Error('resultado indisponível');
+        const blob = await res.blob();
+        triggerDownload(blob, st.resultName || 'DIRBI.xlsx');
+        setStatus(
+            `<div style="background:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:1rem;">` +
+            `<strong>Concluído (Node).</strong> ${st.empresas} empresa(s)` +
+            `${st.xmlInvalidos ? ` &middot; ${st.xmlInvalidos} XML ignorado(s)` : ''}` +
+            `${st.stats && st.stats.zipsFail ? ` &middot; <span style="color:var(--color-danger);">${st.stats.zipsFail} zip(s) com erro</span>` : ''}.<br>` +
+            `${st.stats && st.stats.erros && st.stats.erros.length ? st.stats.erros.map((e) => '&bull; ' + escapeHtml(e)).join('<br>') + '<br>' : ''}` +
+            (st.resumo || []).map((l) => '&bull; ' + escapeHtml(l)).join('<br>') + `<br>` +
+            `Arquivo <strong>${escapeHtml(st.resultName)}</strong> baixado.</div>`
+        );
+    } catch (e) {
+        setStatus(`<span style="color:var(--color-danger);">Falha no Node: ${escapeHtml(e.message || String(e))}. Use o navegador (arraste os XML/.zip abaixo).</span>`);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 // Processa o lote de XMLs (avulsos e/ou .zip), agrupa por CNPJ do emitente e gera
@@ -3967,6 +4227,7 @@ async function processDirbiXmls(fileList) {
             const wb = new ExcelJS.Workbook();
             await wb.xlsx.load(modelBuffer);
             const ws = wb.getWorksheet('DIRBI') || wb.worksheets[0];
+            ws.autoFilter = null; // remove o filtro da linha 3 que vem do modelo
 
             // Escreve as somas em E4:E21 (preserva F/G) e a razão social em B2.
             for (const rule of rules) {
@@ -8398,9 +8659,7 @@ function createNfeCfeComparisonPage(mainContent) {
 function createBaixarNfcePage(mainContent) {
     console.log('createBaixarNfcePage chamado');
 
-    const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
-    const CONCURRENCY = 10; // requisições de chave simultâneas no pool global (configurável)
-    const MAX_RETRIES = 3;
+    const CONCURRENCY = 10; // requisições simultâneas de chave no worker (configurável)
 
     mainContent.innerHTML = `
         <h1>Baixar NFCe</h1>
@@ -8416,6 +8675,11 @@ function createBaixarNfcePage(mainContent) {
             .bn-report-card .bn-rc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
             .bn-report-card .bn-rc-count { font-size: 0.82rem; color: var(--color-primary); font-weight: 600; }
             .bn-report-card .bn-rc-emp { font-size: 0.74rem; color: var(--color-info-dark); }
+            .bn-rc-token { width: 100%; margin-top: 0.4rem; padding: 0.45rem 0.5rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.7rem; resize: vertical; word-break: break-all; }
+            .bn-rc-token.bn-bad { border-color: var(--color-danger); }
+            .bn-rc-token.bn-good { border-color: var(--color-success); }
+            .bn-rc-tokstatus { font-size: 0.68rem; margin-top: 0.2rem; min-height: 0.8rem; }
+            .bn-mode-toggle { display: flex; align-items: center; gap: 0.5rem; font-size: 0.86rem; color: var(--color-dark); cursor: pointer; user-select: none; }
             .bn-report-card.bn-merge { transform: scale(0.6); opacity: 0; }
             @keyframes bnPop { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
             .bn-token-row { display: flex; align-items: center; gap: 0.5rem; }
@@ -8469,14 +8733,23 @@ function createBaixarNfcePage(mainContent) {
                 </div>
                 <input type="file" id="bn-file" accept=".xls,.xlsx,.csv,.txt" multiple style="display: none;">
 
-                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
-                    <div class="bn-token-row">
-                        <label for="bn-token">Token JWT</label>
-                        <span class="bn-info" data-tip="URL usada para baixar um único XML da NFCe da SEFAZ-CE">!</span>
+                <div id="bn-token-area" style="display: flex; flex-direction: column; gap: 0.6rem;">
+                    <label class="bn-mode-toggle">
+                        <input type="checkbox" id="bn-global-mode">
+                        <span>Usar um único token para todas as empresas</span>
+                        <span class="bn-info" data-tip="Por padrão, cada empresa usa seu próprio token (cole no relatório). Marque para usar um JWT só — útil se um token baixar de vários CNPJs.">!</span>
+                    </label>
+                    <div id="bn-global-token-wrap" style="display: none; flex-direction: column; gap: 0.4rem;">
+                        <div class="bn-token-row">
+                            <label for="bn-token">Token JWT (global)</label>
+                        </div>
+                        <textarea id="bn-token" rows="2" placeholder="Cole o token JWT (vale 24h), ou a URL completa do /xml/ contendo apiKey=…"></textarea>
+                        <div id="bn-jwt-status"></div>
                     </div>
-                    <textarea id="bn-token" rows="2" placeholder="Cole o token JWT (vale 24h), ou a URL completa do /xml/ contendo apiKey=…"></textarea>
-                    <div id="bn-jwt-status"></div>
+                    <div id="bn-percompany-hint" style="font-size: 0.82rem; color: var(--color-info-dark);">Cole o token JWT de cada empresa no respectivo relatório acima.</div>
                 </div>
+
+                <div id="bn-worker-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
 
                 <button id="bn-start" type="button" class="bn-start-btn" disabled>Iniciar Download NFCe</button>
             </div>
@@ -8498,6 +8771,9 @@ function createBaixarNfcePage(mainContent) {
 
     // ---------- refs de DOM (estágio seleção + estágio download) ----------
     const tokenInput = document.getElementById('bn-token');
+    const globalModeChk = document.getElementById('bn-global-mode');
+    const globalTokenWrap = document.getElementById('bn-global-token-wrap');
+    const perCompanyHint = document.getElementById('bn-percompany-hint');
     const fileInput = document.getElementById('bn-file');
     const dropzone = document.getElementById('bn-dropzone');
     const dzEmpty = document.getElementById('bn-dz-empty');
@@ -8526,14 +8802,10 @@ function createBaixarNfcePage(mainContent) {
     const companies = new Map();
     // Mapa CNPJ(14díg) -> Razão Social, dos contribuintes cadastrados (preenchido async).
     const contributorsByCnpj = new Map();
-    // Pool dinâmico de requisições (aceita novos itens via botão +).
-    const pool = { concurrency: CONCURRENCY, active: 0, queue: [], aborted: false, abortReason: '', running: false };
 
     // ---------- helpers ----------
     const cleanDigits = (s) => String(s || '').replace(/\D/g, '');
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-    const backoff = (attempt) => 500 * Math.pow(2, attempt); // 500, 1000, 2000ms
-    const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
 
     // Aceita: token JWT puro, ou uma URL de download (com apiKey={jwt}), ou texto
     // que contenha um JWT. Retorna só o token.
@@ -8659,42 +8931,6 @@ function createBaixarNfcePage(mainContent) {
         return { map: bestMap, text: dump };
     }
 
-    // Confere um XML baixado contra os metadados esperados do relatório.
-    // Retorna lista de divergências [{ campo, esperado, obtido }] (vazia = OK).
-    function conferirXml(chave, xml, meta) {
-        const exp = meta.get(chave);
-        const diffs = [];
-        // nNF — comparar como inteiro (remove zeros à esquerda)
-        if (exp.nNF) {
-            const mN = xml.match(/<nNF>(\d+)<\/nNF>/);
-            const xmlN = mN ? mN[1] : '';
-            const e = parseInt(String(exp.nNF).replace(/\D/g, ''), 10);
-            const g = xmlN ? parseInt(xmlN, 10) : NaN;
-            if (!Number.isNaN(e) && (Number.isNaN(g) || e !== g)) {
-                diffs.push({ campo: 'nNF', esperado: String(exp.nNF), obtido: xmlN || '(ausente)' });
-            }
-        }
-        // dhEmi — normalizar ambos para YYYY-MM-DD
-        if (exp.dhEmi) {
-            const mD = xml.match(/<dhEmi>([^<]+)<\/dhEmi>/);
-            const xmlD = mD ? normalizeDate(mD[1].slice(0, 10)) : '';
-            if (!xmlD || xmlD !== normalizeDate(exp.dhEmi)) {
-                diffs.push({ campo: 'data', esperado: exp.dhEmi, obtido: (mD ? xmlD : '') || '(ausente)' });
-            }
-        }
-        // vNF — relatório em vírgula BR, XML em ponto; tolerância 0.01
-        if (exp.vNF) {
-            const mV = xml.match(/<vNF>([\d.]+)<\/vNF>/);
-            const xmlV = mV ? mV[1] : '';
-            const e = parseBrlValue(exp.vNF);
-            const g = xmlV ? parseFloat(xmlV) : NaN;
-            if (Number.isNaN(g) || Number.isNaN(e) || Math.abs(e - g) > 0.01) {
-                diffs.push({ campo: 'valor', esperado: exp.vNF, obtido: xmlV || '(ausente)' });
-            }
-        }
-        return diffs;
-    }
-
     function base64UrlDecode(str) {
         let s = String(str).replace(/-/g, '+').replace(/_/g, '/');
         while (s.length % 4) s += '=';
@@ -8740,66 +8976,40 @@ function createBaixarNfcePage(mainContent) {
 
     // Habilita "Iniciar" só com token válido + ao menos uma chave lida de relatório.
     function updateStartButton() {
-        const token = extractToken(tokenInput.value);
-        const tokenOk = token && validateJwt(token).ok;
         const totalKeys = reports.reduce((acc, r) => acc + r.keys.length, 0);
-        startBtn.disabled = !(tokenOk && totalKeys > 0);
-    }
-
-    function jsonHeaders(token, cnpj) {
-        return { 'x-authentication-token': token, 'x-authentication-taxid': cnpj, 'accept': 'application/json' };
-    }
-    // /xml/ leva o apiKey na query; mandamos os headers também (defensivo — não atrapalha).
-    function xmlHeaders(token, cnpj) {
-        return { 'x-authentication-token': token, 'x-authentication-taxid': cnpj, 'accept': '*/*' };
-    }
-
-    async function fetchWithRetry(url, options, attempt) {
-        attempt = attempt || 0;
-        try {
-            const res = await fetch(url, options);
-            if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
-            if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
-            if (!res.ok) {
-                if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
-                throw makeErr('http', 'HTTP ' + res.status);
-            }
-            return res;
-        } catch (err) {
-            if (err && err.kind) {
-                if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
-                throw err; // auth / notfound / http esgotado: não insistir
-            }
-            // erro de rede (TypeError do fetch) → retry com backoff
-            if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
-            throw makeErr('network', (err && err.message) ? err.message : 'Falha de rede');
+        if (!totalKeys) { startBtn.disabled = true; return; }
+        let ok;
+        if (globalModeChk.checked) {
+            const token = extractToken(tokenInput.value);
+            ok = !!(token && validateJwt(token).ok);
+        } else {
+            // Todo relatório com chaves precisa de um token válido (próprio, ou o
+            // global como fallback se o usuário tiver preenchido o campo global).
+            ok = reports.every((r) => {
+                if (!r.keys.length) return true;
+                const token = extractToken(r.token || '') || extractToken(tokenInput.value);
+                return !!(token && validateJwt(token).ok);
+            });
         }
+        startBtn.disabled = !ok;
     }
 
-    async function resolveIdNfe(chave, token, cnpj) {
-        const url = API_BASE + '/coupons/extract/' + encodeURIComponent(chave);
-        const res = await fetchWithRetry(url, { headers: jsonHeaders(token, cnpj) });
-        const data = await res.json();
-        const idNfe = data && (data.idNfe || (data.coupon && data.coupon.idNfe));
-        if (!idNfe) throw makeErr('parse', 'Resposta sem idNfe');
-        return String(idNfe);
+    // Alterna entre token global e token por empresa.
+    function onModeToggle() {
+        const global = globalModeChk.checked;
+        globalTokenWrap.style.display = global ? 'flex' : 'none';
+        perCompanyHint.style.display = global ? 'none' : 'block';
+        renderReportCards();
+        updateStartButton();
     }
 
-    function xmlUrl(idNfe, chave, token) {
-        return API_BASE + '/fiscal-coupons/xml/' + encodeURIComponent(idNfe) +
-            '?chaveAcesso=' + encodeURIComponent(chave) + '&apiKey=' + encodeURIComponent(token);
-    }
-
-    async function fetchXml(idNfe, chave, token, cnpj) {
-        const res = await fetchWithRetry(xmlUrl(idNfe, chave, token), { headers: xmlHeaders(token, cnpj) });
-        return await res.text();
-    }
+    // (Os fetches à SEFAZ-CE e a conferência de XML foram movidos para o worker
+    //  Node — ver worker/lib/nfce.js. O browser não bate mais na SEFAZ em massa.)
 
     // ====================== orquestração multi-empresa ======================
     const MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const RING_R = 52, RING_C = 2 * Math.PI * RING_R;
     const MINI_R = 14.5, MINI_C = 2 * Math.PI * MINI_R;
-    let activeToken = '', activeCnpj = '';
     let miniBlue = null, miniYellow = null;
 
     const clamp01 = (x) => Math.max(0, Math.min(1, x));
@@ -8834,7 +9044,7 @@ function createBaixarNfcePage(mainContent) {
                 if (reportMap) { reportMap.forEach((m, k) => { meta.set(k, m); keys.push(k); }); }
                 else { keys = parseKeys(fallbackText); }
                 if (!keys.length) { console.warn('Nenhuma chave de 44 díg em ' + f.name); continue; }
-                out.push({ id: ++reportSeq, fileName: f.name, keys, meta });
+                out.push({ id: ++reportSeq, fileName: f.name, keys, meta, token: '' });
             } catch (e) {
                 console.warn('Falha ao ler ' + f.name + ': ' + (e && e.message));
             }
@@ -8856,16 +9066,47 @@ function createBaixarNfcePage(mainContent) {
         const n = reports.length;
         const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
         reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+        const perCompany = !globalModeChk.checked;
         reportGrid.innerHTML = reports.map((r) => {
             const cnpj = r.keys.length ? cnpjFromKey(r.keys[0]) : '';
             const emp = (cnpj && contributorsByCnpj.get(cnpj)) || (cnpj ? 'CNPJ ' + cnpj : '');
             const nKeys = r.keys.length;
+            const tokBox = perCompany
+                ? '<textarea class="bn-rc-token" data-rid="' + r.id + '" rows="2" placeholder="Token JWT desta empresa…">' + escapeHtml(r.token || '') + '</textarea>' +
+                  '<div class="bn-rc-tokstatus" data-rid="' + r.id + '"></div>'
+                : '';
             return '<div class="bn-report-card">' +
                 '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
                 '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + '</div>' +
                 (emp ? '<div class="bn-rc-emp">' + escapeHtml(emp) + '</div>' : '') +
+                tokBox +
                 '</div>';
         }).join('');
+        if (perCompany) wireCardTokens();
+    }
+
+    // Liga os campos de token por empresa (modo padrão): valida JWT ao digitar e
+    // guarda o valor em r.token (sobrevive ao re-render dos cards).
+    function wireCardTokens() {
+        reportGrid.querySelectorAll('.bn-rc-token').forEach((ta) => {
+            ta.addEventListener('input', () => {
+                const rid = parseInt(ta.getAttribute('data-rid'), 10);
+                const r = reports.find((x) => x.id === rid);
+                if (r) r.token = ta.value;
+                const st = ta.parentElement.querySelector('.bn-rc-tokstatus');
+                const tok = extractToken(ta.value);
+                if (!tok) {
+                    ta.classList.remove('bn-good', 'bn-bad');
+                    if (st) st.textContent = '';
+                } else {
+                    const v = validateJwt(tok);
+                    ta.classList.toggle('bn-good', v.ok);
+                    ta.classList.toggle('bn-bad', !v.ok);
+                    if (st) { st.textContent = v.message; st.style.color = v.ok ? 'var(--color-success)' : 'var(--color-danger)'; }
+                }
+                updateStartButton();
+            });
+        });
     }
 
     async function handleSelectStageFiles(files) {
@@ -8893,18 +9134,17 @@ function createBaixarNfcePage(mainContent) {
 
     const cnpjLabel = (cnpj) => 'CNPJ ' + (typeof formatCNPJ === 'function' ? formatCNPJ(cnpj) : cnpj);
 
-    function createCompany(cnpj, sampleKey) {
+    function createCompany(compKey, cnpj, sampleKey, total) {
         const nomeCad = contributorsByCnpj.get(cnpj) || '';
         const comp = {
-            cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
+            compKey, cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
             monthLabel: monthYearFromKey(sampleKey),
-            keys: new Set(), pending: [], total: 0, downloaded: 0, errors: 0,
-            phase: 'download', zipProgress: 0, zip: new JSZip(),
-            failures: [], meta: new Map(),
-            confChecked: 0, confOk: 0, confDiverg: 0, confResults: [],
+            total: total || 0, downloaded: 0, errors: 0,
+            phase: 'download', zipProgress: 0,
+            zipReady: false, zipDownloaded: false,
             els: null,
         };
-        companies.set(cnpj, comp);
+        companies.set(compKey, comp);
         const item = document.createElement('div');
         item.className = 'bn-ring-item';
         item.innerHTML =
@@ -8938,16 +9178,6 @@ function createBaixarNfcePage(mainContent) {
             if (comp.phase === 'done') { els.root.classList.add('done'); els.pct.textContent = '100%'; }
         }
         if (comp.nome) els.name.textContent = comp.nome;
-    }
-
-    function tryResolveNameFromXml(comp, xml) {
-        const m = xml.match(/<emit>[\s\S]*?<xNome>([^<]+)<\/xNome>/) || xml.match(/<emit>[\s\S]*?<xFant>([^<]+)<\/xFant>/);
-        if (m && m[1]) {
-            comp.nome = m[1].trim();
-            comp.nomeResolved = true;
-            if (comp.els) comp.els.name.textContent = comp.nome;
-            updateTooltip();
-        }
     }
 
     // ---------- rodapé + mini anel + tooltip ----------
@@ -9013,115 +9243,300 @@ function createBaixarNfcePage(mainContent) {
         downloadDraining = false;
     }
 
-    // ---------- pool dinâmico (round-robin entre empresas → baixam ao mesmo tempo) ----------
-    let rrCursor = 0;
+    // ---------- motor: dispara o worker local e acompanha por polling ----------
+    // O processamento pesado (fetch SEFAZ + ZIP) roda no worker Node (sem CORS).
+    // O browser só configura, dispara e mostra progresso.
+    const WORKER_BASE = 'http://127.0.0.1:47620';
+    const jobIds = [];
+    let polling = false;
 
-    // Agrupa chaves por CNPJ. Mesmo CNPJ → mesmo anel (incrementa total + pending);
-    // CNPJ novo → anel novo. As chaves vão para comp.pending (não uma fila global FIFO).
-    function intakeReports(list) {
-        for (const rep of list) {
-            for (const chave of rep.keys) {
+    // Agrupa as chaves dos relatórios por CNPJ, anexando o token correto
+    // (global, ou o do próprio relatório com fallback no global). taxid = CNPJ
+    // do token (sub do JWT). Retorna a lista p/ POST /nfce/start.
+    function buildCompanies(reportsList) {
+        const globalMode = globalModeChk.checked;
+        const globalTok = extractToken(tokenInput.value);
+        const byCnpj = new Map();
+        for (const r of reportsList) {
+            const tok = globalMode ? globalTok : (extractToken(r.token || '') || globalTok);
+            if (!tok) continue;
+            const taxid = validateJwt(tok).cnpj || '';
+            for (const chave of r.keys) {
                 const cnpj = cnpjFromKey(chave);
-                let comp = companies.get(cnpj);
-                if (!comp) comp = createCompany(cnpj, chave);
-                if (comp.keys.has(chave)) continue;        // dedup global por empresa
-                comp.keys.add(chave);
-                comp.total++;
-                comp.pending.push(chave);
-                if (comp.phase !== 'download') comp.phase = 'download'; // reabre empresa já fechada
-                const m = rep.meta && rep.meta.get(chave);
-                if (m) comp.meta.set(chave, m);
-                updateRing(comp);
+                let c = byCnpj.get(cnpj);
+                if (!c) { c = { cnpj, token: tok, taxid, keys: [], meta: {} }; byCnpj.set(cnpj, c); }
+                c.keys.push(chave);
+                const m = r.meta && r.meta.get(chave);
+                if (m) c.meta[chave] = m;
             }
+        }
+        return Array.from(byCnpj.values()).filter((c) => c.keys.length);
+    }
+
+    async function detectWorker() {
+        try {
+            const res = await fetch(WORKER_BASE + '/health', { method: 'GET' });
+            if (!res.ok) return false;
+            const j = await res.json();
+            return !!(j && j.ok);
+        } catch { return false; }
+    }
+
+
+    // Dispara um job no worker para os grupos (empresas) já montados e cria 1 anel por empresa.
+    async function launchJob(companiesPayload) {
+        if (!companiesPayload || !companiesPayload.length) return false;
+        let resp;
+        try {
+            const res = await fetch(WORKER_BASE + '/nfce/start', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
+            });
+            resp = await res.json();
+        } catch (e) { return false; }
+        if (!resp || !resp.ok || !resp.jobId) {
+            footerText.innerHTML = '<span class="bn-err">' + escapeHtml((resp && resp.error) || 'falha ao iniciar o worker') + '</span>';
+            return false;
+        }
+        const jobId = resp.jobId;
+        jobIds.push(jobId);
+        for (const c of companiesPayload) {
+            const compKey = jobId + '|' + c.cnpj;
+            if (!companies.has(compKey)) createCompany(compKey, c.cnpj, c.keys[0], c.keys.length);
         }
         updateFooter();
         updateTooltip();
+        startPolling();
+        return true;
     }
 
-    // Próximo job em round-robin: alterna entre as empresas que ainda têm chaves pendentes,
-    // p/ todas progredirem juntas em vez de uma empresa de cada vez.
-    function nextJob() {
-        const ativos = [];
-        companies.forEach((c) => { if (c.pending.length) ativos.push(c); });
-        if (!ativos.length) return null;
-        const comp = ativos[rrCursor % ativos.length];
-        rrCursor++;
-        return { comp, chave: comp.pending.shift() };
-    }
-
-    function pumpPool() {
-        while (pool.active < pool.concurrency && !pool.aborted) {
-            const job = nextJob();
-            if (!job) break;
-            pool.active++;
-            processJob(job).then(() => {
-                pool.active--;
-                if (pool.aborted && !pool.abortHandled) { pool.abortHandled = true; handleAbort(); }
-                pumpPool();
-            });
+    // Aplica o status de um job (vindo do worker) aos anéis. Quando uma empresa
+    // fica com o ZIP pronto, dispara o download do ZIP uma única vez.
+    function applyStatus(jobId, st) {
+        for (const cs of st.companies) {
+            const comp = companies.get(jobId + '|' + cs.cnpj);
+            if (!comp) continue;
+            comp.total = cs.total;
+            comp.downloaded = cs.downloaded;
+            comp.errors = cs.errors;
+            if (cs.nome && cs.nome.indexOf('CNPJ ') !== 0) comp.nome = cs.nome;
+            if (cs.phase === 'done') { comp.phase = 'done'; comp.zipProgress = 1; }
+            else if (cs.phase === 'zip') { comp.phase = 'zip'; comp.zipProgress = 0.5; }
+            else comp.phase = 'download';
+            updateRing(comp);
+            if (cs.zipReady && !comp.zipDownloaded) {
+                comp.zipDownloaded = true;
+                downloadCompanyZip(jobId, cs.cnpj, cs.zipName);
+            }
         }
     }
 
-    async function processJob(job) {
+    async function pollOnce() {
+        let allDone = true;
+        for (const jobId of jobIds) {
+            try {
+                const res = await fetch(WORKER_BASE + '/nfce/status/' + encodeURIComponent(jobId));
+                if (!res.ok) { allDone = false; continue; }
+                const st = await res.json();
+                applyStatus(jobId, st);
+                if (!st.done) allDone = false;
+            } catch { allDone = false; }
+        }
+        updateFooter();
+        updateTooltip();
+        return allDone;
+    }
+
+    async function startPolling() {
+        if (polling) return;
+        polling = true;
+        for (;;) {
+            const done = await pollOnce();
+            if (done) break;
+            await delay(800);
+        }
+        polling = false;
+    }
+
+    // Baixa o ZIP de uma empresa do worker (blob) e entrega via fila de downloads.
+    async function downloadCompanyZip(jobId, cnpj, zipName) {
+        try {
+            const res = await fetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(cnpj));
+            if (!res.ok) return;
+            const blob = await res.blob();
+            enqueueDownload(blob, zipName || ('NFCe_' + cnpj + '.zip'));
+        } catch (e) {
+            console.warn('Falha ao baixar ZIP de ' + cnpj + ': ' + (e && e.message));
+        }
+    }
+
+    // ====================== fallback BROWSER (worker ausente) ======================
+    // Se o worker Node não responder, o download roda no próprio navegador — o
+    // caminho do "sucesso inicial". Mesma SEFAZ, mesmo ZIP por empresa (JSZip),
+    // mas com token POR EMPRESA (paridade com o modo novo). Só usado quando
+    // detectWorker() falha.
+    const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
+    const MAX_RETRIES = 3;
+    const backoff = (attempt) => 500 * Math.pow(2, attempt);
+    const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
+    const browserPool = { active: 0, concurrency: CONCURRENCY };
+    let brRr = 0;
+
+    function jsonHeaders(token, taxid) {
+        return { 'x-authentication-token': token, 'x-authentication-taxid': taxid, 'accept': 'application/json' };
+    }
+    function xmlHeaders(token, taxid) {
+        return { 'x-authentication-token': token, 'x-authentication-taxid': taxid, 'accept': '*/*' };
+    }
+    async function fetchWithRetry(url, options, attempt) {
+        attempt = attempt || 0;
+        try {
+            const res = await fetch(url, options);
+            if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
+            if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
+            if (!res.ok) {
+                if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+                throw makeErr('http', 'HTTP ' + res.status);
+            }
+            return res;
+        } catch (err) {
+            if (err && err.kind) {
+                if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+                throw err;
+            }
+            if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+            throw makeErr('network', (err && err.message) ? err.message : 'Falha de rede');
+        }
+    }
+    async function resolveIdNfe(chave, token, taxid) {
+        const url = API_BASE + '/coupons/extract/' + encodeURIComponent(chave);
+        const res = await fetchWithRetry(url, { headers: jsonHeaders(token, taxid) });
+        const data = await res.json();
+        const idNfe = data && (data.idNfe || (data.coupon && data.coupon.idNfe));
+        if (!idNfe) throw makeErr('parse', 'Resposta sem idNfe');
+        return String(idNfe);
+    }
+    function xmlUrl(idNfe, chave, token) {
+        return API_BASE + '/fiscal-coupons/xml/' + encodeURIComponent(idNfe) +
+            '?chaveAcesso=' + encodeURIComponent(chave) + '&apiKey=' + encodeURIComponent(token);
+    }
+    async function fetchXml(idNfe, chave, token, taxid) {
+        const res = await fetchWithRetry(xmlUrl(idNfe, chave, token), { headers: xmlHeaders(token, taxid) });
+        return await res.text();
+    }
+    // Conferência (divergência ≠ erro de download). Mesma lógica do worker.
+    function conferirXmlBrowser(xml, exp) {
+        const diffs = [];
+        if (exp.nNF) {
+            const mN = xml.match(/<nNF>(\d+)<\/nNF>/);
+            const e = parseInt(String(exp.nNF).replace(/\D/g, ''), 10);
+            const g = mN ? parseInt(mN[1], 10) : NaN;
+            if (!Number.isNaN(e) && (Number.isNaN(g) || e !== g)) diffs.push({ campo: 'nNF', esperado: String(exp.nNF), obtido: mN ? mN[1] : '(ausente)' });
+        }
+        if (exp.dhEmi) {
+            const mD = xml.match(/<dhEmi>([^<]+)<\/dhEmi>/);
+            const xmlD = mD ? normalizeDate(mD[1].slice(0, 10)) : '';
+            if (!xmlD || xmlD !== normalizeDate(exp.dhEmi)) diffs.push({ campo: 'data', esperado: exp.dhEmi, obtido: xmlD || '(ausente)' });
+        }
+        if (exp.vNF) {
+            const mV = xml.match(/<vNF>([\d.]+)<\/vNF>/);
+            const e = parseBrlValue(exp.vNF);
+            const g = mV ? parseFloat(mV[1]) : NaN;
+            if (Number.isNaN(g) || Number.isNaN(e) || Math.abs(e - g) > 0.01) diffs.push({ campo: 'valor', esperado: exp.vNF, obtido: mV ? mV[1] : '(ausente)' });
+        }
+        return diffs;
+    }
+
+    // Cria/abastece as empresas para o pool do browser e dispara o pool.
+    function runBrowser(groups) {
+        if (typeof JSZip === 'undefined') {
+            footerText.innerHTML = '<span class="bn-err">JSZip não carregou — não dá p/ baixar pelo navegador.</span>';
+            return false;
+        }
+        for (const g of groups) {
+            const compKey = 'browser|' + g.cnpj;
+            let comp = companies.get(compKey);
+            if (!comp) comp = createCompany(compKey, g.cnpj, g.keys[0], 0);
+            comp.token = g.token;
+            comp.taxid = g.taxid;
+            if (!comp.pending) comp.pending = [];
+            if (!comp.meta) comp.meta = new Map();
+            if (!comp._seen) comp._seen = new Set();
+            if (!comp.zip) comp.zip = new JSZip();
+            comp.phase = 'download';
+            for (const chave of g.keys) {
+                if (comp._seen.has(chave)) continue;
+                comp._seen.add(chave);
+                comp.pending.push(chave);
+                if (g.meta && g.meta[chave]) comp.meta.set(chave, g.meta[chave]);
+            }
+            comp.total = comp._seen.size;
+            updateRing(comp);
+        }
+        updateFooter();
+        updateTooltip();
+        pumpBrowser();
+        return true;
+    }
+
+    function nextBrowserJob() {
+        const ativos = [];
+        companies.forEach((c) => { if (c.pending && c.pending.length) ativos.push(c); });
+        if (!ativos.length) return null;
+        const comp = ativos[brRr % ativos.length];
+        brRr++;
+        return { comp, chave: comp.pending.shift() };
+    }
+
+    function pumpBrowser() {
+        while (browserPool.active < browserPool.concurrency) {
+            const job = nextBrowserJob();
+            if (!job) break;
+            browserPool.active++;
+            processBrowserJob(job).then(() => { browserPool.active--; pumpBrowser(); });
+        }
+    }
+
+    async function processBrowserJob(job) {
         const { comp, chave } = job;
         try {
-            const idNfe = await resolveIdNfe(chave, activeToken, activeCnpj);
-            const xml = await fetchXml(idNfe, chave, activeToken, activeCnpj);
-            // Salvaguarda: a chave interna do XML tem que bater com a pedida (evita duplicata
-            // silenciosa de 2 chaves resolvendo p/ o mesmo idNfe).
+            const idNfe = await resolveIdNfe(chave, comp.token, comp.taxid);
+            const xml = await fetchXml(idNfe, chave, comp.token, comp.taxid);
             let innerKey = '';
-            let mk = xml.match(/Id="NFe(\d{44})"/);
-            if (!mk) mk = xml.match(/<chNFe>(\d{44})<\/chNFe>/);
+            const mk = xml.match(/Id="NFe(\d{44})"/) || xml.match(/<chNFe>(\d{44})<\/chNFe>/);
             if (mk) innerKey = mk[1];
             if (innerKey && innerKey !== chave) throw makeErr('mismatch', 'XML retornou chave ' + innerKey + ', esperado ' + chave);
             comp.zip.file(chave + '.xml', xml);
             comp.downloaded++;
-            if (!comp.nomeResolved) tryResolveNameFromXml(comp, xml);
-            // Conferência: divergência NÃO é erro de download — o XML válido já está no ZIP.
-            if (comp.meta.has(chave)) {
-                comp.confChecked++;
-                const diffs = conferirXml(chave, xml, comp.meta);
-                if (diffs.length) { comp.confDiverg++; comp.confResults.push({ chave, diffs }); }
-                else comp.confOk++;
+            if (!comp.nomeResolved) {
+                const m = xml.match(/<emit>[\s\S]*?<xNome>([^<]+)<\/xNome>/) || xml.match(/<emit>[\s\S]*?<xFant>([^<]+)<\/xFant>/);
+                if (m && m[1]) { comp.nome = m[1].trim(); comp.nomeResolved = true; if (comp.els) comp.els.name.textContent = comp.nome; }
             }
+            if (comp.meta.has(chave)) conferirXmlBrowser(xml, comp.meta.get(chave));
         } catch (err) {
             comp.errors++;
-            comp.failures.push({ chave, motivo: (err && err.message) || 'erro' });
-            if (err && err.kind === 'auth') { pool.aborted = true; pool.abortReason = err.message; }
+            if (err && err.kind === 'auth') {
+                // token morto desta empresa: o resto vira erro "não tentado"
+                while (comp.pending.length) { comp.pending.shift(); comp.errors++; }
+            }
         }
         updateRing(comp);
         updateFooter();
         updateTooltip();
-        maybeFinalizeCompany(comp);
+        finalizeBrowser(comp);
     }
 
-    // Token morto: o que sobrou em pending vira erro "não tentado" e cada empresa é fechada
-    // com o que já baixou (ZIP parcial entregue na mesma hora).
-    function handleAbort() {
-        companies.forEach((c) => {
-            while (c.pending.length) {
-                const chave = c.pending.shift();
-                c.errors++;
-                c.failures.push({ chave, motivo: 'não tentado (abortado: ' + pool.abortReason + ')' });
-            }
-            updateRing(c);
-        });
-        updateFooter();
-        companies.forEach((c) => maybeFinalizeCompany(c));
-    }
-
-    // Empresa terminou o download (sem chaves pendentes nem jobs em voo) → zipa e entrega já.
-    function maybeFinalizeCompany(comp) {
+    function finalizeBrowser(comp) {
         if (comp.phase !== 'download') return;
-        if (comp.pending.length) return;                          // ainda há chaves (inclui botão +)
-        if (comp.downloaded + comp.errors < comp.total) return;   // jobs ainda em voo
+        if (comp.pending && comp.pending.length) return;
+        if (comp.downloaded + comp.errors < comp.total) return;
         if (comp.downloaded === 0) { comp.phase = 'done'; comp.zipProgress = 1; updateRing(comp); updateFooter(); return; }
         comp.phase = 'zip';
         updateRing(comp);
         comp.zip.generateAsync({ type: 'blob' }, (m) => {
             comp.zipProgress = (m.percent || 0) / 100;
-            updateRing(comp);
-            updateFooter();
+            updateRing(comp); updateFooter();
         }).then((blob) => {
             comp.zipProgress = 1; comp.phase = 'done';
             updateRing(comp); updateFooter();
@@ -9134,15 +9549,26 @@ function createBaixarNfcePage(mainContent) {
         });
     }
 
-    // ---------- início do download (estágio seleção → download) ----------
+    // ---------- início do download (worker se houver; senão, browser) ----------
+    let useWorker = null;
+
+    // Dispara a lista de relatórios: worker se disponível, senão browser.
+    async function routeAndRun(reportsList) {
+        const groups = buildCompanies(reportsList);
+        if (!groups.length) return false;
+        if (useWorker === null) useWorker = await detectWorker();
+        if (useWorker) {
+            const ok = await launchJob(groups);
+            if (ok) return true;
+            useWorker = false; // worker detectado mas falhou → cai p/ browser
+        }
+        return runBrowser(groups);
+    }
+
     async function startDownload() {
-        const token = extractToken(tokenInput.value);
-        const v = validateJwt(token);
-        if (!v.ok) { jwtStatus.textContent = v.message; jwtStatus.style.color = 'var(--color-danger)'; return; }
-        if (typeof JSZip === 'undefined') { jwtStatus.textContent = 'JSZip não carregado.'; jwtStatus.style.color = 'var(--color-danger)'; return; }
         if (!reports.length) return;
-        activeToken = token; activeCnpj = v.cnpj;
         startBtn.disabled = true;
+        useWorker = await detectWorker();
 
         // anima os cards "fundindo" e troca de estágio
         Array.from(reportGrid.children).forEach((c) => c.classList.add('bn-merge'));
@@ -9151,9 +9577,20 @@ function createBaixarNfcePage(mainContent) {
         stageDownload.style.display = 'block';
         buildMiniRing();
 
-        intakeReports(reports);
-        pool.running = true;
-        pumpPool();
+        const groups = buildCompanies(reports);
+        let ok = false;
+        if (useWorker) {
+            ok = await launchJob(groups);
+            if (!ok) { useWorker = false; ok = runBrowser(groups); }
+        } else {
+            ok = runBrowser(groups);
+        }
+        if (!ok && !companies.size) {
+            // nada disparou: volta ao estágio de seleção
+            stageDownload.style.display = 'none';
+            stageSelect.style.display = 'flex';
+            startBtn.disabled = false;
+        }
     }
 
     // ---------- carga de contribuintes (CNPJ → razão social) ----------
@@ -9188,13 +9625,9 @@ function createBaixarNfcePage(mainContent) {
         fileInput.value = '';
         if (!files.length) return;
         if (stageDownload.style.display === 'block') {
-            // botão + durante o processo: lê, agrupa e injeta no pool em andamento
+            // botão + durante o processo: lê os novos relatórios e dispara um job adicional
             const novos = await readFiles(files);
-            if (novos.length) {
-                pool.abortHandled = pool.aborted ? pool.abortHandled : false;
-                intakeReports(novos);
-                pumpPool();
-            }
+            if (novos.length) { reports.push(...novos); routeAndRun(novos); }
         } else {
             await handleSelectStageFiles(files);
         }
@@ -9203,10 +9636,22 @@ function createBaixarNfcePage(mainContent) {
     addBtn.addEventListener('click', () => fileInput.click());
     startBtn.addEventListener('click', () => { startDownload(); });
     tokenInput.addEventListener('input', refreshJwtStatus);
+    globalModeChk.addEventListener('change', onModeToggle);
 
+    onModeToggle(); // estado inicial: token por empresa (padrão)
     loadContributors().then(() => { renderReportCards(); });
     renderReportCards();
     updateStartButton();
+
+    // Detecta o worker no load: presente → badge; ausente → banner de download
+    // (o fluxo segue funcionando pelo navegador de qualquer forma).
+    detectWorker().then((ok) => {
+        const ws = document.getElementById('bn-worker-status');
+        if (!ws) return;
+        ws.innerHTML = ok
+            ? '<span style="color:var(--color-success); font-weight:600;">● Worker Node detectado — download em alta escala (sem CORS).</span>'
+            : workerHintHtml();
+    });
 }
 //---------------------------------- FIM Baixar NFCe ----------------------------------//
 
