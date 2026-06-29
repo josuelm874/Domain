@@ -1126,7 +1126,17 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section" style="animation-delay: 0.05s"></div>
+                        <div class="box animate-section pis-cofins-box" style="animation-delay: 0.05s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">calculate</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>PIS/COFINS + MIT</h3>
+                                    <p>Calcular PIS/COFINS e gerar os JSONs MIT a partir das apurações</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section" style="animation-delay: 0.1s"></div>
                         <div class="box animate-section" style="animation-delay: 0.15s"></div>
                         <div class="box animate-section" style="animation-delay: 0.2s"></div>
@@ -1136,7 +1146,7 @@
                         <div class="box animate-section" style="animation-delay: 0.4s"></div>
                     </div>
                 `;
-                
+
                 console.log('✅ HTML do dashboard inserido:', mainContent.innerHTML.substring(0, 100) + '...');
                 
                 // Atualizar reminders de forma segura
@@ -1245,6 +1255,12 @@
             const baixarNfceBox = document.querySelector('.baixar-nfce-box');
             if (baixarNfceBox) {
                 baixarNfceBox.addEventListener('click', () => navigateTo('baixar-nfce'));
+            }
+
+            // Card "PIS/COFINS + MIT" → abre modal de cálculo e geração de MIT
+            const pisCofinsBox = document.querySelector('.pis-cofins-box');
+            if (pisCofinsBox) {
+                pisCofinsBox.addEventListener('click', () => showPisCofinsModal());
             }
         } else if (page === 'analytics') {
             // Verificar tipo de usuário
@@ -11027,6 +11043,345 @@ async function autofillRazaoFromCnpj(cnpj, razaoInput) {
     if (info && info.razaoSocial && !razaoInput.value.trim()) {
         razaoInput.value = info.razaoSocial;
         razaoInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
+// ============================================================================
+// FRENTE #5 — PIS/COFINS + MIT
+// Lê duas apurações .xlsx (anterior + atual), aba "Pis e Cofins", calcula
+// COFINS/PIS escalado pela variação da base, mostra tabela e gera os JSONs MIT.
+// Spec: docs/SPEC-pis-cofins-mit.md
+// ============================================================================
+
+// Converte texto BR ("1.234,56") ou número em float. Retorna 0 quando vazio/NaN.
+function parsePisCofinsNum(v) {
+    if (typeof v === 'number') return isNaN(v) ? 0 : v;
+    let s = String(v == null ? '' : v).trim();
+    if (!s) return 0;
+    s = s.replace(/[^\d.,-]/g, '');
+    if (s.indexOf(',') > -1 && s.indexOf('.') > -1) {
+        // separador decimal = o último que aparece
+        if (s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(/\./g, '').replace(',', '.');
+        else s = s.replace(/,/g, '');
+    } else if (s.indexOf(',') > -1) {
+        s = s.replace(',', '.');
+    }
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+}
+
+// CNPJ só com dígitos, padronizado a 14 (recupera zero à esquerda que o XLSX possa ter dropado).
+function normalizeCnpj14(v) {
+    let d = String(v == null ? '' : v).replace(/\D/g, '');
+    if (d.length > 0 && d.length < 14) d = d.padStart(14, '0');
+    return d;
+}
+
+// Parser da aba "Pis e Cofins": dados a partir da linha 4 (idx 3).
+// C(2)=Razão, D(3)=CNPJ, E(4)=Compras, F(5)=Vendas, K(10)=COFINS.
+function parsePisCofinsSheet(workbook) {
+    const ws = workbook.Sheets['Pis e Cofins'];
+    if (!ws) throw new Error('Aba "Pis e Cofins" não encontrada na planilha.');
+    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+    const rows = [];
+    for (let i = 3; i < matrix.length; i++) {
+        const r = matrix[i] || [];
+        const razao = String(r[2] || '').trim();
+        const cnpj = normalizeCnpj14(r[3]);
+        if (!razao && !cnpj) continue;
+        rows.push({
+            razao,
+            cnpj,
+            compras: parsePisCofinsNum(r[4]),
+            vendas: parsePisCofinsNum(r[5]),
+            cofins: parsePisCofinsNum(r[10]),
+        });
+    }
+    return rows;
+}
+
+// Chave de match entre apurações: CNPJ se houver, senão Razão Social (upper/trim).
+function pisCofinsKey(row) {
+    return row.cnpj || row.razao.toUpperCase();
+}
+
+// Mês/ano da apuração atual a partir do nome do arquivo: "...05-2026.xlsx" → {mes:5, ano:2026}.
+function extractPeriodoFromFilename(filename) {
+    const m = String(filename || '').match(/(\d{2})-(\d{4})/);
+    if (!m) return null;
+    return { mes: parseInt(m[1], 10), ano: parseInt(m[2], 10) };
+}
+
+const PIS_COFINS_DECIMAL = 100;
+function round2(n) { return Math.round(n * PIS_COFINS_DECIMAL) / PIS_COFINS_DECIMAL; }
+
+// Núcleo do cálculo. Casa empresas das duas apurações e escala COFINS/PIS.
+// Retorna { resultados:[...], semAnterior:[...] }.
+function computePisCofins(rowsAnterior, rowsAtual) {
+    const mapAnt = new Map();
+    for (const r of rowsAnterior) mapAnt.set(pisCofinsKey(r), r);
+
+    const resultados = [];
+    const semAnterior = [];
+    for (const atual of rowsAtual) {
+        const ant = mapAnt.get(pisCofinsKey(atual));
+        if (!ant) { semAnterior.push(atual); continue; }
+
+        const baseAnt = ant.vendas - ant.compras;
+        const baseAtual = atual.vendas - atual.compras;
+        if (baseAnt === 0) { semAnterior.push(atual); continue; }
+
+        const cofinsNovo = ant.cofins * (baseAtual / baseAnt);
+        const pisNovo = (cofinsNovo / 0.076) * 0.0165;
+        const multBase = (ant.cofins / baseAnt) * 100;
+
+        resultados.push({
+            razao: atual.razao || ant.razao,
+            cnpj: atual.cnpj || ant.cnpj,
+            pis: round2(pisNovo),
+            cofins: round2(cofinsNovo),
+            multBase: round2(multBase),
+        });
+    }
+    return { resultados, semAnterior };
+}
+
+// Monta o objeto MIT (template MODELO.JSON, variando só período + valores).
+function buildMitJson(periodo, pis, cofins) {
+    return {
+        PeriodoApuracao: { MesApuracao: periodo.mes, AnoApuracao: periodo.ano },
+        DadosIniciais: {
+            SemMovimento: false,
+            QualificacaoPj: 1,
+            TributacaoLucro: 2,
+            VariacoesMonetarias: 2,
+            RegimePisCofins: 1,
+            ResponsavelApuracao: { CpfResponsavel: "31580734391", EmailResponsavel: "" },
+            RegistroCrc: { UfRegistro: "CE", NumRegistro: "009551O2" },
+        },
+        Debitos: {
+            PisPasep: { ListaDebitos: [{ IdDebito: 1, CodigoDebito: "691201", ValorDebito: pis }] },
+            Cofins: { ListaDebitos: [{ IdDebito: 2, CodigoDebito: "585601", ValorDebito: cofins }] },
+        },
+    };
+}
+
+// Nome rígido do arquivo MIT: <cnpj8>-MIT-<YYYYMM>.JSON
+function mitFilename(cnpj, periodo) {
+    const cnpj8 = normalizeCnpj14(cnpj).slice(0, 8);
+    const yyyymm = String(periodo.ano) + String(periodo.mes).padStart(2, '0');
+    return `${cnpj8}-MIT-${yyyymm}.JSON`;
+}
+
+// Estado do modal (arquivos selecionados + último resultado calculado).
+const pisCofinsState = { fileAnterior: null, fileAtual: null, resultados: [], periodo: null };
+
+function showPisCofinsModal() {
+    pisCofinsState.fileAnterior = null;
+    pisCofinsState.fileAtual = null;
+    pisCofinsState.resultados = [];
+    pisCofinsState.periodo = null;
+
+    const modal = document.createElement('div');
+    modal.className = 'user-registration-modal pis-cofins-modal';
+    if (document.body.classList.contains('dark-mode-variables')) {
+        modal.classList.add('dark-mode-variables');
+    }
+
+    modal.innerHTML = `
+        <div class="user-registration-modal-content">
+            <div class="modal-header">
+                <h2>PIS/COFINS + MIT</h2>
+                <button class="close-btn pis-cofins-close-btn">
+                    <span class="material-icons-sharp">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-section">
+                    <h3>Apurações (aba "Pis e Cofins")</h3>
+                    <p style="font-size:0.85rem; opacity:0.8; margin-bottom:1rem;">
+                        Selecione a apuração <strong>anterior</strong> (de onde sai o COFINS base) e a
+                        <strong>atual</strong> (define o período do MIT). O cálculo casa as empresas por CNPJ/Razão.
+                    </p>
+                    <div class="form-columns" style="gap:1rem;">
+                        <div class="input-group">
+                            <label style="font-weight:600;">Apuração ANTERIOR (.xlsx)</label>
+                            <input type="file" id="pis-cofins-file-anterior" accept=".xlsx,.xls" style="margin-top:0.4rem;">
+                        </div>
+                        <div class="input-group">
+                            <label style="font-weight:600;">Apuração ATUAL (.xlsx)</label>
+                            <input type="file" id="pis-cofins-file-atual" accept=".xlsx,.xls" style="margin-top:0.4rem;">
+                        </div>
+                    </div>
+                    <div class="modal-footer" style="margin-top:1rem;">
+                        <button type="button" id="pis-cofins-calc-btn" class="btn-save">Calcular</button>
+                    </div>
+                    <div id="pis-cofins-status" style="margin-top:0.75rem; font-size:0.85rem;"></div>
+                </div>
+                <div class="users-section">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+                        <h3>Resultado</h3>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" id="pis-cofins-copy-mult-btn" class="btn-cancel" style="background:#3498db; color:#fff; padding:0.5rem 1rem; font-size:0.85rem;" disabled>
+                                Copiar Multiplicadores
+                            </button>
+                            <button type="button" id="pis-cofins-gen-mit-btn" class="btn-cancel" style="background:var(--color-success); color:#fff; padding:0.5rem 1rem; font-size:0.85rem;" disabled>
+                                Gerar MIT (ZIP)
+                            </button>
+                        </div>
+                    </div>
+                    <div id="pis-cofins-result" class="users-list">
+                        <p class="no-users">Nenhum cálculo ainda. Selecione as duas planilhas e clique em Calcular.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const anteriorInput = modal.querySelector('#pis-cofins-file-anterior');
+    const atualInput = modal.querySelector('#pis-cofins-file-atual');
+    if (anteriorInput) anteriorInput.addEventListener('change', (e) => { pisCofinsState.fileAnterior = e.target.files[0] || null; });
+    if (atualInput) atualInput.addEventListener('change', (e) => { pisCofinsState.fileAtual = e.target.files[0] || null; });
+
+    modal.querySelector('#pis-cofins-calc-btn').addEventListener('click', handlePisCofinsCalc);
+    modal.querySelector('#pis-cofins-copy-mult-btn').addEventListener('click', handlePisCofinsCopyMultiplicadores);
+    modal.querySelector('#pis-cofins-gen-mit-btn').addEventListener('click', handlePisCofinsGenerateMit);
+
+    const closeBtn = modal.querySelector('.pis-cofins-close-btn');
+    if (closeBtn) closeBtn.addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+// Lê um File .xlsx e devolve o workbook SheetJS.
+function readWorkbookFromFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try { resolve(XLSX.read(e.target.result, { type: 'array' })); }
+            catch (err) { reject(err); }
+        };
+        reader.onerror = () => reject(reader.error || new Error('Falha ao ler o arquivo.'));
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+async function handlePisCofinsCalc() {
+    const status = document.getElementById('pis-cofins-status');
+    const resultDiv = document.getElementById('pis-cofins-result');
+    const copyBtn = document.getElementById('pis-cofins-copy-mult-btn');
+    const genBtn = document.getElementById('pis-cofins-gen-mit-btn');
+
+    if (!pisCofinsState.fileAnterior || !pisCofinsState.fileAtual) {
+        if (status) status.innerHTML = '<span style="color:var(--color-danger);">Selecione as duas planilhas (anterior e atual).</span>';
+        return;
+    }
+
+    const periodo = extractPeriodoFromFilename(pisCofinsState.fileAtual.name);
+    if (!periodo) {
+        if (status) status.innerHTML = '<span style="color:var(--color-danger);">Não consegui extrair mês/ano do nome da planilha ATUAL (esperado "MM-AAAA", ex.: 05-2026).</span>';
+        return;
+    }
+
+    if (status) status.textContent = 'Lendo planilhas...';
+    try {
+        const [wbAnt, wbAtual] = await Promise.all([
+            readWorkbookFromFile(pisCofinsState.fileAnterior),
+            readWorkbookFromFile(pisCofinsState.fileAtual),
+        ]);
+        const rowsAnt = parsePisCofinsSheet(wbAnt);
+        const rowsAtual = parsePisCofinsSheet(wbAtual);
+        const { resultados, semAnterior } = computePisCofins(rowsAnt, rowsAtual);
+
+        pisCofinsState.resultados = resultados;
+        pisCofinsState.periodo = periodo;
+
+        if (resultados.length === 0) {
+            resultDiv.innerHTML = '<p class="no-users">Nenhuma empresa casou entre as duas apurações.</p>';
+            if (copyBtn) copyBtn.disabled = true;
+            if (genBtn) genBtn.disabled = true;
+        } else {
+            renderPisCofinsTable(resultDiv, resultados);
+            if (copyBtn) copyBtn.disabled = false;
+            if (genBtn) genBtn.disabled = false;
+        }
+
+        let msg = `${resultados.length} empresa(s) calculada(s). Período MIT: ${String(periodo.mes).padStart(2, '0')}/${periodo.ano}.`;
+        if (semAnterior.length) msg += ` ${semAnterior.length} sem apuração anterior (ignorada(s)).`;
+        if (status) status.innerHTML = `<span style="color:var(--color-success);">${escapeHtml(msg)}</span>`;
+    } catch (err) {
+        console.error('Erro no cálculo PIS/COFINS:', err);
+        if (status) status.innerHTML = `<span style="color:var(--color-danger);">Erro: ${escapeHtml(err.message || String(err))}</span>`;
+    }
+}
+
+function renderPisCofinsTable(container, resultados) {
+    const fmt = (n) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const body = resultados.map((r) => `
+        <tr>
+            <td style="padding:0.4rem 0.6rem;">${escapeHtml(r.razao)}</td>
+            <td style="padding:0.4rem 0.6rem;">${formatCNPJ(r.cnpj)}</td>
+            <td style="padding:0.4rem 0.6rem; text-align:right;">${fmt(r.pis)}</td>
+            <td style="padding:0.4rem 0.6rem; text-align:right;">${fmt(r.cofins)}</td>
+            <td style="padding:0.4rem 0.6rem; text-align:right;">${fmt(r.multBase)}</td>
+        </tr>
+    `).join('');
+    container.innerHTML = `
+        <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                <thead>
+                    <tr style="border-bottom:2px solid var(--color-primary);">
+                        <th style="padding:0.4rem 0.6rem; text-align:left;">Razão Social</th>
+                        <th style="padding:0.4rem 0.6rem; text-align:left;">CNPJ</th>
+                        <th style="padding:0.4rem 0.6rem; text-align:right;">PIS</th>
+                        <th style="padding:0.4rem 0.6rem; text-align:right;">COFINS</th>
+                        <th style="padding:0.4rem 0.6rem; text-align:right;">Multiplicador Base %</th>
+                    </tr>
+                </thead>
+                <tbody>${body}</tbody>
+            </table>
+        </div>
+    `;
+}
+
+// Copia só os multiplicadores, um por linha, na ordem da tabela (colar na coluna G da planilha).
+async function handlePisCofinsCopyMultiplicadores() {
+    if (!pisCofinsState.resultados.length) return;
+    const text = pisCofinsState.resultados
+        .map((r) => r.multBase.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+        .join('\n');
+    const status = document.getElementById('pis-cofins-status');
+    try {
+        await navigator.clipboard.writeText(text);
+        if (status) status.innerHTML = '<span style="color:var(--color-success);">Multiplicadores copiados.</span>';
+    } catch (err) {
+        console.error('Erro ao copiar multiplicadores:', err);
+        if (status) status.innerHTML = '<span style="color:var(--color-danger);">Não consegui copiar — copie manualmente da coluna Multiplicador.</span>';
+    }
+}
+
+// Gera um JSON MIT por empresa e empacota tudo num ZIP para download.
+async function handlePisCofinsGenerateMit() {
+    if (!pisCofinsState.resultados.length || !pisCofinsState.periodo) return;
+    const status = document.getElementById('pis-cofins-status');
+    if (typeof JSZip === 'undefined') {
+        if (status) status.innerHTML = '<span style="color:var(--color-danger);">JSZip não carregou — não é possível gerar o ZIP.</span>';
+        return;
+    }
+    try {
+        const zip = new JSZip();
+        for (const r of pisCofinsState.resultados) {
+            const mit = buildMitJson(pisCofinsState.periodo, r.pis, r.cofins);
+            zip.file(mitFilename(r.cnpj, pisCofinsState.periodo), JSON.stringify(mit));
+        }
+        const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+        const p = pisCofinsState.periodo;
+        triggerDownload(blob, `MIT-${p.ano}${String(p.mes).padStart(2, '0')}.zip`);
+        if (status) status.innerHTML = `<span style="color:var(--color-success);">ZIP gerado com ${pisCofinsState.resultados.length} JSON(s) MIT.</span>`;
+    } catch (err) {
+        console.error('Erro ao gerar MIT:', err);
+        if (status) status.innerHTML = `<span style="color:var(--color-danger);">Erro ao gerar ZIP: ${escapeHtml(err.message || String(err))}</span>`;
     }
 }
 
