@@ -37,12 +37,21 @@ const sanitizeFileName = (s) => String(s || '')
 
 function makeErr(kind, message) { const e = new Error(message); e.kind = kind; return e; }
 
-const MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-function monthYearFromKey(chave) {
+// AAMM nas pos 3-6 da chave. Rótulo numérico "MM-YYYY" (ex.: "05-2026") p/ o ZIP;
+// "YYYYMM" (ex.: "202605") p/ id de grupo (separa meses da mesma empresa).
+function ymFromKey(chave) {
     const aa = String(chave).substring(2, 4);
-    const mm = parseInt(String(chave).substring(4, 6), 10);
-    const mes = (mm >= 1 && mm <= 12) ? MESES_PT[mm - 1] : '???';
-    return mes + '-20' + aa;
+    const mmNum = parseInt(String(chave).substring(4, 6), 10);
+    const mm = (mmNum >= 1 && mmNum <= 12) ? String(mmNum).padStart(2, '0') : '00';
+    return { mm, yyyy: '20' + aa };
+}
+function monthYearFromKey(chave) {
+    const { mm, yyyy } = ymFromKey(chave);
+    return mm + '-' + yyyy;
+}
+function yyyymmFromKey(chave) {
+    const { mm, yyyy } = ymFromKey(chave);
+    return yyyy + mm;
 }
 
 // Decodifica o CNPJ (sub) de um JWT sem validar assinatura — só p/ default de taxid.
@@ -158,13 +167,16 @@ function startJob(payload) {
         }
         if (!keys.length) continue;
         const cnpj = cleanDigits(c.cnpj) || (keys[0] ? keys[0].substring(6, 20) : '');
+        // id = identidade do grupo (1 ZIP). A UI manda "<cnpj>-<YYYYMM>"; se faltar,
+        // derivamos da 1ª chave. Chaveia o Map por id p/ não colidir meses do mesmo CNPJ.
+        const id = String(c.id || '').trim() || (cnpj + '-' + (keys[0] ? yyyymmFromKey(keys[0]) : '000000'));
         const taxid = cleanDigits(c.taxid) || cnpjFromToken(token) || cnpj;
         const meta = new Map();
         if (c.meta && typeof c.meta === 'object') {
             for (const k of Object.keys(c.meta)) { const kk = cleanDigits(k); if (kk.length === 44) meta.set(kk, c.meta[k]); }
         }
-        companies.set(cnpj, {
-            cnpj, token, taxid, nome: '', nomeResolved: false,
+        companies.set(id, {
+            id, cnpj, token, taxid, nome: '', nomeResolved: false,
             monthLabel: keys[0] ? monthYearFromKey(keys[0]) : '',
             keys, pending: keys.slice(), total: keys.length,
             downloaded: 0, errors: 0, phase: 'download', aborted: false, abortReason: '',
@@ -270,6 +282,7 @@ async function runJob(job) {
 // ------------------------------------------------------------ leitura/API ----
 function companyStatus(c) {
     return {
+        id: c.id,
         cnpj: c.cnpj,
         nome: c.nome || ('CNPJ ' + c.cnpj),
         total: c.total,
@@ -291,19 +304,20 @@ function getStatus(jobId) {
     return { ok: true, jobId: job.id, done: job.done, error: job.error || '', companies };
 }
 
-// Detalhe (failures + divergências) de uma empresa — p/ a UI mostrar relatório.
-function getCompanyDetail(jobId, cnpj) {
+// Detalhe (failures + divergências) de um grupo — p/ a UI mostrar relatório.
+// `groupId` = "<cnpj>-<YYYYMM>" (tem hífen → NÃO passar por cleanDigits).
+function getCompanyDetail(jobId, groupId) {
     const job = jobs.get(jobId);
     if (!job) return null;
-    const c = job.companies.get(cleanDigits(cnpj));
+    const c = job.companies.get(String(groupId || '')) || job.companies.get(cleanDigits(groupId));
     if (!c) return null;
     return { ok: true, ...companyStatus(c), failures: c.failures, confResults: c.confResults };
 }
 
-function getCompanyZip(jobId, cnpj) {
+function getCompanyZip(jobId, groupId) {
     const job = jobs.get(jobId);
     if (!job) return null;
-    const c = job.companies.get(cleanDigits(cnpj));
+    const c = job.companies.get(String(groupId || '')) || job.companies.get(cleanDigits(groupId));
     if (!c || !c.zipBuffer) return null;
     return { buffer: c.zipBuffer, name: c.zipName };
 }

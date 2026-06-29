@@ -4233,8 +4233,13 @@ async function processDirbiXmls(fileList) {
             for (const rule of rules) {
                 ws.getCell('E' + rule.row).value = Math.round((emp.somas[rule.row] || 0) * 100) / 100;
             }
-            const razaoFinal = Object.keys(emp.razaoCount).reduce(
+            let razaoFinal = Object.keys(emp.razaoCount).reduce(
                 (a, b) => (emp.razaoCount[a] >= emp.razaoCount[b] ? a : b), '');
+            if (!razaoFinal) {
+                // XML sem razão social → fallback na consulta pública de CNPJ.
+                const info = await consultarCnpj(cnpj);
+                if (info && info.razaoSocial) razaoFinal = info.razaoSocial;
+            }
             if (razaoFinal) ws.getCell('B2').value = razaoFinal;
 
             // As fórmulas F/G (Pis/Cofins = E*1,65% / E*7,6%) são shared formulas cujo
@@ -9007,18 +9012,28 @@ function createBaixarNfcePage(mainContent) {
     //  Node — ver worker/lib/nfce.js. O browser não bate mais na SEFAZ em massa.)
 
     // ====================== orquestração multi-empresa ======================
-    const MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const RING_R = 52, RING_C = 2 * Math.PI * RING_R;
     const MINI_R = 14.5, MINI_C = 2 * Math.PI * MINI_R;
     let miniBlue = null, miniYellow = null;
 
     const clamp01 = (x) => Math.max(0, Math.min(1, x));
     const cnpjFromKey = (chave) => String(chave).substring(6, 20);          // pos 7-20 (1-based) = emissor
-    function monthYearFromKey(chave) {
+    // AAMM nas pos 3-6 da chave. Rótulo numérico "MM-YYYY" (ex.: "05-2026") p/
+    // o nome do ZIP, e chave "YYYYMM" (ex.: "202605") p/ agrupar — assim meses
+    // diferentes da MESMA empresa caem em ZIPs separados.
+    function ymFromKey(chave) {
         const aa = String(chave).substring(2, 4);                            // pos 3-4 = AA
-        const mm = parseInt(String(chave).substring(4, 6), 10);              // pos 5-6 = MM
-        const mes = (mm >= 1 && mm <= 12) ? MESES_PT[mm - 1] : '???';
-        return mes + '-20' + aa;
+        const mmNum = parseInt(String(chave).substring(4, 6), 10);           // pos 5-6 = MM
+        const mm = (mmNum >= 1 && mmNum <= 12) ? String(mmNum).padStart(2, '0') : '00';
+        return { mm, yyyy: '20' + aa };
+    }
+    function monthYearFromKey(chave) {
+        const { mm, yyyy } = ymFromKey(chave);
+        return mm + '-' + yyyy;                                              // "05-2026"
+    }
+    function yyyymmFromKey(chave) {
+        const { mm, yyyy } = ymFromKey(chave);
+        return yyyy + mm;                                                    // "202605"
     }
     const sanitizeFileName = (s) => String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'EMPRESA';
     const setArc = (circleEl, frac, circ) => { if (circleEl) circleEl.style.strokeDashoffset = String(circ * (1 - clamp01(frac))); };
@@ -9134,10 +9149,10 @@ function createBaixarNfcePage(mainContent) {
 
     const cnpjLabel = (cnpj) => 'CNPJ ' + (typeof formatCNPJ === 'function' ? formatCNPJ(cnpj) : cnpj);
 
-    function createCompany(compKey, cnpj, sampleKey, total) {
+    function createCompany(compKey, id, cnpj, sampleKey, total) {
         const nomeCad = contributorsByCnpj.get(cnpj) || '';
         const comp = {
-            compKey, cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
+            compKey, id, cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
             monthLabel: monthYearFromKey(sampleKey),
             total: total || 0, downloaded: 0, errors: 0,
             phase: 'download', zipProgress: 0,
@@ -9256,21 +9271,24 @@ function createBaixarNfcePage(mainContent) {
     function buildCompanies(reportsList) {
         const globalMode = globalModeChk.checked;
         const globalTok = extractToken(tokenInput.value);
-        const byCnpj = new Map();
+        // Agrupa por (CNPJ + mês). id = "<cnpj14>-<YYYYMM>" → 1 grupo (= 1 ZIP) por
+        // empresa POR mês. Antes era só por CNPJ, misturando meses no mesmo ZIP.
+        const byGroup = new Map();
         for (const r of reportsList) {
             const tok = globalMode ? globalTok : (extractToken(r.token || '') || globalTok);
             if (!tok) continue;
             const taxid = validateJwt(tok).cnpj || '';
             for (const chave of r.keys) {
                 const cnpj = cnpjFromKey(chave);
-                let c = byCnpj.get(cnpj);
-                if (!c) { c = { cnpj, token: tok, taxid, keys: [], meta: {} }; byCnpj.set(cnpj, c); }
+                const id = cnpj + '-' + yyyymmFromKey(chave);
+                let c = byGroup.get(id);
+                if (!c) { c = { id, cnpj, token: tok, taxid, keys: [], meta: {} }; byGroup.set(id, c); }
                 c.keys.push(chave);
                 const m = r.meta && r.meta.get(chave);
                 if (m) c.meta[chave] = m;
             }
         }
-        return Array.from(byCnpj.values()).filter((c) => c.keys.length);
+        return Array.from(byGroup.values()).filter((c) => c.keys.length);
     }
 
     async function detectWorker() {
@@ -9302,8 +9320,8 @@ function createBaixarNfcePage(mainContent) {
         const jobId = resp.jobId;
         jobIds.push(jobId);
         for (const c of companiesPayload) {
-            const compKey = jobId + '|' + c.cnpj;
-            if (!companies.has(compKey)) createCompany(compKey, c.cnpj, c.keys[0], c.keys.length);
+            const compKey = jobId + '|' + c.id;
+            if (!companies.has(compKey)) createCompany(compKey, c.id, c.cnpj, c.keys[0], c.keys.length);
         }
         updateFooter();
         updateTooltip();
@@ -9315,7 +9333,7 @@ function createBaixarNfcePage(mainContent) {
     // fica com o ZIP pronto, dispara o download do ZIP uma única vez.
     function applyStatus(jobId, st) {
         for (const cs of st.companies) {
-            const comp = companies.get(jobId + '|' + cs.cnpj);
+            const comp = companies.get(jobId + '|' + (cs.id || cs.cnpj));
             if (!comp) continue;
             comp.total = cs.total;
             comp.downloaded = cs.downloaded;
@@ -9327,7 +9345,7 @@ function createBaixarNfcePage(mainContent) {
             updateRing(comp);
             if (cs.zipReady && !comp.zipDownloaded) {
                 comp.zipDownloaded = true;
-                downloadCompanyZip(jobId, cs.cnpj, cs.zipName);
+                downloadCompanyZip(jobId, cs.id || cs.cnpj, cs.zipName);
             }
         }
     }
@@ -9360,14 +9378,14 @@ function createBaixarNfcePage(mainContent) {
     }
 
     // Baixa o ZIP de uma empresa do worker (blob) e entrega via fila de downloads.
-    async function downloadCompanyZip(jobId, cnpj, zipName) {
+    async function downloadCompanyZip(jobId, id, zipName) {
         try {
-            const res = await fetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(cnpj));
+            const res = await fetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
             if (!res.ok) return;
             const blob = await res.blob();
-            enqueueDownload(blob, zipName || ('NFCe_' + cnpj + '.zip'));
+            enqueueDownload(blob, zipName || ('NFCe_' + id + '.zip'));
         } catch (e) {
-            console.warn('Falha ao baixar ZIP de ' + cnpj + ': ' + (e && e.message));
+            console.warn('Falha ao baixar ZIP de ' + id + ': ' + (e && e.message));
         }
     }
 
@@ -9455,9 +9473,9 @@ function createBaixarNfcePage(mainContent) {
             return false;
         }
         for (const g of groups) {
-            const compKey = 'browser|' + g.cnpj;
+            const compKey = 'browser|' + g.id;
             let comp = companies.get(compKey);
-            if (!comp) comp = createCompany(compKey, g.cnpj, g.keys[0], 0);
+            if (!comp) comp = createCompany(compKey, g.id, g.cnpj, g.keys[0], 0);
             comp.token = g.token;
             comp.taxid = g.taxid;
             if (!comp.pending) comp.pending = [];
@@ -10947,6 +10965,71 @@ function escapeHtml(text) {
 }
 
 // Função para mostrar modal de cadastro de contribuintes
+// ======================= Consulta pública de CNPJ =======================
+// API pública publica.cnpj.ws: GET /cnpj/{14díg}, limite 3 req/min, CORS aberto
+// (browser bate direto, sem worker). Cache em memória por sessão + dedup de
+// requisições concorrentes + rate-limit client-side (fila 3/min). Best-effort:
+// qualquer falha (429/404/CORS/rede) devolve null e o chamador cai no
+// comportamento anterior. NÃO lança.
+const _cnpjCache = new Map();        // cnpj14 -> info | null
+const _cnpjInflight = new Map();     // cnpj14 -> Promise (evita 2 fetches do mesmo CNPJ)
+const _cnpjReqTimes = [];            // timestamps das últimas requisições (janela 60s)
+
+async function _cnpjRateGate() {
+    for (;;) {
+        const now = Date.now();
+        while (_cnpjReqTimes.length && now - _cnpjReqTimes[0] > 60000) _cnpjReqTimes.shift();
+        if (_cnpjReqTimes.length < 3) { _cnpjReqTimes.push(now); return; }
+        await new Promise((r) => setTimeout(r, 60000 - (now - _cnpjReqTimes[0]) + 50));
+    }
+}
+
+// Resolve dados públicos de um CNPJ. Retorna { razaoSocial, nomeFantasia, uf,
+// municipio, situacao, raw } ou null. Idempotente por cache.
+async function consultarCnpj(cnpj) {
+    const c = String(cnpj || '').replace(/\D/g, '');
+    if (c.length !== 14) return null;
+    if (_cnpjCache.has(c)) return _cnpjCache.get(c);
+    if (_cnpjInflight.has(c)) return _cnpjInflight.get(c);
+    const p = (async () => {
+        try {
+            await _cnpjRateGate();
+            const res = await fetch('https://publica.cnpj.ws/cnpj/' + c, { headers: { accept: 'application/json' } });
+            if (!res.ok) { _cnpjCache.set(c, null); return null; }   // 429/404 → cacheia null (não martela)
+            const j = await res.json();
+            const est = (j && j.estabelecimento) || {};
+            const info = {
+                razaoSocial: (j && j.razao_social) || '',
+                nomeFantasia: est.nome_fantasia || '',
+                uf: (est.estado && est.estado.sigla) || '',
+                municipio: (est.cidade && est.cidade.nome) || '',
+                situacao: est.situacao_cadastral || '',
+                raw: j,
+            };
+            _cnpjCache.set(c, info);
+            return info;
+        } catch (e) {
+            return null;                                            // CORS/rede: NÃO cacheia (pode ser transitório)
+        } finally {
+            _cnpjInflight.delete(c);
+        }
+    })();
+    _cnpjInflight.set(c, p);
+    return p;
+}
+
+// Autopreenche a Razão Social a partir do CNPJ. Só preenche se o campo estiver
+// vazio (não sobrescreve o que o usuário digitou). Dispara 'input' p/ a label
+// flutuante reagir. Best-effort.
+async function autofillRazaoFromCnpj(cnpj, razaoInput) {
+    if (!razaoInput || razaoInput.value.trim()) return;
+    const info = await consultarCnpj(cnpj);
+    if (info && info.razaoSocial && !razaoInput.value.trim()) {
+        razaoInput.value = info.razaoSocial;
+        razaoInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
 function showContributorRegistrationModal() {
     // Verificar se o usuário atual é administrador
     const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
@@ -11074,11 +11157,14 @@ function showContributorRegistrationModal() {
 
     // Adicionar máscara para CNPJ
     const cnpjInput = document.getElementById('contributor-cnpj');
+    const razaoInput = document.getElementById('contributor-razao-social');
     if (cnpjInput) {
         cnpjInput.addEventListener('input', function(e) {
             let value = e.target.value.replace(/\D/g, '');
             if (value.length > 14) value = value.slice(0, 14);
             e.target.value = value;
+            // CNPJ completo → consulta pública preenche a Razão Social (se vazia).
+            if (value.length === 14) autofillRazaoFromCnpj(value, razaoInput);
         });
     }
 

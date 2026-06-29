@@ -1,0 +1,40 @@
+# Escopo do grafo Graphify: SÓ código-fonte do sistema.
+# Sintaxe gitignore-style. Tudo aqui é excluído da extração AST.
+
+# --- dados / planilhas / binários (não são código) ---
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.json
+*.fs
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.ico
+*.woff
+*.woff2
+*.ttf
+
+# --- assets não-código ---
+assets/css/
+assets/images/
+
+# --- saídas / vendored / infra ---
+graphify-out/
+node_modules/
+__pycache__/
+.git/
+.claude/
+.vercel/
+download/
+supabase/
+
+# --- scripts de shell/instalação (não fazem parte do call-graph) ---
+*.bat
+*.sh
+
+# --- config com segredo (não grafar) ---
+assets/js/config.js
