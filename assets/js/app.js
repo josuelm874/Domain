@@ -1137,7 +1137,17 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section" style="animation-delay: 0.1s"></div>
+                        <div class="box animate-section pendencias-box" style="animation-delay: 0.1s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">checklist</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>Pendências</h3>
+                                    <p>Controle de pendências do escritório</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section" style="animation-delay: 0.15s"></div>
                         <div class="box animate-section" style="animation-delay: 0.2s"></div>
                         <div class="box animate-section" style="animation-delay: 0.25s"></div>
@@ -1261,6 +1271,12 @@
             const pisCofinsBox = document.querySelector('.pis-cofins-box');
             if (pisCofinsBox) {
                 pisCofinsBox.addEventListener('click', () => showPisCofinsModal());
+            }
+
+            // Card "Pendências" → abre modal de controle de pendências
+            const pendenciasBox = document.querySelector('.pendencias-box');
+            if (pendenciasBox) {
+                pendenciasBox.addEventListener('click', () => showPendenciasModal());
             }
         } else if (page === 'analytics') {
             // Verificar tipo de usuário
@@ -11044,6 +11060,184 @@ async function autofillRazaoFromCnpj(cnpj, razaoInput) {
         razaoInput.value = info.razaoSocial;
         razaoInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
+}
+
+// ============================================================================
+// FRENTE #4 — CONTROLE DE PENDÊNCIAS
+// Bloco no Dashboard abre modal. Cada pendência é um box (título à esquerda,
+// checkbox à direita); clicar no box expande título+descrição+checkbox. Marcar
+// o checkbox carimba data/hora de conclusão. Persiste via load/saveDataSync('pendencias').
+// ============================================================================
+
+const pendenciasState = { items: [] };
+const pendenciasExpanded = new Set();
+
+function formatPendenciaDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function showPendenciasModal() {
+    const modal = document.createElement('div');
+    modal.className = 'user-registration-modal pendencias-modal';
+    if (document.body.classList.contains('dark-mode-variables')) {
+        modal.classList.add('dark-mode-variables');
+    }
+
+    modal.innerHTML = `
+        <div class="user-registration-modal-content">
+            <div class="modal-header">
+                <h2>Pendências</h2>
+                <button class="close-btn pendencias-close-btn">
+                    <span class="material-icons-sharp">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-section">
+                    <h3>Nova pendência</h3>
+                    <form id="pendencia-form">
+                        <div class="input-group">
+                            <div class="input-box">
+                                <input type="text" id="pendencia-titulo" required>
+                                <label for="pendencia-titulo">Título <span style="color: red;">*</span></label>
+                                <i class='bx bxs-flag'></i>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label for="pendencia-descricao" style="font-weight:600;">Descrição (opcional)</label>
+                            <textarea id="pendencia-descricao" rows="3" style="width:100%; margin-top:0.4rem; padding:0.6rem; border-radius:var(--border-radius-1); border:1px solid var(--color-info-light); resize:vertical;"></textarea>
+                        </div>
+                        <div class="modal-footer" style="margin-top:1rem;">
+                            <button type="submit" class="btn-save">Adicionar pendência</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="users-section">
+                    <h3 style="margin-bottom:1rem;">Pendências cadastradas</h3>
+                    <div id="pendencias-list" class="users-list"></div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    pendenciasState.items = await loadDataSync('pendencias', []);
+    renderPendenciasList();
+
+    const form = modal.querySelector('#pendencia-form');
+    if (form) form.addEventListener('submit', handleAddPendencia);
+
+    const closeBtn = modal.querySelector('.pendencias-close-btn');
+    if (closeBtn) closeBtn.addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+async function handleAddPendencia(e) {
+    e.preventDefault();
+    const tituloInput = document.getElementById('pendencia-titulo');
+    const descInput = document.getElementById('pendencia-descricao');
+    const titulo = (tituloInput ? tituloInput.value : '').trim();
+    const descricao = (descInput ? descInput.value : '').trim();
+    if (!titulo) {
+        if (tituloInput) tituloInput.focus();
+        return;
+    }
+    const pendencia = {
+        id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        titulo,
+        descricao,
+        done: false,
+        completedAt: null,
+        createdAt: new Date().toISOString(),
+    };
+    pendenciasState.items.unshift(pendencia);
+    await saveDataSync('pendencias', pendenciasState.items);
+    if (tituloInput) tituloInput.value = '';
+    if (descInput) descInput.value = '';
+    renderPendenciasList();
+    if (tituloInput) tituloInput.focus();
+}
+
+async function togglePendenciaDone(id, done) {
+    const item = pendenciasState.items.find((p) => p.id === id);
+    if (!item) return;
+    item.done = done;
+    item.completedAt = done ? new Date().toISOString() : null;
+    await saveDataSync('pendencias', pendenciasState.items);
+    renderPendenciasList();
+}
+
+async function removePendencia(id) {
+    pendenciasState.items = pendenciasState.items.filter((p) => p.id !== id);
+    pendenciasExpanded.delete(id);
+    await saveDataSync('pendencias', pendenciasState.items);
+    renderPendenciasList();
+}
+
+function renderPendenciasList() {
+    const list = document.getElementById('pendencias-list');
+    if (!list) return;
+
+    if (!pendenciasState.items.length) {
+        list.innerHTML = '<p class="no-users">Nenhuma pendência cadastrada ainda.</p>';
+        return;
+    }
+
+    list.innerHTML = pendenciasState.items.map((p) => {
+        const expanded = pendenciasExpanded.has(p.id);
+        const concluida = p.done
+            ? `<div class="pendencia-concluida" style="font-size:0.8rem; color:var(--color-success); margin-top:0.5rem;">Concluída em ${escapeHtml(formatPendenciaDateTime(p.completedAt))}</div>`
+            : '';
+        const descricao = p.descricao
+            ? `<div class="pendencia-descricao" style="margin-top:0.5rem; white-space:pre-wrap;">${escapeHtml(p.descricao)}</div>`
+            : '<div class="pendencia-descricao" style="margin-top:0.5rem; opacity:0.6;">Sem descrição.</div>';
+        return `
+        <div class="pendencia-item" data-id="${escapeHtml(p.id)}" style="border:1px solid var(--color-info-light); border-radius:var(--border-radius-1); padding:0.75rem 1rem; margin-bottom:0.75rem; background:var(--color-white);">
+            <div class="pendencia-header" style="display:flex; justify-content:space-between; align-items:center; gap:1rem; cursor:pointer;">
+                <span class="pendencia-titulo" style="text-align:left; flex:1; font-weight:600; ${p.done ? 'text-decoration:line-through; opacity:0.6;' : ''}">${escapeHtml(p.titulo)}</span>
+                <input type="checkbox" class="pendencia-check" data-id="${escapeHtml(p.id)}" ${p.done ? 'checked' : ''} style="width:1.2rem; height:1.2rem; cursor:pointer; flex-shrink:0;">
+            </div>
+            <div class="pendencia-body" style="display:${expanded ? 'block' : 'none'}; margin-top:0.5rem; padding-top:0.5rem; border-top:1px dashed var(--color-info-light);">
+                ${descricao}
+                ${concluida}
+                <div style="margin-top:0.75rem; text-align:right;">
+                    <button type="button" class="pendencia-remove-btn" data-id="${escapeHtml(p.id)}" style="background:var(--color-danger); color:#fff; border:none; border-radius:var(--border-radius-1); padding:0.35rem 0.8rem; font-size:0.8rem; cursor:pointer;">Excluir</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // Expandir/recolher ao clicar no box (exceto no checkbox).
+    list.querySelectorAll('.pendencia-header').forEach((header) => {
+        header.addEventListener('click', (e) => {
+            if (e.target.classList.contains('pendencia-check')) return;
+            const item = header.closest('.pendencia-item');
+            const id = item ? item.dataset.id : null;
+            if (!id) return;
+            if (pendenciasExpanded.has(id)) pendenciasExpanded.delete(id);
+            else pendenciasExpanded.add(id);
+            renderPendenciasList();
+        });
+    });
+
+    // Checkbox carimba/limpa data de conclusão.
+    list.querySelectorAll('.pendencia-check').forEach((cb) => {
+        cb.addEventListener('change', (e) => {
+            e.stopPropagation();
+            togglePendenciaDone(cb.dataset.id, cb.checked);
+        });
+    });
+
+    // Excluir pendência (aparece no box expandido).
+    list.querySelectorAll('.pendencia-remove-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            removePendencia(btn.dataset.id);
+        });
+    });
 }
 
 // ============================================================================
