@@ -30,6 +30,9 @@ __pycache__/
 .venv/
 venv/
 
+# Grafo de código Graphify (regenerável via `graphify update .`, 0 API)
+graphify-out/
+
 # Arquivos temporários
 *.tmp
 *.temp
