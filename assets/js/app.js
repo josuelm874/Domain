@@ -11271,24 +11271,56 @@ function normalizeCnpj14(v) {
     return d;
 }
 
-// Parser da aba "Pis e Cofins": dados a partir da linha 4 (idx 3).
-// C(2)=Razão, D(3)=CNPJ, E(4)=Compras, F(5)=Vendas, K(10)=COFINS.
+// Normaliza texto de cabeçalho: sem acento, minúsculo, sem espaços nas pontas.
+function normalizeHeaderText(s) {
+    return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+
+// Parser da aba "Pis e Cofins". Mapeia colunas PELO CABEÇALHO (Razão Social, CNPJ,
+// Compras, Vendas, Cofins), não por índice fixo — SheetJS corta a coluna A vazia e
+// desloca os índices, então casar por nome é o único jeito robusto.
 function parsePisCofinsSheet(workbook) {
     const ws = workbook.Sheets['Pis e Cofins'];
     if (!ws) throw new Error('Aba "Pis e Cofins" não encontrada na planilha.');
-    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false, blankrows: false });
+
+    // Acha a linha de cabeçalho (a que tem "Razão Social" + "CNPJ" + "Cofins").
+    let headerIdx = -1;
+    let col = {};
+    for (let i = 0; i < Math.min(matrix.length, 12); i++) {
+        const row = matrix[i] || [];
+        const map = {};
+        row.forEach((cell, j) => {
+            const h = normalizeHeaderText(cell);
+            if (!h) return;
+            if (map.razao == null && h.includes('razao')) map.razao = j;
+            else if (map.cnpj == null && h.includes('cnpj')) map.cnpj = j;
+            else if (map.compras == null && h.includes('compras')) map.compras = j;
+            else if (map.vendas == null && h.includes('vendas')) map.vendas = j;
+            else if (map.cofins == null && h.includes('cofins')) map.cofins = j;
+        });
+        if (map.razao != null && map.cnpj != null && map.cofins != null) {
+            headerIdx = i;
+            col = map;
+            break;
+        }
+    }
+    if (headerIdx === -1) {
+        throw new Error('Cabeçalho da aba "Pis e Cofins" não reconhecido (esperado colunas Razão Social, CNPJ, Compras, Vendas, Cofins).');
+    }
+
     const rows = [];
-    for (let i = 3; i < matrix.length; i++) {
+    for (let i = headerIdx + 1; i < matrix.length; i++) {
         const r = matrix[i] || [];
-        const razao = String(r[2] || '').trim();
-        const cnpj = normalizeCnpj14(r[3]);
+        const razao = String(r[col.razao] || '').trim();
+        const cnpj = normalizeCnpj14(r[col.cnpj]);
         if (!razao && !cnpj) continue;
         rows.push({
             razao,
             cnpj,
-            compras: parsePisCofinsNum(r[4]),
-            vendas: parsePisCofinsNum(r[5]),
-            cofins: parsePisCofinsNum(r[10]),
+            compras: parsePisCofinsNum(col.compras != null ? r[col.compras] : 0),
+            vendas: parsePisCofinsNum(col.vendas != null ? r[col.vendas] : 0),
+            cofins: parsePisCofinsNum(r[col.cofins]),
         });
     }
     return rows;
@@ -11309,39 +11341,117 @@ function extractPeriodoFromFilename(filename) {
 const PIS_COFINS_DECIMAL = 100;
 function round2(n) { return Math.round(n * PIS_COFINS_DECIMAL) / PIS_COFINS_DECIMAL; }
 
-// Núcleo do cálculo. Casa empresas das duas apurações e escala COFINS/PIS.
+// Alíquotas por regime tributário.
+const PIS_COFINS_ALIQUOTAS = {
+    real: { cofins: 0.076, pis: 0.0165 },
+    presumido: { cofins: 0.03, pis: 0.0065 },
+};
+
+// Agrupa linhas por CNPJ8 (matriz + filiais = mesma empresa). Soma vendas, compras
+// e COFINS de todas as unidades → base consolidada. Razão/CNPJ da matriz (filial 0001).
+function aggregateByCnpj8(rows) {
+    const groups = new Map();
+    for (const r of rows) {
+        const cnpj = normalizeCnpj14(r.cnpj);
+        const key = cnpj.slice(0, 8) || r.razao.toUpperCase();
+        let g = groups.get(key);
+        if (!g) {
+            g = { cnpj8: key, razao: r.razao, cnpjMatriz: cnpj, compras: 0, vendas: 0, cofins: 0, matrizFound: false };
+            groups.set(key, g);
+        }
+        g.compras += r.compras;
+        g.vendas += r.vendas;
+        g.cofins += r.cofins;
+        // Filial 0001 = matriz → usa a razão social e o CNPJ dela.
+        if (cnpj.slice(8, 12) === '0001') {
+            g.razao = r.razao;
+            g.cnpjMatriz = cnpj;
+            g.matrizFound = true;
+        }
+    }
+    return groups;
+}
+
+// Núcleo do cálculo. Consolida filiais por CNPJ8, casa as duas apurações e escala
+// COFINS/PIS pela variação da base, com alíquotas conforme o regime de cada empresa.
+// regimeByCnpj8: Map cnpj8 -> 'real' | 'presumido'. Default 'real'.
 // Retorna { resultados:[...], semAnterior:[...] }.
-function computePisCofins(rowsAnterior, rowsAtual) {
-    const mapAnt = new Map();
-    for (const r of rowsAnterior) mapAnt.set(pisCofinsKey(r), r);
+function computePisCofins(rowsAnterior, rowsAtual, regimeByCnpj8) {
+    const gAnt = aggregateByCnpj8(rowsAnterior);
+    const gAtual = aggregateByCnpj8(rowsAtual);
 
     const resultados = [];
     const semAnterior = [];
-    for (const atual of rowsAtual) {
-        const ant = mapAnt.get(pisCofinsKey(atual));
+    for (const [key, atual] of gAtual) {
+        const ant = gAnt.get(key);
         if (!ant) { semAnterior.push(atual); continue; }
 
         const baseAnt = ant.vendas - ant.compras;
         const baseAtual = atual.vendas - atual.compras;
         if (baseAnt === 0) { semAnterior.push(atual); continue; }
 
+        const regime = (regimeByCnpj8 && regimeByCnpj8.get(key)) === 'presumido' ? 'presumido' : 'real';
+        const aliq = PIS_COFINS_ALIQUOTAS[regime];
+
         const cofinsNovo = ant.cofins * (baseAtual / baseAnt);
-        const pisNovo = (cofinsNovo / 0.076) * 0.0165;
-        const multBase = (ant.cofins / baseAnt) * 100;
+        const pisNovo = (cofinsNovo / aliq.cofins) * aliq.pis;
+        // Multiplicador = % que, aplicado à base atual, chega na base de cálculo
+        // subjacente (COFINS_novo / alíquota COFINS). Ex. real: 19.044,47 / 173.131,88 = 11,00%.
+        const multBase = baseAtual !== 0 ? (cofinsNovo / aliq.cofins / baseAtual) * 100 : 0;
 
         resultados.push({
             razao: atual.razao || ant.razao,
-            cnpj: atual.cnpj || ant.cnpj,
+            cnpj: atual.cnpjMatriz || ant.cnpjMatriz,
+            regime,
             pis: round2(pisNovo),
             cofins: round2(cofinsNovo),
-            multBase: round2(multBase),
+            // Precisão cheia: a cópia usa 8 casas; arredondar aqui zeraria os decimais.
+            // O display arredonda para 2 na renderização.
+            multBase: multBase,
         });
     }
     return { resultados, semAnterior };
 }
 
-// Monta o objeto MIT (template MODELO.JSON, variando só período + valores).
-function buildMitJson(periodo, pis, cofins) {
+// Monta Map cnpj8 -> regime a partir do cadastro de contribuintes ('contributors').
+async function buildRegimeByCnpj8() {
+    const map = new Map();
+    try {
+        const contributors = await loadDataSync('contributors', []);
+        for (const c of contributors) {
+            const cnpj8 = normalizeCnpj14(c.cnpj).slice(0, 8);
+            if (!cnpj8) continue;
+            const regime = normalizeHeaderText(c.regime).includes('presumido') ? 'presumido' : 'real';
+            map.set(cnpj8, regime);
+        }
+    } catch (err) {
+        console.warn('Não consegui carregar contribuintes para detectar regime:', err);
+    }
+    return map;
+}
+
+// Monta o objeto MIT. Template difere por regime (códigos de débito, TributacaoLucro,
+// registro CRC); só período + valores PIS/COFINS variam por empresa.
+function buildMitJson(periodo, pis, cofins, regime) {
+    if (regime === 'presumido') {
+        // Template do Lucro Presumido (modelo 12290680-MIT). Sem RegimePisCofins.
+        return {
+            PeriodoApuracao: { MesApuracao: periodo.mes, AnoApuracao: periodo.ano },
+            DadosIniciais: {
+                SemMovimento: false,
+                QualificacaoPj: 1,
+                TributacaoLucro: 3,
+                VariacoesMonetarias: 2,
+                ResponsavelApuracao: { CpfResponsavel: "31580734391", EmailResponsavel: "" },
+                RegistroCrc: { UfRegistro: "CE", NumRegistro: "CE009551O2" },
+            },
+            Debitos: {
+                PisPasep: { ListaDebitos: [{ IdDebito: 1, CodigoDebito: "810902", ValorDebito: pis }] },
+                Cofins: { ListaDebitos: [{ IdDebito: 2, CodigoDebito: "217201", ValorDebito: cofins }] },
+            },
+        };
+    }
+    // Template do Lucro Real (MODELO.JSON).
     return {
         PeriodoApuracao: { MesApuracao: periodo.mes, AnoApuracao: periodo.ano },
         DadosIniciais: {
@@ -11486,7 +11596,8 @@ async function handlePisCofinsCalc() {
         ]);
         const rowsAnt = parsePisCofinsSheet(wbAnt);
         const rowsAtual = parsePisCofinsSheet(wbAtual);
-        const { resultados, semAnterior } = computePisCofins(rowsAnt, rowsAtual);
+        const regimeByCnpj8 = await buildRegimeByCnpj8();
+        const { resultados, semAnterior } = computePisCofins(rowsAnt, rowsAtual, regimeByCnpj8);
 
         pisCofinsState.resultados = resultados;
         pisCofinsState.periodo = periodo;
@@ -11501,7 +11612,9 @@ async function handlePisCofinsCalc() {
             if (genBtn) genBtn.disabled = false;
         }
 
-        let msg = `${resultados.length} empresa(s) calculada(s). Período MIT: ${String(periodo.mes).padStart(2, '0')}/${periodo.ano}.`;
+        const nPresumido = resultados.filter((r) => r.regime === 'presumido').length;
+        let msg = `${resultados.length} empresa(s) calculada(s) (filiais consolidadas por CNPJ). Período MIT: ${String(periodo.mes).padStart(2, '0')}/${periodo.ano}.`;
+        if (nPresumido) msg += ` ${nPresumido} no Lucro Presumido.`;
         if (semAnterior.length) msg += ` ${semAnterior.length} sem apuração anterior (ignorada(s)).`;
         if (status) status.innerHTML = `<span style="color:var(--color-success);">${escapeHtml(msg)}</span>`;
     } catch (err) {
@@ -11516,6 +11629,7 @@ function renderPisCofinsTable(container, resultados) {
         <tr>
             <td style="padding:0.4rem 0.6rem;">${escapeHtml(r.razao)}</td>
             <td style="padding:0.4rem 0.6rem;">${formatCNPJ(r.cnpj)}</td>
+            <td style="padding:0.4rem 0.6rem;">${r.regime === 'presumido' ? 'Presumido' : 'Real'}</td>
             <td style="padding:0.4rem 0.6rem; text-align:right;">${fmt(r.pis)}</td>
             <td style="padding:0.4rem 0.6rem; text-align:right;">${fmt(r.cofins)}</td>
             <td style="padding:0.4rem 0.6rem; text-align:right;">${fmt(r.multBase)}</td>
@@ -11528,6 +11642,7 @@ function renderPisCofinsTable(container, resultados) {
                     <tr style="border-bottom:2px solid var(--color-primary);">
                         <th style="padding:0.4rem 0.6rem; text-align:left;">Razão Social</th>
                         <th style="padding:0.4rem 0.6rem; text-align:left;">CNPJ</th>
+                        <th style="padding:0.4rem 0.6rem; text-align:left;">Regime</th>
                         <th style="padding:0.4rem 0.6rem; text-align:right;">PIS</th>
                         <th style="padding:0.4rem 0.6rem; text-align:right;">COFINS</th>
                         <th style="padding:0.4rem 0.6rem; text-align:right;">Multiplicador Base %</th>
@@ -11542,8 +11657,12 @@ function renderPisCofinsTable(container, resultados) {
 // Copia só os multiplicadores, um por linha, na ordem da tabela (colar na coluna G da planilha).
 async function handlePisCofinsCopyMultiplicadores() {
     if (!pisCofinsState.resultados.length) return;
+    // A planilha de controle (coluna de alíquota) guarda a FRAÇÃO (0,11 = 11%),
+    // não o percentual. Por isso divide por 100 antes de copiar.
+    // 8 casas decimais: a planilha recomputa COFINS = base * G * 7,6%; com menos
+    // precisão o G truncado diverge até R$22. Com 8 casas a divergência zera.
     const text = pisCofinsState.resultados
-        .map((r) => r.multBase.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+        .map((r) => (r.multBase / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 8 }))
         .join('\n');
     const status = document.getElementById('pis-cofins-status');
     try {
@@ -11566,7 +11685,10 @@ async function handlePisCofinsGenerateMit() {
     try {
         const zip = new JSZip();
         for (const r of pisCofinsState.resultados) {
-            const mit = buildMitJson(pisCofinsState.periodo, r.pis, r.cofins);
+            // Imposto negativo (empresa sem débito a recolher) vira 0 no MIT.
+            const pisMit = Math.max(0, r.pis);
+            const cofinsMit = Math.max(0, r.cofins);
+            const mit = buildMitJson(pisCofinsState.periodo, pisMit, cofinsMit, r.regime);
             zip.file(mitFilename(r.cnpj, pisCofinsState.periodo), JSON.stringify(mit));
         }
         const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
