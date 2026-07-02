@@ -5193,12 +5193,19 @@ function parseErrorLine(errorLine) {
     const hasNf1InText = /Espécie:\s*NF1/i.test(trimmed) ||
                          (trimmed.includes('NF1') && trimmed.includes('Espécie'));
     
-    const isNf1Error = hasAidfNotFound || 
+    // Documento duplicado ("já cadastrado" em Registro NFM): mesma ação do NF1 — apagar o
+    // bloco NFM inteiro. Trigger diferente, comportamento idêntico. Exige "Registro NFM"
+    // para não confundir com duplicidade de produto (Registro PRO), que NÃO apaga a nota.
+    const hasDocJaCadastrado = /[Dd]ocumento\s+j[áa]\s+cadastrad[oa]/i.test(trimmed) &&
+                               /[Rr]egistro\s+NFM/i.test(trimmed);
+
+    const isNf1Error = hasAidfNotFound ||
                        (hasNf1InText && trimmed.includes('AIDF')) ||
-                       (trimmed.includes('AIDF') && trimmed.includes('não encontrada para o documento'));
-    
+                       (trimmed.includes('AIDF') && trimmed.includes('não encontrada para o documento')) ||
+                       hasDocJaCadastrado;
+
     if (isNf1Error) {
-        console.log('✓ Erro de NF1 (AIDF não encontrada) detectado:', trimmed);
+        console.log('✓ Erro de NF1 (AIDF não encontrada / Documento já cadastrado) detectado:', trimmed);
         // Extrair informações do documento (opcional, para log)
         const docMatch = trimmed.match(/Estab\.:\s*(\d+).*Espécie:\s*(\w+).*Série:\s*(\d+).*Núm\.\/Form\.:\s*(\d+)/i);
         const documentInfo = docMatch ? {
@@ -7447,6 +7454,9 @@ function parseFortesReport(file) {
 // ficam fora deste passe — para esses, use o fluxo de instruções dedicado (botão sem relatório).
 function applyInstructionsLean(lines, text, summary) {
     const out = lines.slice();
+    const nf1Lines = []; // deleções de nota (NF1 / documento duplicado) — passe 2
+    // Passe 1: correções de campo in-place (não alteram a contagem de linhas, logo os
+    // números de linha das instruções seguintes continuam válidos).
     String(text || '').split('\n').forEach((instr) => {
         const t = instr.trim();
         if (!t || t.startsWith('//') || t.startsWith('#')) return;
@@ -7454,6 +7464,7 @@ function applyInstructionsLean(lines, text, summary) {
         if (!e || !e.lineNumber) return;
         const idx = e.lineNumber - 1;
         if (idx < 0 || idx >= out.length) return;
+        if (e.type === 'NF1') { nf1Lines.push(e.lineNumber); return; } // apaga bloco no passe 2
         const L = out[idx];
         let nl = L;
         switch (e.type) {
@@ -7469,6 +7480,25 @@ function applyInstructionsLean(lines, text, summary) {
         }
         if (nl !== L) { out[idx] = nl; summary.grupo2++; }
     });
+    // Passe 2: apaga o bloco NFM inteiro de cada nota duplicada. Ordem DECRESCENTE de linha
+    // para os índices anteriores não deslocarem ao remover. Bloco = do NFM na/antes da linha
+    // do erro até a próxima NFM ou TRA (exclusivo) — mesma convenção do resto do pipeline.
+    if (nf1Lines.length) {
+        nf1Lines.sort((a, b) => b - a);
+        nf1Lines.forEach((lineNumber) => {
+            let start = -1;
+            for (let i = Math.min(lineNumber - 1, out.length - 1); i >= 0; i--) {
+                if (out[i] && out[i].indexOf('NFM|') === 0) { start = i; break; }
+            }
+            if (start === -1) return;
+            let end = out.length;
+            for (let i = start + 1; i < out.length; i++) {
+                if (out[i] && (out[i].indexOf('NFM|') === 0 || out[i].indexOf('TRA|') === 0)) { end = i; break; }
+            }
+            out.splice(start, end - start);
+            summary.grupo2++;
+        });
+    }
     return out;
 }
 
@@ -7531,13 +7561,29 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             for (let k = i; k < j; k++) out.push(lines[k]);
             i = j; continue;
         }
+        // Ordem canônica da nota: NFM → PNM… → INM… → DNM (terminador, quando existe).
+        // O INM é o RESUMO por CFOP+CST — não é o fim da nota; a DNM é (quando presente).
+        // As INM são reconstruídas abaixo e precisam voltar NO LUGAR das INM originais,
+        // logo ANTES da DNM, nunca depois. Marcamos a posição do bloco INM original com um
+        // slot e preservamos o resto da nota exatamente na ordem em que veio.
         const body = [];
         let tpl = null;
+        let inmSlot = -1;
         for (let k = i + 1; k < j; k++) {
             const L = lines[k];
+            if (L.indexOf('INM|') === 0) {
+                if (!tpl) tpl = L.split('|');
+                if (inmSlot === -1) { inmSlot = body.length; body.push({ t: 'INM_SLOT' }); }
+                continue; // descarta INM originais; serão recriadas no slot (abaixo da última PNM)
+            }
             if (L.indexOf('PNM|') === 0) body.push({ t: 'PNM', f: L.split('|') });
-            else if (L.indexOf('INM|') === 0) { if (!tpl) tpl = L.split('|'); }
             else body.push({ t: 'O', raw: L });
+        }
+        // Nota sem INM original mas com terminador (ex.: DNM): insere o slot antes dele.
+        if (inmSlot === -1) {
+            let ins = body.length;
+            while (ins > 0 && body[ins - 1].t === 'O') ins--;
+            body.splice(ins, 0, { t: 'INM_SLOT' });
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
@@ -7621,8 +7667,12 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             return f.join('|');
         });
         out.push(nfm.join('|'));
-        body.forEach(b => out.push(b.t === 'PNM' ? b.f.join('|') : b.raw));
-        newInm.forEach(s => out.push(s));
+        // Emite na ordem original; no slot, expande as INM reconstruídas (ficam abaixo da
+        // última PNM e antes da DNM/terminador — a DNM segue sendo a última linha da nota).
+        body.forEach(b => {
+            if (b.t === 'INM_SLOT') { newInm.forEach(s => out.push(s)); }
+            else out.push(b.t === 'PNM' ? b.f.join('|') : b.raw);
+        });
         const gsum = groups.reduce((a, g) => a + g.c, 0);
         if (Math.abs(gsum - liqC) > 1) summary.recheck.push({ chave, esperado: liqC / 100, obtido: gsum / 100 });
         summary.notasCorrigidas++;
@@ -7632,6 +7682,38 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
 }
 
 // Orquestra o pipeline completo. Puro (sem DOM) — testável isoladamente.
+// Garantia final de ordem dentro de cada nota. Ordem canônica do Fortes:
+//   NFM (cabeçalho) → PNM… (produtos) → INM… (resumo CFOP+CST) → SNM… (resumo) → DNM (fim).
+// Reordena qualquer nota fora dessa ordem — seja por fonte malformada, seja por etapa
+// anterior do pipeline — SEM alterar a ordem relativa dentro de cada tipo (estável) e sem
+// tocar linhas fora de bloco NFM (cabeçalho do arquivo, TRA). Não adiciona nem remove
+// linhas. Idempotente: nota já correta sai idêntica. É a checagem de ordem "sempre".
+function normalizeNoteOrder(lines) {
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+        const ln = lines[i];
+        if (ln.indexOf('NFM|') !== 0) { out.push(ln); i++; continue; }
+        let j = i + 1;
+        while (j < lines.length && lines[j].indexOf('NFM|') !== 0 && lines[j].indexOf('TRA|') !== 0) j++;
+        const rest = [], inm = [], snm = [], dnm = [];
+        for (let k = i + 1; k < j; k++) {
+            const L = lines[k];
+            if (L.indexOf('INM|') === 0) inm.push(L);
+            else if (L.indexOf('SNM|') === 0) snm.push(L);
+            else if (L.indexOf('DNM|') === 0) dnm.push(L);
+            else rest.push(L); // PNM e demais mantêm posição relativa
+        }
+        out.push(ln);
+        rest.forEach(L => out.push(L));
+        inm.forEach(L => out.push(L));
+        snm.forEach(L => out.push(L));
+        dnm.forEach(L => out.push(L));
+        i = j;
+    }
+    return out;
+}
+
 function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const parsed = parseFortesFile(fsText);
     let lines = parsed.lines.slice();
@@ -7639,6 +7721,7 @@ function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
     lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary);
+    lines = normalizeNoteOrder(lines); // garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
     return { text: lines.join('\n'), summary };
 }
