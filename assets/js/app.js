@@ -7699,6 +7699,10 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         nfm[35] = fsNum2(liqC / 100); // campo 36 = LÍQUIDO (era o total do documento)
         const lq = fsNum2(liqC / 100);
         nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
+        // idx68 (valor contábil pós-chave) = líquido = total − despesas. Se ficar com o total
+        // cheio, o Fortes acusa "soma do INM difere da soma do valor líquido do PNM" (a
+        // diferença é exatamente a despesa). Escrever o líquido aqui elimina o mismatch.
+        if (nfm.length > 68) nfm[68] = lq;
         const groups = []; const gm = new Map();
         pnms.forEach(b => {
             const cf = (b.f[2] || '').replace(/\D/g, ''), cs = b.f[5] || '';
