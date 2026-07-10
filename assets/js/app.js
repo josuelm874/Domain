@@ -7696,23 +7696,26 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
         });
         // idx28 (outras despesas) é PRESERVADO — agora é fonte de cálculo, não destino.
-        nfm[35] = fsNum2(liqC / 100); // campo 36 = LÍQUIDO (era o total do documento)
-        const lq = fsNum2(liqC / 100);
-        nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
-        // idx68 (valor contábil pós-chave) = líquido = total − despesas. Se ficar com o total
-        // cheio, o Fortes acusa "soma do INM difere da soma do valor líquido do PNM" (a
-        // diferença é exatamente a despesa). Escrever o líquido aqui elimina o mismatch.
-        if (nfm.length > 68) nfm[68] = lq;
+        // INM e NFM-líquido devem bater com a soma do valor LÍQUIDO do PNM (idx43) — é o que o
+        // Fortes valida ("soma do CFOP do INM difere da soma do valor líquido do PNM"). Somar
+        // idx8 (bruto) quebra quando a nota tem idx61 (acréscimo) ou desoneração (idx42), pois
+        // aí idx43 = bruto + idx61 − idx42 ≠ idx8. Reconstruímos tudo a partir de idx43. Quando
+        // idx61/idx42 são 0 (caso comum), Σ idx43 = Σ bruto = liqC → saída idêntica, sem regressão.
         const groups = []; const gm = new Map();
+        let liqRealC = 0; // Σ idx43 = valor líquido real da nota (= Σ INM = NFM-líquido)
         pnms.forEach(b => {
             const cf = (b.f[2] || '').replace(/\D/g, ''), cs = b.f[5] || '';
             const key = cf + '|' + cs;
             let g = gm.get(key);
             if (!g) { g = { cf, cs, c: 0 }; gm.set(key, g); groups.push(g); }
-            // INM = Σ bruto do grupo (SÓ idx8, sem idx61 nem desoneração). Como Σ bruto = líquido
-            // por construção (distribuição acima), Σ INM = líquido = nfm[35].
-            g.c += Math.round((parseFortesNumber(b.f[8]) || 0) * 100);
+            const liq43 = Math.round((parseFortesNumber(b.f[43]) || 0) * 100);
+            g.c += liq43; liqRealC += liq43;
         });
+        // NFM-líquido = Σ idx43 (casa com Σ INM). idx68 (valor contábil pós-chave) idem: se
+        // divergir do líquido do PNM, o Fortes acusa o mesmo mismatch INM×PNM.
+        const lq = fsNum2(liqRealC / 100);
+        nfm[35] = lq; nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
+        if (nfm.length > 68) nfm[68] = lq;
         const tplArr = tpl || ['INM', '0.00', 'CE', '', '', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '', '', '', '', '0', '', '', '', '', '', '', 'N', ''];
         const newInm = groups.map(g => {
             const f = tplArr.slice();
@@ -7728,8 +7731,9 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             if (b.t === 'INM_SLOT') { newInm.forEach(s => out.push(s)); }
             else out.push(b.t === 'PNM' ? b.f.join('|') : b.raw);
         });
-        const gsum = groups.reduce((a, g) => a + g.c, 0);
-        if (Math.abs(gsum - liqC) > 1) summary.recheck.push({ chave, esperado: liqC / 100, obtido: gsum / 100 });
+        // Checagem: a distribuição do bruto (idx8) tem de somar liqC (invariante da etapa acima).
+        const bsum = pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[8]) || 0) * 100), 0);
+        if (Math.abs(bsum - liqC) > 1) summary.recheck.push({ chave, esperado: liqC / 100, obtido: bsum / 100 });
         summary.notasCorrigidas++;
         i = j;
     }
