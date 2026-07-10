@@ -2449,14 +2449,106 @@ let icmsModeloExcelJS = null; // Workbook do ExcelJS para preservar formataçõe
 let icmsModeloBuffer = null;      // ArrayBuffer cru do modelo (recarregado por empresa)
 let icmsModeloSelecionado = null; // chave do ICMS_MODELOS atualmente carregado
 
-// Modelos de retenção ICMS ST. Apenas 'mercadinho' tem a regra de classificação
-// (CST/CSOSN → aba) implementada. Os demais podem ser selecionados na UI, mas exibem
-// aviso de pendência de configuração e não processam até o contador fornecer as regras.
+// Modelos de retenção ICMS ST. Todos têm regra de classificação (CST/CSOSN/NCM → aba)
+// definida em ICMS_MODELO_REGRAS. Os nomes de aba nas regras batem BYTE A BYTE com as
+// abas dos respectivos .xlsx (inclusive acentos e espaços, ex.: "4,53 % Normal").
 const ICMS_MODELOS = {
     mercadinho: { nome: 'Mercadinho', path: 'assets/js/ICMS ST - Mercadinho.xlsx', funcional: true },
-    deposito: { nome: 'Depósito', path: 'assets/js/ICMS ST - Deposito.xlsx', funcional: false },
-    deposito_regime_especial: { nome: 'Depósito Regime Especial', path: 'assets/js/ICMS ST - Deposito Regime Especial.xlsx', funcional: false },
-    frigorifico: { nome: 'Frigorífico', path: 'assets/js/ICMS ST - Frigorifico.xlsx', funcional: false },
+    deposito: { nome: 'Depósito', path: 'assets/js/ICMS ST - Deposito.xlsx', funcional: true },
+    deposito_regime_especial: { nome: 'Depósito Regime Especial', path: 'assets/js/ICMS ST - Deposito Regime Especial.xlsx', funcional: true },
+    frigorifico: { nome: 'Frigorífico', path: 'assets/js/ICMS ST - Frigorifico.xlsx', funcional: true },
+};
+
+// ── Regras de classificação por modelo de retenção ICMS ST ──────────────────────
+// Filtro base comum: UF do fornecedor = "23"; CFOP em ICMS_CFOP_PADRAO. CST vem do XML
+// com 2 dígitos ("00","20"); CSOSN com 3 ("101","102"). NCM casa por PREFIXO (startsWith),
+// mesmo critério do DIRBI (matchDirbiRow).
+const ICMS_UF_VALIDO = "23";
+const ICMS_CFOP_PADRAO = new Set(["5101", "5102", "5103", "5105", "5910"]);
+
+// NCMs (prefixos) das abas de Cesta Básica — comuns a Depósito e Depósito Regime Especial.
+const ICMS_NCM_CESTA = ["251910", "69051000", "69041000", "69081000"];
+// Regime Especial: NCMs que geram crédito de origem por agregação.
+const ICMS_NCM_CREDITO35 = ["2707", "2710", "2713", "2714", "2821", "3206", "3208", "3209", "3210", "3214", "3404", "3506", "3814", "3824", "3905", "3907", "3909", "3910", "6807", "320417", "340520", "340530", "340590", "27060000", "27150000"];
+const ICMS_NCM_CREDITO30 = ["6811", "3925", "2522", "380510"];
+// Exclusão do "4,53 % Normal": crédito35 ∪ crédito30 ∪ extras. Os extras 3204/3212/32050000
+// NÃO aparecem em nenhuma aba de crédito — saem de propósito (confirmado pelo contador).
+const ICMS_NCM_EXCLUI_453 = [...ICMS_NCM_CREDITO35, ...ICMS_NCM_CREDITO30, "3204", "3212", "32050000"];
+
+function ncmComecaCom(ncm, prefixos) {
+    if (!ncm) return false;
+    for (const p of prefixos) if (ncm.startsWith(p)) return true;
+    return false;
+}
+
+// Cada classificar(p) recebe { uf, cfop, cst, csosn, ncm } e devolve a lista de abas
+// (nomes exatos do .xlsx) em que o produto entra. Pode ser mais de uma aba por produto.
+const ICMS_MODELO_REGRAS = {
+    mercadinho: {
+        abas: ["Aliquota 1,54%", "Aliquota 4%", "Aliquota 7%"],
+        classificar(p) {
+            if (p.uf !== ICMS_UF_VALIDO || !ICMS_CFOP_PADRAO.has(p.cfop)) return [];
+            const out = [];
+            if (p.cst === "20") out.push("Aliquota 1,54%");
+            if (p.cst === "00") out.push("Aliquota 4%");
+            if (p.csosn === "101" || p.csosn === "102") out.push("Aliquota 7%");
+            return out;
+        },
+    },
+    frigorifico: {
+        abas: ["Aliquota 1,54%", "Aliquota 1,54% FRI", "Aliquota 4%", "Aliquota 7%", "Aliquota 7% FRI"],
+        classificar(p) {
+            if (p.uf !== ICMS_UF_VALIDO || !ICMS_CFOP_PADRAO.has(p.cfop)) return [];
+            const out = [];
+            if (p.cst === "20") out.push("Aliquota 1,54%");
+            if (p.cst === "00") out.push("Aliquota 4%");
+            if (p.csosn === "101" || p.csosn === "102") out.push("Aliquota 7%");
+            // Abas FRI: mesmas notas UF+CFOP, SEM filtro de CST/CSOSN. A seleção dos
+            // produtos de carne a manter é manual (feita pelo contador na planilha).
+            out.push("Aliquota 1,54% FRI");
+            out.push("Aliquota 7% FRI");
+            return out;
+        },
+    },
+    deposito: {
+        abas: ["2,96% Cesta Basica Normal", "5,96% Cesta Basica Simples", "7,70% Normal", "10,70% Simples"],
+        classificar(p) {
+            const out = [];
+            // Cestas: UF + NCM (SEM CFOP). Normal e Simples recebem conteúdo idêntico;
+            // a separação por distribuidora é manual.
+            if (p.uf === ICMS_UF_VALIDO && ncmComecaCom(p.ncm, ICMS_NCM_CESTA)) {
+                out.push("2,96% Cesta Basica Normal");
+                out.push("5,96% Cesta Basica Simples");
+            }
+            if (p.uf === ICMS_UF_VALIDO && ICMS_CFOP_PADRAO.has(p.cfop)) {
+                if (p.cst === "00") out.push("7,70% Normal");
+                if (p.csosn === "101" || p.csosn === "102") out.push("10,70% Simples");
+            }
+            return out;
+        },
+    },
+    deposito_regime_especial: {
+        abas: ["2,19% Cesta Basica Normal", "5,19% Cesta Basica Simples", "4,53 % Normal", "Crédito ICMS Origem (Agr. 35%)", "Crédito ICMS Origem (Agr. 30%)", "7,53% Simples"],
+        classificar(p) {
+            const out = [];
+            // Cestas: UF + NCM (SEM CFOP), idênticas entre si (separação manual).
+            if (p.uf === ICMS_UF_VALIDO && ncmComecaCom(p.ncm, ICMS_NCM_CESTA)) {
+                out.push("2,19% Cesta Basica Normal");
+                out.push("5,19% Cesta Basica Simples");
+            }
+            if (p.uf === ICMS_UF_VALIDO && ICMS_CFOP_PADRAO.has(p.cfop)) {
+                if (p.cst === "00") {
+                    // 4,53%: todos os CST 00 EXCETO os NCM da lista de exclusão.
+                    if (!ncmComecaCom(p.ncm, ICMS_NCM_EXCLUI_453)) out.push("4,53 % Normal");
+                    // Créditos de origem: NCM na respectiva lista.
+                    if (ncmComecaCom(p.ncm, ICMS_NCM_CREDITO35)) out.push("Crédito ICMS Origem (Agr. 35%)");
+                    if (ncmComecaCom(p.ncm, ICMS_NCM_CREDITO30)) out.push("Crédito ICMS Origem (Agr. 30%)");
+                }
+                if (p.csosn === "101" || p.csosn === "102") out.push("7,53% Simples");
+            }
+            return out;
+        },
+    },
 };
 
 // ==================== SISTEMA DE SINCRONIZAÇÃO COMPARTILHADA ====================
@@ -2869,6 +2961,9 @@ async function processIcmsXmls() {
     if (!xmls.length) throw new Error('Nenhum XML encontrado (avulso ou dentro de .zip).');
 
     if (statusText) statusText.textContent = 'Extraindo dados dos XMLs...';
+    // Regras do modelo selecionado (abas de saída + classificação).
+    const regrasModelo = ICMS_MODELO_REGRAS[icmsModeloSelecionado] || ICMS_MODELO_REGRAS.mercadinho;
+
     // Agrupa por CNPJ do destinatário. cnpj -> { produtosPorGrupo, periodos[], razoes[] }
     const empresas = {};
     for (let i = 0; i < xmls.length; i++) {
@@ -2878,7 +2973,7 @@ async function processIcmsXmls() {
 
         const cnpj = (dados && dados.cnpj) ? dados.cnpj : 'sem-cnpj';
         const emp = empresas[cnpj] || (empresas[cnpj] = {
-            produtosPorGrupo: { "Aliquota 1,54%": [], "Aliquota 4%": [], "Aliquota 7%": [] },
+            produtosPorGrupo: Object.fromEntries(regrasModelo.abas.map((a) => [a, []])),
             periodos: [], razoes: [],
         });
         if (dados.periodo) emp.periodos.push(dados.periodo);
@@ -3571,6 +3666,8 @@ function extrairDadosFiltrados(xmlText) {
             console.log(`✓ XML processado - CNPJ: ${cnpj}, Período: ${periodo}, Razão Social: ${razaoSocial.substring(0, 50)}`);
         }
 
+        // Modelo selecionado decide abas + classificação (ver ICMS_MODELO_REGRAS).
+        const regras = ICMS_MODELO_REGRAS[icmsModeloSelecionado] || ICMS_MODELO_REGRAS.mercadinho;
         const todosProdutos = [];
 
         const dets = findAllWithNS(infNFe, 'det');
@@ -3650,71 +3747,25 @@ function extrairDadosFiltrados(xmlText) {
                 }
             }
 
-            // FILTROS baseados no código Python
-            const UF_VALIDO = "23";
-            const CFOP_VALIDOS = new Set(["5101", "5102", "5103", "5105", "5910"]);
-            
-            // Aplicar filtros de UF e CFOP (igual ao código Python)
-            if (uf !== UF_VALIDO || !CFOP_VALIDOS.has(cfop)) {
-                continue; // Pular produtos que não passam nos filtros
-            }
-            
-            // Criar linha do produto. Ordem casa com as colunas D:P do modelo:
+            // Classificação por modelo. classificar() recebe o produto e devolve as abas
+            // (nomes exatos do .xlsx) em que ele entra — pode ser mais de uma (aba FRI +
+            // alíquota, ou as duas cestas). O filtro UF/CFOP vive dentro de classificar(),
+            // pois as abas de cesta básica filtram por NCM sem exigir CFOP.
+            // Ordem da linha casa com as colunas D:P do modelo:
             // D Chave | E UF | F Nº NF-e | G Fornecedor | H CNPJ | I Produto | J NCM |
             // K CFOP | L CST | M FRETE | N DESPESAS | O IPI | P Vl. Produto
             const linha = [chave, uf, numeroNf, fornecedor, cnpjFornecedor, xprod, ncm, cfop, cst || csosn, vFrete, vOutro, vIpi, vprod];
-            
-            // Agrupar produtos conforme GRUPOS do código Python
-            // GRUPOS = {
-            //     "1,54%.txt": {"cst": {"20"}, "csosn": set()},
-            //     "4%.txt": {"cst": {"00"}, "csosn": set()},
-            //     "7%.txt": {"cst": set(), "csosn": {"101", "102"}},
-            // }
-            
-            // Verificar se o produto se encaixa em algum grupo
-            let produtoAdicionado = false;
-            
-            // Grupo 1,54%: CST 20
-            if (cst === "20") {
-                todosProdutos.push({ grupo: "Aliquota 1,54%", linha: linha });
-                produtoAdicionado = true;
-            }
-            
-            // Grupo 4%: CST 00
-            if (cst === "00") {
-                todosProdutos.push({ grupo: "Aliquota 4%", linha: linha });
-                produtoAdicionado = true;
-            }
-            
-            // Grupo 7%: CSOSN 101 ou 102
-            if (csosn === "101" || csosn === "102") {
-                todosProdutos.push({ grupo: "Aliquota 7%", linha: linha });
-                produtoAdicionado = true;
-            }
-            
-            // Debug: log do primeiro produto
-            if (todosProdutos.length === 1) {
-                console.log('Primeiro produto extraído:', linha, 'Grupo:', todosProdutos[0].grupo);
+            for (const aba of regras.classificar({ uf, cfop, cst, csosn, ncm })) {
+                todosProdutos.push({ grupo: aba, linha });
             }
         }
-        
-        // Agrupar produtos por grupo para retornar
-        const produtosPorGrupo = {
-            "Aliquota 1,54%": [],
-            "Aliquota 4%": [],
-            "Aliquota 7%": []
-        };
-        
-        todosProdutos.forEach(item => {
-            if (produtosPorGrupo[item.grupo]) {
-                produtosPorGrupo[item.grupo].push(item.linha);
-            }
+
+        // Agrupar por aba conforme o modelo selecionado.
+        const produtosPorGrupo = {};
+        for (const aba of regras.abas) produtosPorGrupo[aba] = [];
+        todosProdutos.forEach((item) => {
+            if (produtosPorGrupo[item.grupo]) produtosPorGrupo[item.grupo].push(item.linha);
         });
-        
-        console.log(`Total de produtos extraídos deste XML: ${todosProdutos.length}`);
-        console.log(`  - Aliquota 1,54%: ${produtosPorGrupo["Aliquota 1,54%"].length}`);
-        console.log(`  - Aliquota 4%: ${produtosPorGrupo["Aliquota 4%"].length}`);
-        console.log(`  - Aliquota 7%: ${produtosPorGrupo["Aliquota 7%"].length}`);
 
         return { cnpj, periodo, razaoSocial, resultados: produtosPorGrupo };
     } catch (error) {
