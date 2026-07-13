@@ -33,17 +33,22 @@ if (missing.length) {
     process.exit(1);
 }
 
+// Tolera valores colados COM aspas do config.js (ex.: 'https://...') ou com espaço/newline:
+// tira 1 par de aspas nas pontas (se ambas casam) + trim. Sem isso, createClient do Supabase
+// rejeita a URL ("Invalid supabaseUrl") quando o valor foi copiado junto com as aspas.
+const clean = (v) => (v == null ? '' : String(v).trim().replace(/^(['"])([\s\S]*)\1$/, '$2').trim());
+
 // JSON.stringify escapa cada valor como string-literal JS válida (evita quebra/injeção).
 const cfg = `// GERADO no build do Vercel por scripts/gen-config.js — não editar à mão.
 window.APP_CONFIG = {
-    passwordSalt: ${JSON.stringify(process.env.APP_PASSWORD_SALT)},
-    adminPasswordHash: ${JSON.stringify(process.env.APP_ADMIN_PASSWORD_HASH)},
-    icmsApiUrl: ${JSON.stringify(process.env.ICMS_API_URL || 'https://softtech-icms-api.onrender.com/api/icms')},
+    passwordSalt: ${JSON.stringify(clean(process.env.APP_PASSWORD_SALT))},
+    adminPasswordHash: ${JSON.stringify(clean(process.env.APP_ADMIN_PASSWORD_HASH))},
+    icmsApiUrl: ${JSON.stringify(clean(process.env.ICMS_API_URL) || 'https://softtech-icms-api.onrender.com/api/icms')},
 };
 window.SUPABASE_CONFIG = {
-    url: ${JSON.stringify(process.env.SUPABASE_URL)},
-    publishableKey: ${JSON.stringify(process.env.SUPABASE_PUBLISHABLE_KEY)},
-    anonKey: ${JSON.stringify(process.env.SUPABASE_ANON_KEY || '')},
+    url: ${JSON.stringify(clean(process.env.SUPABASE_URL))},
+    publishableKey: ${JSON.stringify(clean(process.env.SUPABASE_PUBLISHABLE_KEY))},
+    anonKey: ${JSON.stringify(clean(process.env.SUPABASE_ANON_KEY))},
 };
 `;
 
