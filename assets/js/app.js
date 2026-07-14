@@ -7680,19 +7680,20 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const nb = targets[x];
             const s = fsNum2(nb / 100);
             b.f[8] = s; b.f[38] = s; b.f[39] = s;
-            const dc = Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
-            const dnc = Math.round((parseFortesNumber(b.f[42]) || 0) * 100); // desoneração (idx42), não muda
-            b.f[43] = fsNum2((nb + dc - dnc) / 100);
+            // idx43 (valor líquido do produto) = bruto ajustado + despesa (idx9). O acréscimo
+            // (idx61) e o desconto (idx42) NÃO entram no valor contábil — só são informados.
+            // Confirmado 2026-07-14 cruzando relatório SIGA × arquivo em 105/105 notas: o correto
+            // é produtos + despesas; idx61/idx42 corrompiam o líquido (idx43→idx68) lido no contábil.
+            const desp9 = Math.round((parseFortesNumber(b.f[9]) || 0) * 100);
+            b.f[43] = fsNum2((nb + desp9) / 100);
             const cf = (b.f[2] || '').replace(/\D/g, '');
             const cad = cadastro[cf];
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
         });
-        // idx28 (outras despesas) é PRESERVADO — agora é fonte de cálculo, não destino.
-        // INM e NFM-líquido devem bater com a soma do valor LÍQUIDO do PNM (idx43) — é o que o
-        // Fortes valida ("soma do CFOP do INM difere da soma do valor líquido do PNM"). Somar
-        // idx8 (bruto) quebra quando a nota tem idx61 (acréscimo) ou desoneração (idx42), pois
-        // aí idx43 = bruto + idx61 − idx42 ≠ idx8. Reconstruímos tudo a partir de idx43. Quando
-        // idx61/idx42 são 0 (caso comum), Σ idx43 = Σ bruto = liqC → saída idêntica, sem regressão.
+        // INM e NFM-líquido são reconstruídos da soma do valor LÍQUIDO do PNM (idx43) — é o que o
+        // Fortes valida ("soma do CFOP do INM difere da soma do valor líquido do PNM"). Como
+        // idx43 = bruto ajustado + despesa (idx9), Σ idx43 = liqC + Σdespesa = totC (o relatório).
+        // Assim INM, idx68 e idx51 batem o valor contábil correto (produtos + despesas).
         const groups = []; const gm = new Map();
         let liqRealC = 0; // Σ idx43 = valor líquido real da nota (= Σ INM = NFM-líquido)
         pnms.forEach(b => {
