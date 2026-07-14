@@ -7638,29 +7638,21 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
-        // Despesa = campos do NFM ORIGINAL para TODA nota (mono ou multi-CFOP):
-        // frete(26)+seguro(27)+outras(28)+IPI(31)+ST(32)+serviços(33) − desconto(34). ICMS
-        // importação (29/30) não entra. Cada campo em centavos antes de somar (evita erro de
-        // ponto flutuante). Desconto entra NEGATIVO → aumenta o líquido (relatório 300 +
-        // desconto 50 → líquido 350: o Fortes abate o desconto na entrada).
-        // COMPROVADO PELO RELATÓRIO REAL (A & R, 2026-06-18): em 63/63 notas multi-CFOP com
-        // gabarito, despesa = relatório − Σbruto = despNFM. A hipótese Σidx61 batia em só 42/63
-        // (perdia IPI/ST/desconto reais; idx61 é 0,00 no arquivo). Logo multi-CFOP NÃO muda a
-        // despesa — usa a mesma fonte do mono.
-        // Única especialização multi-CFOP: o produto 1910 (bonificação/doação) recebe VALOR
-        // CHEIO — seu bruto original fica FORA do rateio do líquido; só os demais distribuem o
-        // restante. (Não validável pelo relatório, que só dá o total da nota; testar no Fortes.)
+        // Despesa da nota = Σ do campo DESPESAS das PNM (idx9). O NFM apenas TOTALIZA essa soma;
+        // os campos de despesa do NFM (26/27/28/31/32/33) são 0 na origem. MUDANÇA 2026-07-14:
+        // antes a despesa vinha desses campos do NFM (validado A&R 63 notas, 2026-06-18). A troca
+        // pra PNM idx9 corrige notas cujo NFM não totalizava as despesas (doc total saía sem elas).
+        // Reavaliar A&R: se lá a despesa vinha só do NFM (PNM idx9 = 0), reintroduzir fallback.
         const cNfm = (idx) => Math.round((parseFortesNumber(nfm[idx]) || 0) * 100);
         const cfopOf = (b) => (b.f[2] || '').replace(/\D/g, '');
         const cfopsSet = new Set(pnms.map(cfopOf));
         const isMulti = cfopsSet.size >= 2;
         const fixo = pnms.map(b => isMulti && cfopOf(b) === '1910'); // 1910 multi-CFOP = valor cheio
         // Nota SÓ-1910 (bonificação/doação pura): sem despesa — valor cheio = total do relatório.
-        // Zera TODOS os campos de despesa do NFM (frete/seguro/outras/IPI/ST/serviços/desconto)
-        // e despC=0, de modo que líquido = total = relatório (decisão do Josué, 2026-06-18).
+        // Zera os campos de despesa do NFM e despC=0 → líquido = total = relatório.
         const so1910 = cfopsSet.size === 1 && cfopsSet.has('1910');
         if (so1910) { [26, 27, 28, 31, 32, 33, 34].forEach(ix => { nfm[ix] = '0.00'; }); }
-        const despC = so1910 ? 0 : (cNfm(26) + cNfm(27) + cNfm(28) + cNfm(31) + cNfm(32) + cNfm(33) - cNfm(34));
+        const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
@@ -7773,14 +7765,50 @@ function normalizeNoteOrder(lines) {
     return out;
 }
 
+// Reparo dos totalizadores do NFM a partir das PNM da mesma nota (modelo confirmado 2026-07-14):
+//   NFM idx25 (VALOR TOTAL DOS PRODUTOS) = Σ PNM idx8
+//   NFM idx34 (DESCONTO/DESPESAS TOTAL)  = Σ PNM idx9
+//   NFM idx35 (VALOR TOTAL DO DOCUMENTO) = idx25 + idx34   (produtos + despesas)
+// Corrige notas cujo NFM não totalizava as despesas (o contábil lia o doc total sem elas).
+// Pura e idempotente: nota já correta sai idêntica. Roda ANTES e DEPOIS do ajuste de valores.
+function repairNfmTotals(lines) {
+    const out = lines.slice();
+    const cNum = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
+    let i = 0;
+    while (i < out.length) {
+        if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
+        let j = i + 1;
+        while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
+        let prodC = 0, despC = 0, temPnm = false;
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('PNM|') !== 0) continue;
+            const f = out[k].split('|');
+            prodC += cNum(f[8]); // idx8 = valor total do produto
+            despC += cNum(f[9]); // idx9 = despesas do produto
+            temPnm = true;
+        }
+        const nfm = out[i].split('|');
+        if (temPnm && nfm.length > 35) {
+            nfm[25] = fsNum2(prodC / 100);
+            nfm[34] = fsNum2(despC / 100);
+            nfm[35] = fsNum2((prodC + despC) / 100);
+            out[i] = nfm.join('|');
+        }
+        i = j;
+    }
+    return out;
+}
+
 function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const parsed = parseFortesFile(fsText);
     let lines = parsed.lines.slice();
     const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [], brutoInviavel: [] };
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
-    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary);
-    lines = normalizeNoteOrder(lines); // garante NFM→PNM→INM→SNM→DNM em TODA nota
+    lines = repairNfmTotals(lines); // passo 1: NFM totaliza produtos + despesas das PNM
+    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary); // passo 2: bate doc total c/ relatório
+    lines = repairNfmTotals(lines); // passo 3: re-totaliza pós-ajuste (doc total volta a bater PNM)
+    lines = normalizeNoteOrder(lines); // passo 4: garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
     return { text: lines.join('\n'), summary };
 }
