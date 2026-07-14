@@ -7680,22 +7680,26 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const nb = targets[x];
             const s = fsNum2(nb / 100);
             b.f[8] = s; b.f[38] = s; b.f[39] = s;
-            // idx43 (campo 44) = Valor Bruto + Frete/Seguro/Outras (idx61) − Desconto/ICMS
-            // Desonerado (idx42). O Fortes VALIDA essa fórmula ("Campo Valor Total difere... Campo
-            // 44"), então desconto/desoneração TÊM de entrar aqui. O valor contábil correto
-            // (produtos + despesas, sem desconto) vive nos totalizadores do NFM (idx35), não no
-            // idx43 — ver repairNfmTotals.
-            const dc = Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
-            const dnc = Math.round((parseFortesNumber(b.f[42]) || 0) * 100);
-            b.f[43] = fsNum2((nb + dc - dnc) / 100);
+            // Campo 44 (idx43) = Valor Bruto + Frete/Seguro/Outras (idx61) − Desconto/ICMS
+            // Desonerado (idx42) — o Fortes VALIDA essa fórmula. Mas o SIGA lança a nota pela INM
+            // (= Σ idx43), então pra entrar batendo o relatório (produtos + despesas) o idx43 tem
+            // de somar produtos+despesas. Solução que mantém a fórmula do campo 44 válida: mover a
+            // despesa (idx9) para o campo aditivo (idx61) e ZERAR o desconto (idx42). Assim
+            // idx43 = bruto + despesa, campo 44 = bruto + idx61(despesa) − idx42(0) = idx43 ✓, e
+            // INM = Σ idx43 = produtos + despesas = relatório. O desconto/acréscimo originais eram
+            // só informados e não devem reduzir/inflar o valor lançado (confirmado 2026-07-14).
+            const desp9 = Math.round((parseFortesNumber(b.f[9]) || 0) * 100);
+            b.f[61] = fsNum2(desp9 / 100);
+            b.f[42] = '0.00';
+            b.f[43] = fsNum2((nb + desp9) / 100);
             const cf = (b.f[2] || '').replace(/\D/g, '');
             const cad = cadastro[cf];
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
         });
-        // INM e NFM-líquido são reconstruídos da soma do valor LÍQUIDO do PNM (idx43) — é o que o
-        // Fortes valida ("soma do CFOP do INM difere da soma do valor líquido do PNM"). idx43 é o
-        // líquido pela fórmula do campo 44 (bruto + idx61 − idx42); Σ idx43 = líquido da nota.
-        // O valor contábil correto (produtos + despesas) fica no idx35 via repairNfmTotals.
+        // INM e NFM-líquido = soma do valor do PNM (idx43) — é o que o Fortes valida ("soma do CFOP
+        // do INM difere da soma do valor líquido do PNM") e é por onde o SIGA lança a nota. Como
+        // idx43 agora = bruto + despesa (desconto zerado, despesa movida p/ idx61), Σ idx43 =
+        // produtos + despesas = relatório. Assim INM e idx68 já entram no SIGA com o valor certo.
         const groups = []; const gm = new Map();
         let liqRealC = 0; // Σ idx43 = valor líquido real da nota (= Σ INM = NFM-líquido)
         pnms.forEach(b => {
