@@ -7828,6 +7828,17 @@ function repairNfmTotals(lines) {
     return out;
 }
 
+// Limpeza (só visão, NÃO altera cálculo): o ERP de origem preenche dois campos-lixo no fim
+// das linhas PNM (ex.: "...|1.1858|9|||||N|" — uma alíquota e um código), que QUEBRAM a
+// importação no Fortes/SIGA. Apaga apenas esses dois campos, deixando a cauda "...|||||||N|".
+// Ancorado no FIM da linha (independe da contagem de campos) e idempotente: se já estiverem
+// vazios, sai idêntico. Só toca linhas PNM cuja cauda case o padrão exato (dois valores + 4
+// campos vazios + "N"); qualquer outra fica intacta. Nenhum campo de cálculo é tocado.
+function blankPnmTailJunk(lines) {
+    const re = /\|[^|]*\|[^|]*(\|\|\|\|\|N\|?)$/;
+    return lines.map(L => (L.indexOf('PNM|') === 0 ? L.replace(re, '||$1') : L));
+}
+
 function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const parsed = parseFortesFile(fsText);
     let lines = parsed.lines.slice();
@@ -7839,6 +7850,7 @@ function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     lines = repairNfmTotals(lines); // passo 3: re-totaliza pós-ajuste (doc total volta a bater PNM)
     lines = normalizeNoteOrder(lines); // passo 4: garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
+    lines = blankPnmTailJunk(lines); // passo 5: apaga campos-lixo no fim das PNM (só visão)
     return { text: lines.join('\n'), summary };
 }
 
