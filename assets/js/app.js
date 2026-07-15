@@ -7453,10 +7453,20 @@ function _fortesRowsToReportMap(rows) {
     if (!rows || !rows.length) return map;
     let hIdx = -1, iCh = -1, iVal = -1;
     const lim = Math.min(rows.length, 25);
+    // Seleção da coluna de VALOR: o relatório de reconciliação tem DUAS colunas "valor"
+    // ("Valor do Fortes" = valor atual/errado, "Valor do SIGA" = valor correto/alvo). A
+    // autoridade é o SIGA. Preferimos a coluna cujo header cite "siga"/"correto"; senão a
+    // primeira "valor" que NÃO seja "fortes"; por fim qualquer "valor" (CSV SIGA de 1 coluna).
+    const pickValor = (cells) => {
+        let v = cells.findIndex(c => c.includes('valor') && (c.includes('siga') || c.includes('correto')));
+        if (v === -1) v = cells.findIndex(c => c.includes('valor') && !c.includes('fortes'));
+        if (v === -1) v = cells.findIndex(c => c.includes('valor'));
+        return v;
+    };
     for (let h = 0; h < lim; h++) {
         const cells = (rows[h] || []).map(c => String(c == null ? '' : c).toLowerCase());
         const ic = cells.findIndex(c => c.includes('chave'));
-        const iv = cells.findIndex(c => c.includes('valor'));
+        const iv = pickValor(cells);
         if (ic !== -1 && iv !== -1) { hIdx = h; iCh = ic; iVal = iv; break; }
     }
     if (hIdx === -1) return map;
@@ -7681,17 +7691,16 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const s = fsNum2(nb / 100);
             b.f[8] = s; b.f[38] = s; b.f[39] = s;
             // Campo 44 (idx43) = Valor Bruto + Frete/Seguro/Outras (idx61) − Desconto/ICMS
-            // Desonerado (idx42) — o Fortes VALIDA essa fórmula. Mas o SIGA lança a nota pela INM
-            // (= Σ idx43), então pra entrar batendo o relatório (produtos + despesas) o idx43 tem
-            // de somar produtos+despesas. Solução que mantém a fórmula do campo 44 válida: mover a
-            // despesa (idx9) para o campo aditivo (idx61) e ZERAR o desconto (idx42). Assim
-            // idx43 = bruto + despesa, campo 44 = bruto + idx61(despesa) − idx42(0) = idx43 ✓, e
-            // INM = Σ idx43 = produtos + despesas = relatório. O desconto/acréscimo originais eram
-            // só informados e não devem reduzir/inflar o valor lançado (confirmado 2026-07-14).
-            const desp9 = Math.round((parseFortesNumber(b.f[9]) || 0) * 100);
-            b.f[61] = fsNum2(desp9 / 100);
+            // Desonerado (idx42) — fórmula que o Fortes VALIDA. Gravamos idx43 = BRUTO PURO
+            // (idx61=0, idx42=0): campo 44 = bruto + 0 − 0 = idx43 ✓, e INM = Σ idx43 = Σ bruto = P.
+            // A despesa (idx9) NÃO entra no idx43 nem na INM. Motivo (descoberto 2026-07-14): o SIGA
+            // lança a nota SOMANDO a despesa ao total que lê; se a despesa já estivesse no idx43, o
+            // SIGA somaria de novo (R + d, errado). Logo o valor lançado = Σ idx43 = P, e o SIGA
+            // re-soma d → P + d = R (relatório). A despesa vira totalizador do NFM (idx31/34), não
+            // do valor do produto. NÃO reintroduzir despesa no idx43 nem no idx61.
+            b.f[61] = '0.00';
             b.f[42] = '0.00';
-            b.f[43] = fsNum2((nb + desp9) / 100);
+            b.f[43] = fsNum2(nb / 100);
             const cf = (b.f[2] || '').replace(/\D/g, '');
             const cad = cadastro[cf];
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
@@ -7710,11 +7719,10 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const liq43 = Math.round((parseFortesNumber(b.f[43]) || 0) * 100);
             g.c += liq43; liqRealC += liq43;
         });
-        // NFM-líquido = Σ idx43 (casa com Σ INM). idx68 (valor contábil pós-chave) idem: se
-        // divergir do líquido do PNM, o Fortes acusa o mesmo mismatch INM×PNM.
-        const lq = fsNum2(liqRealC / 100);
-        nfm[35] = lq; nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
-        if (nfm.length > 68) nfm[68] = lq;
+        // A escrita dos totais do NFM (idx25/31/34/35/51/52/68) foi movida para repairNfmTotals
+        // (passo 3 do pipeline, autoridade única e por último). Aqui só reconstruímos as INM:
+        // INM = Σ idx43 = Σ bruto = P por grupo CFOP+CST (é o que o Fortes valida contra o PNM).
+        void liqRealC; // ainda somado acima junto com os grupos; totais do NFM saem em repairNfmTotals
         const tplArr = tpl || ['INM', '0.00', 'CE', '', '', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '', '', '', '', '0', '', '', '', '', '', '', 'N', ''];
         const newInm = groups.map(g => {
             const f = tplArr.slice();
@@ -7772,12 +7780,17 @@ function normalizeNoteOrder(lines) {
     return out;
 }
 
-// Reparo dos totalizadores do NFM a partir das PNM da mesma nota (modelo confirmado 2026-07-14):
-//   NFM idx25 (VALOR TOTAL DOS PRODUTOS) = Σ PNM idx8
-//   NFM idx34 (DESCONTO/DESPESAS TOTAL)  = Σ PNM idx9
-//   NFM idx35 (VALOR TOTAL DO DOCUMENTO) = idx25 + idx34   (produtos + despesas)
-// Corrige notas cujo NFM não totalizava as despesas (o contábil lia o doc total sem elas).
-// Pura e idempotente: nota já correta sai idêntica. Roda ANTES e DEPOIS do ajuste de valores.
+// Reparo/gravação dos totalizadores do NFM a partir das PNM da mesma nota. É a AUTORIDADE
+// ÚNICA dos totais do NFM (roda por último no pipeline). Modelo 2026-07-14 (SIGA re-soma a
+// despesa ao total que lê), com P = Σ PNM idx8 e d = Σ PNM idx9:
+//   NFM idx35 (VALOR TOTAL DO DOCUMENTO) = P        → SIGA soma d → P + d = R (relatório) ✓
+//   NFM idx25 (VALOR TOTAL DOS PRODUTOS) = P − d    → SIGA soma d → P ✓
+//   NFM idx31 (DESPESA)                  = d
+//   NFM idx34 (DESCONTO/DESPESAS TOTAL)  = d
+//   NFM idx51 / idx52 / idx68 (espelhos) = P − d
+// Todo total é gravado JÁ REDUZIDO de d, pro SIGA re-somar e cair no valor certo. NÃO gravar
+// total cheio (P + d) em nenhum campo — o SIGA somaria d de novo. Pura e idempotente (idx8/idx9
+// não mudam entre execuções): nota já correta sai idêntica. Roda ANTES e DEPOIS do ajuste.
 function repairNfmTotals(lines) {
     const out = lines.slice();
     const cNum = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
@@ -7790,15 +7803,20 @@ function repairNfmTotals(lines) {
         for (let k = i + 1; k < j; k++) {
             if (out[k].indexOf('PNM|') !== 0) continue;
             const f = out[k].split('|');
-            prodC += cNum(f[8]); // idx8 = valor total do produto
-            despC += cNum(f[9]); // idx9 = despesas do produto
+            prodC += cNum(f[8]); // idx8 = valor total do produto  → Σ = P
+            despC += cNum(f[9]); // idx9 = despesas do produto     → Σ = d
             temPnm = true;
         }
         const nfm = out[i].split('|');
         if (temPnm && nfm.length > 35) {
-            nfm[25] = fsNum2(prodC / 100);
-            nfm[34] = fsNum2(despC / 100);
-            nfm[35] = fsNum2((prodC + despC) / 100);
+            const pMinusD = fsNum2((prodC - despC) / 100); // P − d (produtos e espelhos)
+            const dStr = fsNum2(despC / 100);              // d (despesa)
+            nfm[25] = pMinusD;
+            nfm[31] = dStr;
+            nfm[34] = dStr;
+            nfm[35] = fsNum2(prodC / 100); // P (doc total; SIGA soma d → R)
+            if (nfm.length > 52) { nfm[51] = pMinusD; nfm[52] = pMinusD; }
+            if (nfm.length > 68) nfm[68] = pMinusD;
             out[i] = nfm.join('|');
         }
         i = j;
