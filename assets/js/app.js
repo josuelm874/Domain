@@ -7783,14 +7783,17 @@ function normalizeNoteOrder(lines) {
 // Reparo/gravação dos totalizadores do NFM a partir das PNM da mesma nota. É a AUTORIDADE
 // ÚNICA dos totais do NFM (roda por último no pipeline). Modelo 2026-07-14 (SIGA re-soma a
 // despesa ao total que lê), com P = Σ PNM idx8 e d = Σ PNM idx9:
-//   NFM idx35 (VALOR TOTAL DO DOCUMENTO) = P        → SIGA soma d → P + d = R (relatório) ✓
-//   NFM idx25 (VALOR TOTAL DOS PRODUTOS) = P − d    → SIGA soma d → P ✓
+//   NFM idx25 (campo 26) = P        → é ONDE O SIGA LÊ o total do documento; soma d → P+d = R ✓
+//   NFM idx35 (campo 36) = P − d    → o manual chama este de "total do documento", mas o SIGA
+//                                     NÃO o lê (erro do sistema contábil: lê o campo 26, não o
+//                                     36). Causa das falhas anteriores. Fica com P − d.
 //   NFM idx31 (DESPESA)                  = d
 //   NFM idx34 (DESCONTO/DESPESAS TOTAL)  = d
 //   NFM idx51 / idx52 / idx68 (espelhos) = P − d
-// Todo total é gravado JÁ REDUZIDO de d, pro SIGA re-somar e cair no valor certo. NÃO gravar
-// total cheio (P + d) em nenhum campo — o SIGA somaria d de novo. Pura e idempotente (idx8/idx9
-// não mudam entre execuções): nota já correta sai idêntica. Roda ANTES e DEPOIS do ajuste.
+// idx25 = P também é o "valor total dos produtos" correto (= Σ idx8 pós-ajuste), então não há
+// conflito semântico — só o idx35 carrega P − d. Todo total é gravado JÁ REDUZIDO de d (exceto
+// o idx25, que o SIGA re-soma), pro valor lançado cair certo. Pura e idempotente (idx8/idx9 não
+// mudam entre execuções): nota já correta sai idêntica. Roda ANTES e DEPOIS do ajuste.
 function repairNfmTotals(lines) {
     const out = lines.slice();
     const cNum = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
@@ -7809,12 +7812,13 @@ function repairNfmTotals(lines) {
         }
         const nfm = out[i].split('|');
         if (temPnm && nfm.length > 35) {
-            const pMinusD = fsNum2((prodC - despC) / 100); // P − d (produtos e espelhos)
+            const P = fsNum2(prodC / 100);                 // P = Σ idx8
+            const pMinusD = fsNum2((prodC - despC) / 100); // P − d
             const dStr = fsNum2(despC / 100);              // d (despesa)
-            nfm[25] = pMinusD;
+            nfm[25] = P;        // campo 26: o SIGA lê AQUI o total → soma d → R
             nfm[31] = dStr;
             nfm[34] = dStr;
-            nfm[35] = fsNum2(prodC / 100); // P (doc total; SIGA soma d → R)
+            nfm[35] = pMinusD;  // campo 36: "doc total" do manual (SIGA ignora)
             if (nfm.length > 52) { nfm[51] = pMinusD; nfm[52] = pMinusD; }
             if (nfm.length > 68) nfm[68] = pMinusD;
             out[i] = nfm.join('|');
