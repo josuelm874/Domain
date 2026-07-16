@@ -7914,7 +7914,10 @@ function rebuildInmFromPnm(lines) {
             const q = queues.get(bk);
             if (!q || !q.length) continue; // INM sem PNM do mesmo bucket: não mexe
             const tt = fsNum2(q.shift() / 100);
+            // Formato canônico do INM: valor no idx1 E no idx9 (campo10=campo2); campos 6/7/8/9
+            // (idx5..8 = base/alíq/valor de PIS/COFINS/ST) zerados. Sem isso, sobra lixo da origem.
             f[1] = tt; f[9] = tt;
+            f[5] = '0.00'; f[6] = '0.00'; f[7] = '0.00'; f[8] = '0.00';
             out[k] = f.join('|');
         }
         i = j;
