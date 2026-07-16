@@ -7606,7 +7606,7 @@ function fixTraCount(lines) {
 //   NFM: chave=66, somatórioDespesas=28, valorLíquido=25/51/52, valorTotal=35
 //   PNM: CFOP=2, CST=5, valorBruto=8/38/39, CST-PIS/COFINS=36/37, bruto+despesa=43, despesa=61
 //   INM: total=1/9, CFOP=3, CST=19, campos 6º–9º (idx5..8)=0.00
-function applyValueCorrection(lines, reportMap, cadastro, summary) {
+function applyValueCorrection(lines, reportMap, cadastro, summary, extraDesp) {
     const out = [];
     let i = 0;
     while (i < lines.length) {
@@ -7662,7 +7662,14 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         // Zera os campos de despesa do NFM e despC=0 → líquido = total = relatório.
         const so1910 = cfopsSet.size === 1 && cfopsSet.has('1910');
         if (so1910) { [26, 27, 28, 31, 32, 33, 34].forEach(ix => { nfm[ix] = '0.00'; }); }
-        const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
+        // Despesa da nota = Σ PNM idx9 (rollup do campo35/idx34) + campos 32 e 33 do NFM ORIGINAL
+        // (idx31 e idx32), vindos de `extraDesp` — capturados ANTES do repairNfmTotals (passo 1),
+        // que sobrescreve idx31 com Σidx9. Ler idx31 aqui (pós-passo1) dobraria a despesa do
+        // CARNEIRO (idx31 original=0 mas passo1 grava Σidx9). CARNEIRO: extra=0 → despC = Σ idx9
+        // (byte-idêntico, sem regressão). J&T: extra = campo32(=Σidx9) + campo33 → despC = 2X+Y.
+        // Confirmado 2026-07-15: idx31==idx34==Σidx9 em 46/46 J&T; campo33 é a despesa que faltava.
+        const despExtraNfm = (extraDesp && extraDesp.get(chave)) || 0;
+        const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0) + despExtraNfm;
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
@@ -7839,18 +7846,152 @@ function blankPnmTailJunk(lines) {
     return lines.map(L => (L.indexOf('PNM|') === 0 ? L.replace(re, '||$1') : L));
 }
 
+// Normaliza linhas INM ao formato canônico do Fortes: o valor do resumo (idx1, 2º campo) deve
+// aparecer TAMBÉM no idx9 (10º campo), e os campos 6/7/8/9 (idx5/6/7/8) devem ser 0.00. Corrige
+// INM "mal formatada" da fonte (valor espalhado em idx5/idx9). Idempotente: INM já no formato
+// (as reconstruídas por applyValueCorrection, onde idx1==idx9 e idx5..8=0) saem idênticas. Não
+// altera valor de cálculo — só realoca o MESMO valor (idx1) pro campo certo e zera os intermediários.
+// INM canônica: o subtotal de cada CFOP+CST (idx1 e idx9) DEVE ser a soma do campo44 (idx43) de
+// TODOS os PNM daquele CFOP+CST na nota — recalculado na hora, em TODA nota (inclusive as que não
+// estão no relatório). Corrige INM que vieram da origem com valor "pronto" divergente (ex.: ICMS-ST
+// embutido no INM mas não no campo44). Também zera os campos 6/7/8/9 (idx5..8). Idempotente: INM já
+// correta (as reconstruídas por applyValueCorrection, idx1=Σidx43) sai idêntica. INM sem PNM
+// correspondente (grupo inexistente) NÃO é tocada. Grupo: PNM (idx2 CFOP, idx5 CST) ↔ INM (idx3, idx19).
+function rebuildInmFromPnm(lines) {
+    const out = lines.slice();
+    const cCents = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
+    let i = 0;
+    while (i < out.length) {
+        if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
+        let j = i + 1;
+        while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
+        // Soma idx43 (campo44) das PNM agrupada por CFOP+CST-ICMS (bucket) e, dentro dele, por
+        // CST-PIS/COFINS (idx35/idx36). Uma nota pode ter VÁRIOS INM no mesmo CFOP+CST-ICMS
+        // separados só pelo CST de PIS/COFINS — mas o INM NÃO carrega esse CST. Distribuição
+        // Σ-preservante: o nº de INM da origem (K) manda; as somas por grupo (G, na ordem de 1ª
+        // aparição das PNM) são repartidas entre os K INM daquele bucket sem perder nem duplicar:
+        //  - K == G  : 1 grupo por INM (preserva o split — ex.: nota com 2 INM = 170.40 e 600.60);
+        //  - K < G   : primeiros K-1 INM levam 1 grupo; o último absorve a soma dos grupos restantes
+        //              (Fortes às vezes emite 1 só INM cobrindo vários grupos PIS → não pode perder);
+        //  - K > G   : primeiros G INM levam os grupos; os INM extras (duplicados) zeram.
+        // Em todos os casos Σ(INM do bucket) == Σ(idx43 das PNM do bucket).
+        const buckets = new Map(); // "cfop|cstIcms" -> Map("pis|cofins" -> centavos)
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('PNM|') !== 0) continue;
+            const f = out[k].split('|');
+            const bk = (f[2] || '').replace(/\D/g, '') + '|' + (f[5] || '');
+            const pk = (f[35] || '') + '|' + (f[36] || '');
+            if (!buckets.has(bk)) buckets.set(bk, new Map());
+            const g = buckets.get(bk);
+            g.set(pk, (g.get(pk) || 0) + cCents(f[43]));
+        }
+        // Conta os INM de cada bucket (K) pra saber como repartir as somas de grupo.
+        const inmCount = new Map();
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('INM|') !== 0) continue;
+            const f = out[k].split('|');
+            if (f.length <= 19) continue;
+            const bk = (f[3] || '').replace(/\D/g, '') + '|' + (f[19] || '');
+            inmCount.set(bk, (inmCount.get(bk) || 0) + 1);
+        }
+        // Monta a fila de valores (em centavos) a atribuir por bucket, já colapsando/zerando
+        // conforme K vs G, de modo que a soma da fila == soma dos grupos.
+        const queues = new Map();
+        for (const [bk, g] of buckets) {
+            const G = Array.from(g.values());
+            const K = inmCount.get(bk) || 0;
+            let q;
+            if (K === 0) { q = []; }
+            else if (K >= G.length) { q = G.concat(new Array(K - G.length).fill(0)); }
+            else { q = G.slice(0, K - 1); q.push(G.slice(K - 1).reduce((a, b) => a + b, 0)); }
+            queues.set(bk, q);
+        }
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('INM|') !== 0) continue;
+            const f = out[k].split('|');
+            if (f.length <= 19) continue;
+            const bk = (f[3] || '').replace(/\D/g, '') + '|' + (f[19] || '');
+            const q = queues.get(bk);
+            if (!q || !q.length) continue; // INM sem PNM do mesmo bucket: não mexe
+            const tt = fsNum2(q.shift() / 100);
+            f[1] = tt; f[9] = tt;
+            out[k] = f.join('|');
+        }
+        i = j;
+    }
+    return out;
+}
+
+// Checagens proativas nas linhas PAR (participantes), independentes do ajuste de valores:
+//  - campo 6 (idx5) = Inscrição Estadual: tem 9 dígitos. Se for só dígitos e tiver 1..8, faz
+//    zero-pad à esquerda até 9 (ex.: "67537570" → "067537570"). ISENTO/vazio/≥9 ficam intactos.
+//  - campo 18 (idx17) = número do endereço: não pode conter letra. Se tiver QUALQUER letra
+//    (ex.: "S/N", "SN"), esvazia o campo. Só-dígitos fica como está.
+function sanitizePar(lines) {
+    return lines.map(L => {
+        if (L.indexOf('PAR|') !== 0) return L;
+        const f = L.split('|');
+        if (f.length > 5 && /^\d{1,8}$/.test(f[5])) f[5] = f[5].padStart(9, '0');
+        if (f.length > 17 && /[A-Za-z]/.test(f[17])) f[17] = '';
+        return f.join('|');
+    });
+}
+
+// ICMS-ST fora do cálculo (2026-07-16): nas notas do relatório, zera o ICMS-ST tanto na PNM
+// (campo 15 = idx14) quanto no NFM (campo 33 = idx32, que é a soma dos campo15 das PNM).
+// PNM campo15: o Fortes SOMA esse campo ao valor do produto pra formar o "líquido do PNM". Nas
+// notas ajustadas o INM é reconstruído como Σ idx43, então o líquido tem de ser idx43 (campo15=0)
+// pra bater o INM. NFM campo33: não deve inflar a despesa/total do lançamento (decisão p/ TODAS as
+// empresas). Notas FORA do relatório NÃO são tocadas — o INM delas vem da origem já COM o ST
+// embutido (INM = idx43 + campo15), então manter o campo15 original é o que valida. Chave: NFM idx66.
+function zeraIcmsStNotasRelatorio(lines, reportMap) {
+    const out = lines.slice();
+    let i = 0;
+    while (i < out.length) {
+        if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
+        let j = i + 1;
+        while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
+        const chave = (out[i].split('|')[66] || '').replace(/\D/g, '');
+        if (reportMap && reportMap.get(chave) != null) {
+            const nfm = out[i].split('|');
+            if (nfm.length > 32) { nfm[32] = '0.00'; out[i] = nfm.join('|'); }
+            for (let k = i + 1; k < j; k++) {
+                if (out[k].indexOf('PNM|') !== 0) continue;
+                const f = out[k].split('|');
+                if (f.length > 14) { f[14] = '0.00'; out[k] = f.join('|'); }
+            }
+        }
+        i = j;
+    }
+    return out;
+}
+
 function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const parsed = parseFortesFile(fsText);
     let lines = parsed.lines.slice();
     const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [], brutoInviavel: [] };
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
+    // Captura despesa-extra (campo 32 do NFM ORIGINAL = idx31) por chave ANTES do repairNfmTotals
+    // (passo 1), que sobrescreve idx31 com Σidx9. Sem isso, o CARNEIRO teria a despesa dobrada.
+    // O campo 33 (idx32) = ICMS-ST (soma dos campo15 das PNM) NÃO entra mais no cálculo (2026-07-16):
+    // ele é zerado (ver zeraIcmsStNotasRelatorio) e não deve inflar a despesa/total do lançamento.
+    const extraDesp = new Map();
+    for (const L of lines) {
+        if (L.indexOf('NFM|') !== 0) continue;
+        const f = L.split('|');
+        const ch = (f[66] || '').replace(/\D/g, '');
+        if (ch) extraDesp.set(ch, Math.round((parseFortesNumber(f[31]) || 0) * 100));
+    }
     lines = repairNfmTotals(lines); // passo 1: NFM totaliza produtos + despesas das PNM
-    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary); // passo 2: bate doc total c/ relatório
+    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary, extraDesp); // passo 2: bate doc total c/ relatório
     lines = repairNfmTotals(lines); // passo 3: re-totaliza pós-ajuste (doc total volta a bater PNM)
     lines = normalizeNoteOrder(lines); // passo 4: garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
-    lines = blankPnmTailJunk(lines); // passo 5: apaga campos-lixo no fim das PNM (só visão)
+    lines = rebuildInmFromPnm(lines); // passo 5: INM = Σ idx43 por CFOP+CST em TODA nota (opção 2)
+    lines = blankPnmTailJunk(lines); // passo 6: apaga campos-lixo no fim das PNM (só visão)
+    lines = sanitizePar(lines); // passo 7: PAR — IE (idx5) pad→9 díg; nº endereço (idx17) sem letras
+    lines = zeraIcmsStNotasRelatorio(lines, reportMap); // passo 8: ICMS-ST = 0.00 (PNM campo15/idx14 + NFM campo33/idx32) só nas notas do relatório
     return { text: lines.join('\n'), summary };
 }
 
