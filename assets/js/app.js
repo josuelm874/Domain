@@ -7606,7 +7606,7 @@ function fixTraCount(lines) {
 //   NFM: chave=66, somatórioDespesas=28, valorLíquido=25/51/52, valorTotal=35
 //   PNM: CFOP=2, CST=5, valorBruto=8/38/39, CST-PIS/COFINS=36/37, bruto+despesa=43, despesa=61
 //   INM: total=1/9, CFOP=3, CST=19, campos 6º–9º (idx5..8)=0.00
-function applyValueCorrection(lines, reportMap, cadastro, summary, extraDesp) {
+function applyValueCorrection(lines, reportMap, cadastro, summary) {
     const out = [];
     let i = 0;
     while (i < lines.length) {
@@ -7662,14 +7662,14 @@ function applyValueCorrection(lines, reportMap, cadastro, summary, extraDesp) {
         // Zera os campos de despesa do NFM e despC=0 → líquido = total = relatório.
         const so1910 = cfopsSet.size === 1 && cfopsSet.has('1910');
         if (so1910) { [26, 27, 28, 31, 32, 33, 34].forEach(ix => { nfm[ix] = '0.00'; }); }
-        // Despesa da nota = Σ PNM idx9 (rollup do campo35/idx34) + campos 32 e 33 do NFM ORIGINAL
-        // (idx31 e idx32), vindos de `extraDesp` — capturados ANTES do repairNfmTotals (passo 1),
-        // que sobrescreve idx31 com Σidx9. Ler idx31 aqui (pós-passo1) dobraria a despesa do
-        // CARNEIRO (idx31 original=0 mas passo1 grava Σidx9). CARNEIRO: extra=0 → despC = Σ idx9
-        // (byte-idêntico, sem regressão). J&T: extra = campo32(=Σidx9) + campo33 → despC = 2X+Y.
-        // Confirmado 2026-07-15: idx31==idx34==Σidx9 em 46/46 J&T; campo33 é a despesa que faltava.
-        const despExtraNfm = (extraDesp && extraDesp.get(chave)) || 0;
-        const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0) + despExtraNfm;
+        // Despesa da nota = Σ PNM idx9 (rollup do campo35/idx34), o IPI, contado UMA vez.
+        // Diagnóstico 2026-07-16 (FILIAL02+04, 774 notas): campo32(idx31) == Σidx9 SEMPRE — o IPI
+        // já está no rollup das PNM, então somá-lo de novo dobrava a despesa (2×IPI) nas notas com
+        // IPI>0. campo35(idx34) = IPI + campo33(ICMS-ST retido); usar idx34 reintroduziria o retido
+        // (que a regra manda ZERAR, ver zeraIcmsStNotasRelatorio) em 40 notas J&T. Logo a despesa
+        // correta é Σidx9 = IPI sem retido, sem double-count. O total do lançamento continua batendo
+        // o relatório: applyValueCorrection re-soma P + despesa = R (só muda o split produto/despesa).
+        const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
@@ -7972,19 +7972,8 @@ function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [], brutoInviavel: [] };
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
-    // Captura despesa-extra (campo 32 do NFM ORIGINAL = idx31) por chave ANTES do repairNfmTotals
-    // (passo 1), que sobrescreve idx31 com Σidx9. Sem isso, o CARNEIRO teria a despesa dobrada.
-    // O campo 33 (idx32) = ICMS-ST (soma dos campo15 das PNM) NÃO entra mais no cálculo (2026-07-16):
-    // ele é zerado (ver zeraIcmsStNotasRelatorio) e não deve inflar a despesa/total do lançamento.
-    const extraDesp = new Map();
-    for (const L of lines) {
-        if (L.indexOf('NFM|') !== 0) continue;
-        const f = L.split('|');
-        const ch = (f[66] || '').replace(/\D/g, '');
-        if (ch) extraDesp.set(ch, Math.round((parseFortesNumber(f[31]) || 0) * 100));
-    }
     lines = repairNfmTotals(lines); // passo 1: NFM totaliza produtos + despesas das PNM
-    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary, extraDesp); // passo 2: bate doc total c/ relatório
+    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary); // passo 2: bate doc total c/ relatório
     lines = repairNfmTotals(lines); // passo 3: re-totaliza pós-ajuste (doc total volta a bater PNM)
     lines = normalizeNoteOrder(lines); // passo 4: garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
