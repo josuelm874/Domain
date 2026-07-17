@@ -7658,8 +7658,8 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         const cfopsSet = new Set(pnms.map(cfopOf));
         const isMulti = cfopsSet.size >= 2;
         const fixo = pnms.map(b => isMulti && cfopOf(b) === '1910'); // 1910 multi-CFOP = valor cheio
-        // Nota SÓ-1910 (bonificação/doação pura): sem despesa — valor cheio = total do relatório.
-        // Zera os campos de despesa do NFM e despC=0 → líquido = total = relatório.
+        // Nota SÓ-1910 (bonificação/doação pura): zera os campos de despesa do NFM.
+        // Atenção: a despesa (IPI) NÃO é forçada a 0 aqui — ver despC abaixo.
         const so1910 = cfopsSet.size === 1 && cfopsSet.has('1910');
         if (so1910) { [26, 27, 28, 31, 32, 33, 34].forEach(ix => { nfm[ix] = '0.00'; }); }
         // Despesa da nota = Σ PNM idx9 (rollup do campo35/idx34), o IPI, contado UMA vez.
@@ -7669,7 +7669,11 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         // (que a regra manda ZERAR, ver zeraIcmsSt) em 40 notas J&T. Logo a despesa
         // correta é Σidx9 = IPI sem retido, sem double-count. O total do lançamento continua batendo
         // o relatório: applyValueCorrection re-soma P + despesa = R (só muda o split produto/despesa).
-        const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
+        // Vale TAMBÉM na nota só-1910: o Fortes soma o IPI ao líquido em qualquer nota, então os
+        // produtos têm de receber R − IPI. Forçar despC=0 aqui (como antes) dava Σcampo44 = R e o
+        // lançamento entrava com R + IPI (ex.: nota ...1810443906, R=194.31, IPI=3.33 → 197.64).
+        // Só-1910 sem IPI não muda: Σidx9 = 0.
+        const despC = pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
