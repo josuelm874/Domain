@@ -7666,7 +7666,7 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         // Diagnóstico 2026-07-16 (FILIAL02+04, 774 notas): campo32(idx31) == Σidx9 SEMPRE — o IPI
         // já está no rollup das PNM, então somá-lo de novo dobrava a despesa (2×IPI) nas notas com
         // IPI>0. campo35(idx34) = IPI + campo33(ICMS-ST retido); usar idx34 reintroduziria o retido
-        // (que a regra manda ZERAR, ver zeraIcmsStNotasRelatorio) em 40 notas J&T. Logo a despesa
+        // (que a regra manda ZERAR, ver zeraIcmsSt) em 40 notas J&T. Logo a despesa
         // correta é Σidx9 = IPI sem retido, sem double-count. O total do lançamento continua batendo
         // o relatório: applyValueCorrection re-soma P + despesa = R (só muda o split produto/despesa).
         const despC = so1910 ? 0 : pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
@@ -7857,6 +7857,15 @@ function blankPnmTailJunk(lines) {
 // embutido no INM mas não no campo44). Também zera os campos 6/7/8/9 (idx5..8). Idempotente: INM já
 // correta (as reconstruídas por applyValueCorrection, idx1=Σidx43) sai idêntica. INM sem PNM
 // correspondente (grupo inexistente) NÃO é tocada. Grupo: PNM (idx2 CFOP, idx5 CST) ↔ INM (idx3, idx19).
+// "Valor líquido do PNM" na conta do Fortes = campo44 (idx43) + IPI (idx9) + ICMS-ST (idx14)
+// + FCP-ST (idx89). É contra a SOMA disso, por CFOP, que o Fortes valida o INM — e acusava
+// "A soma dos valores do CFOP X do registro INM (a) difere da soma do valor líquido do
+// registro PNM (b)" quando o INM levava só o campo44. Índices confirmados por dump do .fs.
+function pnmLiquido(f) {
+    const n = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
+    return n(f[43]) + n(f[9]) + n(f[14]) + n(f[89]);
+}
+
 function rebuildInmFromPnm(lines) {
     const out = lines.slice();
     const cCents = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
@@ -7880,10 +7889,10 @@ function rebuildInmFromPnm(lines) {
             if (out[k].indexOf('PNM|') !== 0) continue;
             const f = out[k].split('|');
             const bk = (f[2] || '').replace(/\D/g, '') + '|' + (f[5] || '');
-            const pk = (f[35] || '') + '|' + (f[36] || '');
+            const pk = (f[36] || '') + '|' + (f[37] || '');
             if (!buckets.has(bk)) buckets.set(bk, new Map());
             const g = buckets.get(bk);
-            g.set(pk, (g.get(pk) || 0) + cCents(f[43]));
+            g.set(pk, (g.get(pk) || 0) + pnmLiquido(f));
         }
         // Conta os INM de cada bucket (K) pra saber como repartir as somas de grupo.
         const inmCount = new Map();
@@ -7947,21 +7956,24 @@ function sanitizePar(lines) {
 // pra bater o INM. NFM campo33: não deve inflar a despesa/total do lançamento (decisão p/ TODAS as
 // empresas). Notas FORA do relatório NÃO são tocadas — o INM delas vem da origem já COM o ST
 // embutido (INM = idx43 + campo15), então manter o campo15 original é o que valida. Chave: NFM idx66.
-function zeraIcmsStNotasRelatorio(lines, reportMap) {
+function zeraIcmsSt(lines) {
     const out = lines.slice();
     let i = 0;
     while (i < out.length) {
         if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
         let j = i + 1;
         while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
-        const chave = (out[i].split('|')[66] || '').replace(/\D/g, '');
-        if (reportMap && reportMap.get(chave) != null) {
-            const nfm = out[i].split('|');
-            if (nfm.length > 32) { nfm[32] = '0.00'; out[i] = nfm.join('|'); }
-            for (let k = i + 1; k < j; k++) {
-                if (out[k].indexOf('PNM|') !== 0) continue;
+        const nfm = out[i].split('|');
+        if (nfm.length > 32) { nfm[32] = '0.00'; out[i] = nfm.join('|'); }
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('PNM|') === 0) {
                 const f = out[k].split('|');
-                if (f.length > 14) { f[14] = '0.00'; out[k] = f.join('|'); }
+                if (f.length > 14) f[14] = '0.00';  // campo15 = ICMS-ST (Retido)
+                if (f.length > 89) f[89] = '0.00';  // FCP-ST (entra no líquido que o Fortes confere)
+                out[k] = f.join('|');
+            } else if (out[k].indexOf('INM|') === 0) {
+                const f = out[k].split('|');
+                if (f.length > 32) { f[32] = '0.00'; out[k] = f.join('|'); } // FCP-ST do resumo
             }
         }
         i = j;
@@ -7980,10 +7992,14 @@ function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     lines = repairNfmTotals(lines); // passo 3: re-totaliza pós-ajuste (doc total volta a bater PNM)
     lines = normalizeNoteOrder(lines); // passo 4: garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
-    lines = rebuildInmFromPnm(lines); // passo 5: INM = Σ idx43 por CFOP+CST em TODA nota (opção 2)
+    // ICMS-ST/FCP-ST zerados ANTES do rebuild: o INM é Σ do líquido das PNM, então o zeramento
+    // tem de acontecer primeiro pra INM e líquido fecharem. Vale em TODAS as notas (não só as do
+    // relatório): o Fortes recusa o campo15 (ICMS Retido) preenchido, e como o rebuild roda depois,
+    // o INM sai coerente com o líquido zerado em qualquer nota.
+    lines = zeraIcmsSt(lines); // passo 5a: ICMS-ST (PNM campo15 + NFM campo33) e FCP-ST = 0.00 em toda nota
+    lines = rebuildInmFromPnm(lines); // passo 5b: INM = Σ líquido (campo44+IPI+ICMS-ST+FCP-ST) por CFOP+CST+CST-PIS/COFINS
     lines = blankPnmTailJunk(lines); // passo 6: apaga campos-lixo no fim das PNM (só visão)
     lines = sanitizePar(lines); // passo 7: PAR — IE (idx5) pad→9 díg; nº endereço (idx17) sem letras
-    lines = zeraIcmsStNotasRelatorio(lines, reportMap); // passo 8: ICMS-ST = 0.00 (PNM campo15/idx14 + NFM campo33/idx32) só nas notas do relatório
     return { text: lines.join('\n'), summary };
 }
 
