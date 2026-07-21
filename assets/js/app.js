@@ -1148,7 +1148,17 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section" style="animation-delay: 0.15s"></div>
+                        <div class="box animate-section transf-check-box" style="animation-delay: 0.15s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">swap_horiz</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>Checagem de Transferências</h3>
+                                    <p>Conferir transferências entre matriz e filiais (CFOP, CST e valor)</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section" style="animation-delay: 0.2s"></div>
                         <div class="box animate-section" style="animation-delay: 0.25s"></div>
                         <div class="box animate-section" style="animation-delay: 0.3s"></div>
@@ -1273,6 +1283,12 @@
                 pisCofinsBox.addEventListener('click', () => showPisCofinsModal());
             }
 
+            // Card "Checagem de Transferências" → abre a página dedicada de conferência
+            const transfCheckBox = document.querySelector('.transf-check-box');
+            if (transfCheckBox) {
+                transfCheckBox.addEventListener('click', () => navigateTo('checagem-transferencias'));
+            }
+
             // Card "Pendências" → abre modal de controle de pendências
             const pendenciasBox = document.querySelector('.pendencias-box');
             if (pendenciasBox) {
@@ -1329,6 +1345,9 @@
         }
         else if (page === 'baixar-nfce') {
             createBaixarNfcePage(mainContent);
+        }
+        else if (page === 'checagem-transferencias') {
+            createChecagemTransferenciasPage(mainContent);
         }
         else if (page === 'icms-withholding') {
             createIcmsWithholdingPage(mainContent);
