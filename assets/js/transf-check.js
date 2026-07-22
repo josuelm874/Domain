@@ -419,7 +419,7 @@
                 ? `<p class="success-message">Transferências Compatíveis</p>
                    <p style="text-align:center;">${r.totalTransferencias} nota(s) de transferência conferida(s).</p>`
                 : `
-                <div id="transf-faltantes-tab" class="tab-content" style="display:block;"
+                <div id="transf-faltantes-tab" class="tab-content" style="display:block;">
                     ${r.faltantes.length ? `
                     <table>
                         <thead><tr><th>Chave</th><th>CFOP</th><th>CST</th><th>Valor</th><th>Arquivo</th></tr></thead>
