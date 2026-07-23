@@ -16,6 +16,7 @@
 
 const http = require('http');
 const nfce = require('./lib/nfce');
+const nfe = require('./lib/nfe');
 const dirbi = require('./lib/dirbi');
 
 const HOST = '127.0.0.1';      // só loopback — nunca expor na rede
