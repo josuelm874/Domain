@@ -26,9 +26,11 @@ Antes de codar, confirmar os valores exatos no manual/WSDL oficial da SEFAZ (Man
 - Create (rascunho): `docs/superpowers/notes/nfe-distdfe-contract.md`
 
 **A confirmar e anotar:**
-- [ ] **Endpoints** produção e homologação do `NFeDistribuicaoDFe` (Ambiente Nacional). Hipótese a validar: produção `https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx`, homologação `https://hom1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx`. Confirmar host exato.
-- [ ] **SOAP:** versão (1.2 → `Content-Type: application/soap+xml; charset=utf-8`), nome do método/action (`nfeDistDFeInteresse`), namespace WSDL (`http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe`).
-- [ ] **Schema `distDFeInt`:** atributo `versao` corrente (hipótese `1.35`), ordem/nomes dos campos: `tpAmb`, `cUFAutor`, `CNPJ` (ou `CPF`), e o grupo `consChNFe` com `chNFe`.
+- [x] **Endpoints** (Ambiente Nacional) — **CONFIRMADO via busca web 2026-07-22:**
+  - Homologação (literal, portal oficial): `https://hom.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx` (substituto `hom1.nfe...`).
+  - Produção (alta confiança, padrão AN comunidade ACBr/sped-nfe/DFe.NET): `https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx`. **Validar no 1º teste real** — é o único valor não pinado numa string literal de fonte oficial.
+- [x] **SOAP:** 1.2 (`Content-Type: application/soap+xml; charset=utf-8`), método `nfeDistDFeInteresse`, namespace WSDL `http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe`. Confirmado (padrão AN).
+- [x] **Schema `distDFeInt`:** atributo **`versao="1.01"`** — CONFIRMADO (XSD `distDFeInt_v1.01.xsd` em ACBr/sped-nfe + wiki UniNFe). ~~1.35 era palpite errado~~. Namespace do distDFeInt = `http://www.portalfiscal.inf.br/nfe`. Campos: `tpAmb`, `cUFAutor`, `CNPJ` (ou `CPF`), grupo `consChNFe` com `chNFe`.
 - [ ] **`cUFAutor`:** o que a SEFAZ espera — UF do autor da consulta (destinatário). Decisão para o worker: derivar do CNPJ da empresa. Como o dado de UF não vem no report, definir fallback = cUF da 1ª chave do grupo (`chave.substring(0,2)`), e permitir override por campo `cufAutor` na empresa. Anotar a decisão.
 - [ ] **Resposta:** caminho `retDistDFeInt` → `cStat`/`xMotivo` + `loteDistDFeInt` → `docZip` (atributos `NSU`, `schema`; conteúdo = base64 de gzip do XML). Confirmar que `consChNFe` de parte interessada retorna `procNFe` completo (não só resumo).
 - [ ] **cStat relevantes:** `137`/`138` (sem docs), `656` (consumo indevido / rejeição por consulta fora de prazo), `100`/`138`. Anotar a lista real do manual.
@@ -135,7 +137,7 @@ test('buildDistDFeIntSoap: inclui CNPJ, chNFe, tpAmb, cUFAutor e namespace', () 
     assert.match(soap, /<CNPJ>12345678000199<\/CNPJ>/);
     assert.match(soap, /<consChNFe>\s*<chNFe>23250312345678000199550010000000011000000017<\/chNFe>\s*<\/consChNFe>/);
     assert.match(soap, /portalfiscal\.inf\.br\/nfe\/wsdl\/NFeDistribuicaoDFe/);
-    assert.match(soap, /<distDFeInt[^>]*versao="1\.35"/);
+    assert.match(soap, /<distDFeInt[^>]*versao="1\.01"/);
 });
 ```
 
@@ -151,7 +153,7 @@ Adicionar em `nfe.js` (usar os valores confirmados na Task 0; abaixo os da hipó
 ```javascript
 const WSDL_NS = 'http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe';
 const NFE_NS = 'http://www.portalfiscal.inf.br/nfe';
-const DISTDFE_VERSAO = '1.35';
+const DISTDFE_VERSAO = '1.01'; // confirmado: schema distDFeInt_v1.01.xsd
 
 // Monta o envelope SOAP 1.2 para nfeDistDFeInteresse > consChNFe.
 // Sem indentação dentro do distDFeInt para não introduzir texto espúrio.
