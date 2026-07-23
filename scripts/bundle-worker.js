@@ -30,6 +30,7 @@ const OUT_ZIP = path.join(OUT_DIR, 'softtech-worker.zip');
 const FILES = [
     ['server.js', 'server.js'],
     ['lib/nfce.js', 'lib/nfce.js'],
+    ['lib/nfe.js', 'lib/nfe.js'],
     ['lib/dirbi.js', 'lib/dirbi.js'],
     ['lib/zip.js', 'lib/zip.js'],
     ['DIRBI MES-ANO.xlsx', 'DIRBI MES-ANO.xlsx'],

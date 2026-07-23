@@ -26,6 +26,10 @@ Deve imprimir `ouvindo em http://127.0.0.1:47620`. Deixe a janela aberta.
 | `/nfce/status/{jobId}` | GET | progresso por empresa (polling) |
 | `/nfce/detail/{jobId}/{cnpj}` | GET | falhas + divergências de conferência de uma empresa |
 | `/nfce/zip/{jobId}/{cnpj}` | GET | baixa o ZIP da empresa (montado no worker) |
+| `/nfe/start` | POST | inicia um job NFe (XML) — body `{ concurrency, companies:[{id,cnpj,pfxB64,senha,cufAutor,tpAmb,keys,meta}] }` → `{ jobId }` |
+| `/nfe/status/{jobId}` | GET | progresso por empresa (polling) |
+| `/nfe/detail/{jobId}/{cnpj}` | GET | falhas por chave de uma empresa |
+| `/nfe/zip/{jobId}/{cnpj}` | GET | baixa o ZIP da empresa (XMLs de NFe via NFeDistribuicaoDFe/consChNFe) |
 | `/dirbi/start` | POST | inicia um job DIRBI — body `{ inboxPath }` (pasta com .xml/.zip, recursivo) → `{ jobId }` |
 | `/dirbi/status/{jobId}` | GET | progresso (arquivos lidos, empresas, fase) |
 | `/dirbi/result/{jobId}` | GET | baixa o resultado: `.xlsx` (1 empresa) ou `DIRBI_{periodo}.zip` (várias) |
