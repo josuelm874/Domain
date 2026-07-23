@@ -10649,6 +10649,7 @@ function createBaixarNfePage(mainContent) {
     const jobIds = [];
     let polling = false;
     let useWorker = null;
+    let lastLaunchError = '';
 
     // Agrupa chaves por (CNPJ + mês). Anexa pfxB64/senha do certificado do CNPJ.
     // Lê cada .pfx uma única vez. NUNCA loga pfxB64/senha.
@@ -10699,11 +10700,13 @@ function createBaixarNfePage(mainContent) {
                 body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
             });
             resp = await res.json();
-        } catch (e) { return false; }
+        } catch (e) { lastLaunchError = 'worker inacessível: ' + ((e && e.message) || 'erro de rede'); return false; }
         if (!resp || !resp.ok || !resp.jobId) {
-            footerText.innerHTML = '<span class="bn-err">' + escapeHtml((resp && resp.error) || 'falha ao iniciar o worker') + '</span>';
+            lastLaunchError = (resp && resp.error) || 'falha ao iniciar o worker';
+            footerText.innerHTML = '<span class="bn-err">' + escapeHtml(lastLaunchError) + '</span>';
             return false;
         }
+        lastLaunchError = '';
         const jobId = resp.jobId;
         jobIds.push(jobId);
         for (const c of companiesPayload) {
@@ -10803,8 +10806,15 @@ function createBaixarNfePage(mainContent) {
             return;
         }
 
-        const groups = await buildCompanies();
-        if (!groups.length) { startBtn.disabled = false; return; }
+        let groups;
+        try {
+            groups = await buildCompanies();
+        } catch (e) {
+            showLaunchError('falha ao ler o certificado: ' + ((e && e.message) || 'erro'));
+            startBtn.disabled = false;
+            return;
+        }
+        if (!groups.length) { showLaunchError('nenhuma chave modelo 55 com certificado válido'); startBtn.disabled = false; return; }
 
         // transição de estágio
         Array.from(certList.children).forEach((c) => c.classList.add('bn-merge'));
@@ -10818,10 +10828,18 @@ function createBaixarNfePage(mainContent) {
         clearSecrets(groups); // limpa senha do DOM + base64 do payload logo após enviar
 
         if (!ok && !companies.size) {
+            // reverte ao estágio de seleção e MOSTRA o erro (não deixa escondido no footer).
             stageDownload.style.display = 'none';
             stageSelect.style.display = 'flex';
             startBtn.disabled = false;
+            showLaunchError(lastLaunchError || 'falha ao iniciar o download');
         }
+    }
+
+    // Mostra erro de launch no estágio de seleção (visível), não no footer escondido.
+    function showLaunchError(msg) {
+        const ws = document.getElementById('bn-worker-status');
+        if (ws) ws.innerHTML = '<span style="color:var(--color-danger); font-weight:600;">✕ ' + escapeHtml(String(msg || '')) + '</span>';
     }
 
     // ---------- carga de contribuintes (CNPJ → razão social) ----------
