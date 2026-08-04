@@ -26,7 +26,10 @@ const DEFAULT_CONCURRENCY = 10;
 const MAX_RETRIES = 3;
 
 const jobs = new Map();   // jobId -> job
-let jobSeq = 0;
+
+// ID aleatório, não sequencial: com `nfce-1` qualquer um adivinha o job da sessão
+// e baixa o ZIP sem nunca ter disparado nada.
+const newJobId = () => require('./access').newJobId('nfce');
 
 // ---------------------------------------------------------------- helpers ----
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -153,7 +156,7 @@ function conferirXml(xml, exp) {
 function startJob(payload) {
     const concurrency = Math.max(1, Math.min(20, parseInt(payload.concurrency, 10) || DEFAULT_CONCURRENCY));
     const incoming = Array.isArray(payload.companies) ? payload.companies : [];
-    const id = 'nfce-' + (++jobSeq);
+    const id = newJobId();
     const companies = new Map();
 
     for (const c of incoming) {
