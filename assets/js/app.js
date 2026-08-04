@@ -5,6 +5,74 @@
     window.debugLog = (_location, _message, _data = {}) => { /* no-op */ };
     const debugLog = window.debugLog;
 
+    // ==================== PONTE COM O WORKER LOCAL ====================
+    // O worker (worker/server.js) passou a exigir um token de pareamento em
+    // `x-worker-token`, porque loopback não é fronteira de segurança para o
+    // navegador: sem token, qualquer página aberta pelo usuário fala com
+    // 127.0.0.1:47620 e lê os XMLs fiscais. Todo acesso ao worker passa por aqui.
+    const WORKER_TOKEN_KEY = 'workerPairToken';
+
+    window.getWorkerToken = () => {
+        try { return localStorage.getItem(WORKER_TOKEN_KEY) || ''; } catch { return ''; }
+    };
+
+    /**
+     * Pede o token ao usuário e persiste. Retorna '' se ele cancelar.
+     * ponytail: prompt() resolve o pareamento sem UI nova. Quando existir tela de
+     * configurações, mover para um campo lá e manter isto como fallback.
+     * @returns {string}
+     */
+    window.promptWorkerToken = function promptWorkerToken() {
+        const v = window.prompt(
+            'Token de pareamento do worker local.\n\n' +
+            'Ele aparece na janela do worker, no bloco "PAREAMENTO".\n' +
+            'Cole aqui — só precisa fazer isso uma vez nesta máquina:',
+            window.getWorkerToken()
+        );
+        if (v === null) return '';
+        const t = v.trim();
+        if (t) { try { localStorage.setItem(WORKER_TOKEN_KEY, t); } catch { /* modo privado */ } }
+        return t;
+    };
+
+    /**
+     * fetch para o worker com o token injetado. Em 401, pede o token e repete UMA vez.
+     * @param {string} url
+     * @param {RequestInit} [init]
+     * @returns {Promise<Response>}
+     */
+    window.workerFetch = async function workerFetch(url, init = {}) {
+        const send = (token) => fetch(url, {
+            ...init,
+            headers: { ...(init.headers || {}), 'x-worker-token': token },
+        });
+        const res = await send(window.getWorkerToken());
+        if (res.status !== 401) return res;
+        const novo = window.promptWorkerToken();
+        return novo ? send(novo) : res;
+    };
+
+    /**
+     * /health + pareamento. `/health` é a única rota sem token, então serve para
+     * detectar o worker antes de estar pareado — e devolve `paired` para sabermos
+     * se vale pedir o token AGORA, em vez de deixar o usuário levar 401 no meio do job.
+     * @param {string} base
+     * @returns {Promise<object|null>} JSON do health, ou null se o worker não responde
+     */
+    window.workerHealth = async function workerHealth(base) {
+        try {
+            let res = await window.workerFetch(base + '/health');
+            if (!res.ok) return null;
+            let j = await res.json();
+            if (!j || !j.ok) return null;
+            if (!j.paired && window.promptWorkerToken()) {
+                res = await window.workerFetch(base + '/health');
+                if (res.ok) j = await res.json();
+            }
+            return j;
+        } catch { return null; }
+    };
+
     // ==================== HASH DE SENHA — SEGURO (PBKDF2-SHA-256) ====================
     // Substitui o legacy `generateUltraSecureHash` (btoa+reverse, criptograficamente quebrado).
     // PBKDF2 com 100k iterações + SHA-256 é o mínimo defensável em 2025 para client-side hashing.
@@ -1126,6 +1194,17 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="box animate-section baixar-nfe-box" style="animation-delay: 0.05s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">request_page</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>Baixar NFe</h3>
+                                    <p>Baixar XMLs de NFe (modelo 55) da SEFAZ via certificado A1</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section pis-cofins-box" style="animation-delay: 0.05s; cursor: pointer;">
                             <div class="box-content">
                                 <div class="box-icon">
@@ -1148,7 +1227,17 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section" style="animation-delay: 0.15s"></div>
+                        <div class="box animate-section transf-check-box" style="animation-delay: 0.15s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">swap_horiz</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>Checagem de Transferências</h3>
+                                    <p>Conferir transferências entre matriz e filiais (CFOP, CST e valor)</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section" style="animation-delay: 0.2s"></div>
                         <div class="box animate-section" style="animation-delay: 0.25s"></div>
                         <div class="box animate-section" style="animation-delay: 0.3s"></div>
@@ -1267,10 +1356,22 @@
                 baixarNfceBox.addEventListener('click', () => navigateTo('baixar-nfce'));
             }
 
+            // Card "Baixar NFe" → abre a página de download de NFe (modelo 55, cert A1)
+            const baixarNfeBox = document.querySelector('.baixar-nfe-box');
+            if (baixarNfeBox) {
+                baixarNfeBox.addEventListener('click', () => navigateTo('baixar-nfe'));
+            }
+
             // Card "PIS/COFINS + MIT" → abre modal de cálculo e geração de MIT
             const pisCofinsBox = document.querySelector('.pis-cofins-box');
             if (pisCofinsBox) {
                 pisCofinsBox.addEventListener('click', () => showPisCofinsModal());
+            }
+
+            // Card "Checagem de Transferências" → abre a página dedicada de conferência
+            const transfCheckBox = document.querySelector('.transf-check-box');
+            if (transfCheckBox) {
+                transfCheckBox.addEventListener('click', () => navigateTo('checagem-transferencias'));
             }
 
             // Card "Pendências" → abre modal de controle de pendências
@@ -1329,6 +1430,12 @@
         }
         else if (page === 'baixar-nfce') {
             createBaixarNfcePage(mainContent);
+        }
+        else if (page === 'baixar-nfe') {
+            createBaixarNfePage(mainContent);
+        }
+        else if (page === 'checagem-transferencias') {
+            createChecagemTransferenciasPage(mainContent);
         }
         else if (page === 'icms-withholding') {
             createIcmsWithholdingPage(mainContent);
@@ -2449,14 +2556,106 @@ let icmsModeloExcelJS = null; // Workbook do ExcelJS para preservar formataçõe
 let icmsModeloBuffer = null;      // ArrayBuffer cru do modelo (recarregado por empresa)
 let icmsModeloSelecionado = null; // chave do ICMS_MODELOS atualmente carregado
 
-// Modelos de retenção ICMS ST. Apenas 'mercadinho' tem a regra de classificação
-// (CST/CSOSN → aba) implementada. Os demais podem ser selecionados na UI, mas exibem
-// aviso de pendência de configuração e não processam até o contador fornecer as regras.
+// Modelos de retenção ICMS ST. Todos têm regra de classificação (CST/CSOSN/NCM → aba)
+// definida em ICMS_MODELO_REGRAS. Os nomes de aba nas regras batem BYTE A BYTE com as
+// abas dos respectivos .xlsx (inclusive acentos e espaços, ex.: "4,53 % Normal").
 const ICMS_MODELOS = {
     mercadinho: { nome: 'Mercadinho', path: 'assets/js/ICMS ST - Mercadinho.xlsx', funcional: true },
-    deposito: { nome: 'Depósito', path: 'assets/js/ICMS ST - Deposito.xlsx', funcional: false },
-    deposito_regime_especial: { nome: 'Depósito Regime Especial', path: 'assets/js/ICMS ST - Deposito Regime Especial.xlsx', funcional: false },
-    frigorifico: { nome: 'Frigorífico', path: 'assets/js/ICMS ST - Frigorifico.xlsx', funcional: false },
+    deposito: { nome: 'Depósito', path: 'assets/js/ICMS ST - Deposito.xlsx', funcional: true },
+    deposito_regime_especial: { nome: 'Depósito Regime Especial', path: 'assets/js/ICMS ST - Deposito Regime Especial.xlsx', funcional: true },
+    frigorifico: { nome: 'Frigorífico', path: 'assets/js/ICMS ST - Frigorifico.xlsx', funcional: true },
+};
+
+// ── Regras de classificação por modelo de retenção ICMS ST ──────────────────────
+// Filtro base comum: UF do fornecedor = "23"; CFOP em ICMS_CFOP_PADRAO. CST vem do XML
+// com 2 dígitos ("00","20"); CSOSN com 3 ("101","102"). NCM casa por PREFIXO (startsWith),
+// mesmo critério do DIRBI (matchDirbiRow).
+const ICMS_UF_VALIDO = "23";
+const ICMS_CFOP_PADRAO = new Set(["5101", "5102", "5103", "5105", "5910"]);
+
+// NCMs (prefixos) das abas de Cesta Básica — comuns a Depósito e Depósito Regime Especial.
+const ICMS_NCM_CESTA = ["251910", "69051000", "69041000", "69081000"];
+// Regime Especial: NCMs que geram crédito de origem por agregação.
+const ICMS_NCM_CREDITO35 = ["2707", "2710", "2713", "2714", "2821", "3206", "3208", "3209", "3210", "3214", "3404", "3506", "3814", "3824", "3905", "3907", "3909", "3910", "6807", "320417", "340520", "340530", "340590", "27060000", "27150000"];
+const ICMS_NCM_CREDITO30 = ["6811", "3925", "2522", "380510"];
+// Exclusão do "4,53 % Normal": crédito35 ∪ crédito30 ∪ extras. Os extras 3204/3212/32050000
+// NÃO aparecem em nenhuma aba de crédito — saem de propósito (confirmado pelo contador).
+const ICMS_NCM_EXCLUI_453 = [...ICMS_NCM_CREDITO35, ...ICMS_NCM_CREDITO30, "3204", "3212", "32050000"];
+
+function ncmComecaCom(ncm, prefixos) {
+    if (!ncm) return false;
+    for (const p of prefixos) if (ncm.startsWith(p)) return true;
+    return false;
+}
+
+// Cada classificar(p) recebe { uf, cfop, cst, csosn, ncm } e devolve a lista de abas
+// (nomes exatos do .xlsx) em que o produto entra. Pode ser mais de uma aba por produto.
+const ICMS_MODELO_REGRAS = {
+    mercadinho: {
+        abas: ["Aliquota 1,54%", "Aliquota 4%", "Aliquota 7%"],
+        classificar(p) {
+            if (p.uf !== ICMS_UF_VALIDO || !ICMS_CFOP_PADRAO.has(p.cfop)) return [];
+            const out = [];
+            if (p.cst === "20") out.push("Aliquota 1,54%");
+            if (p.cst === "00") out.push("Aliquota 4%");
+            if (p.csosn === "101" || p.csosn === "102") out.push("Aliquota 7%");
+            return out;
+        },
+    },
+    frigorifico: {
+        abas: ["Aliquota 1,54%", "Aliquota 1,54% FRI", "Aliquota 4%", "Aliquota 7%", "Aliquota 7% FRI"],
+        classificar(p) {
+            if (p.uf !== ICMS_UF_VALIDO || !ICMS_CFOP_PADRAO.has(p.cfop)) return [];
+            const out = [];
+            if (p.cst === "20") out.push("Aliquota 1,54%");
+            if (p.cst === "00") out.push("Aliquota 4%");
+            if (p.csosn === "101" || p.csosn === "102") out.push("Aliquota 7%");
+            // Abas FRI: mesmas notas UF+CFOP, SEM filtro de CST/CSOSN. A seleção dos
+            // produtos de carne a manter é manual (feita pelo contador na planilha).
+            out.push("Aliquota 1,54% FRI");
+            out.push("Aliquota 7% FRI");
+            return out;
+        },
+    },
+    deposito: {
+        abas: ["2,96% Cesta Basica Normal", "5,96% Cesta Basica Simples", "7,70% Normal", "10,70% Simples"],
+        classificar(p) {
+            const out = [];
+            // Cestas: UF + NCM (SEM CFOP). Normal e Simples recebem conteúdo idêntico;
+            // a separação por distribuidora é manual.
+            if (p.uf === ICMS_UF_VALIDO && ncmComecaCom(p.ncm, ICMS_NCM_CESTA)) {
+                out.push("2,96% Cesta Basica Normal");
+                out.push("5,96% Cesta Basica Simples");
+            }
+            if (p.uf === ICMS_UF_VALIDO && ICMS_CFOP_PADRAO.has(p.cfop)) {
+                if (p.cst === "00") out.push("7,70% Normal");
+                if (p.csosn === "101" || p.csosn === "102") out.push("10,70% Simples");
+            }
+            return out;
+        },
+    },
+    deposito_regime_especial: {
+        abas: ["2,19% Cesta Basica Normal", "5,19% Cesta Basica Simples", "4,53 % Normal", "Crédito ICMS Origem (Agr. 35%)", "Crédito ICMS Origem (Agr. 30%)", "7,53% Simples"],
+        classificar(p) {
+            const out = [];
+            // Cestas: UF + NCM (SEM CFOP), idênticas entre si (separação manual).
+            if (p.uf === ICMS_UF_VALIDO && ncmComecaCom(p.ncm, ICMS_NCM_CESTA)) {
+                out.push("2,19% Cesta Basica Normal");
+                out.push("5,19% Cesta Basica Simples");
+            }
+            if (p.uf === ICMS_UF_VALIDO && ICMS_CFOP_PADRAO.has(p.cfop)) {
+                if (p.cst === "00") {
+                    // 4,53%: todos os CST 00 EXCETO os NCM da lista de exclusão.
+                    if (!ncmComecaCom(p.ncm, ICMS_NCM_EXCLUI_453)) out.push("4,53 % Normal");
+                    // Créditos de origem: NCM na respectiva lista.
+                    if (ncmComecaCom(p.ncm, ICMS_NCM_CREDITO35)) out.push("Crédito ICMS Origem (Agr. 35%)");
+                    if (ncmComecaCom(p.ncm, ICMS_NCM_CREDITO30)) out.push("Crédito ICMS Origem (Agr. 30%)");
+                }
+                if (p.csosn === "101" || p.csosn === "102") out.push("7,53% Simples");
+            }
+            return out;
+        },
+    },
 };
 
 // ==================== SISTEMA DE SINCRONIZAÇÃO COMPARTILHADA ====================
@@ -2869,6 +3068,9 @@ async function processIcmsXmls() {
     if (!xmls.length) throw new Error('Nenhum XML encontrado (avulso ou dentro de .zip).');
 
     if (statusText) statusText.textContent = 'Extraindo dados dos XMLs...';
+    // Regras do modelo selecionado (abas de saída + classificação).
+    const regrasModelo = ICMS_MODELO_REGRAS[icmsModeloSelecionado] || ICMS_MODELO_REGRAS.mercadinho;
+
     // Agrupa por CNPJ do destinatário. cnpj -> { produtosPorGrupo, periodos[], razoes[] }
     const empresas = {};
     for (let i = 0; i < xmls.length; i++) {
@@ -2878,7 +3080,7 @@ async function processIcmsXmls() {
 
         const cnpj = (dados && dados.cnpj) ? dados.cnpj : 'sem-cnpj';
         const emp = empresas[cnpj] || (empresas[cnpj] = {
-            produtosPorGrupo: { "Aliquota 1,54%": [], "Aliquota 4%": [], "Aliquota 7%": [] },
+            produtosPorGrupo: Object.fromEntries(regrasModelo.abas.map((a) => [a, []])),
             periodos: [], razoes: [],
         });
         if (dados.periodo) emp.periodos.push(dados.periodo);
@@ -3571,6 +3773,8 @@ function extrairDadosFiltrados(xmlText) {
             console.log(`✓ XML processado - CNPJ: ${cnpj}, Período: ${periodo}, Razão Social: ${razaoSocial.substring(0, 50)}`);
         }
 
+        // Modelo selecionado decide abas + classificação (ver ICMS_MODELO_REGRAS).
+        const regras = ICMS_MODELO_REGRAS[icmsModeloSelecionado] || ICMS_MODELO_REGRAS.mercadinho;
         const todosProdutos = [];
 
         const dets = findAllWithNS(infNFe, 'det');
@@ -3650,71 +3854,25 @@ function extrairDadosFiltrados(xmlText) {
                 }
             }
 
-            // FILTROS baseados no código Python
-            const UF_VALIDO = "23";
-            const CFOP_VALIDOS = new Set(["5101", "5102", "5103", "5105", "5910"]);
-            
-            // Aplicar filtros de UF e CFOP (igual ao código Python)
-            if (uf !== UF_VALIDO || !CFOP_VALIDOS.has(cfop)) {
-                continue; // Pular produtos que não passam nos filtros
-            }
-            
-            // Criar linha do produto. Ordem casa com as colunas D:P do modelo:
+            // Classificação por modelo. classificar() recebe o produto e devolve as abas
+            // (nomes exatos do .xlsx) em que ele entra — pode ser mais de uma (aba FRI +
+            // alíquota, ou as duas cestas). O filtro UF/CFOP vive dentro de classificar(),
+            // pois as abas de cesta básica filtram por NCM sem exigir CFOP.
+            // Ordem da linha casa com as colunas D:P do modelo:
             // D Chave | E UF | F Nº NF-e | G Fornecedor | H CNPJ | I Produto | J NCM |
             // K CFOP | L CST | M FRETE | N DESPESAS | O IPI | P Vl. Produto
             const linha = [chave, uf, numeroNf, fornecedor, cnpjFornecedor, xprod, ncm, cfop, cst || csosn, vFrete, vOutro, vIpi, vprod];
-            
-            // Agrupar produtos conforme GRUPOS do código Python
-            // GRUPOS = {
-            //     "1,54%.txt": {"cst": {"20"}, "csosn": set()},
-            //     "4%.txt": {"cst": {"00"}, "csosn": set()},
-            //     "7%.txt": {"cst": set(), "csosn": {"101", "102"}},
-            // }
-            
-            // Verificar se o produto se encaixa em algum grupo
-            let produtoAdicionado = false;
-            
-            // Grupo 1,54%: CST 20
-            if (cst === "20") {
-                todosProdutos.push({ grupo: "Aliquota 1,54%", linha: linha });
-                produtoAdicionado = true;
-            }
-            
-            // Grupo 4%: CST 00
-            if (cst === "00") {
-                todosProdutos.push({ grupo: "Aliquota 4%", linha: linha });
-                produtoAdicionado = true;
-            }
-            
-            // Grupo 7%: CSOSN 101 ou 102
-            if (csosn === "101" || csosn === "102") {
-                todosProdutos.push({ grupo: "Aliquota 7%", linha: linha });
-                produtoAdicionado = true;
-            }
-            
-            // Debug: log do primeiro produto
-            if (todosProdutos.length === 1) {
-                console.log('Primeiro produto extraído:', linha, 'Grupo:', todosProdutos[0].grupo);
+            for (const aba of regras.classificar({ uf, cfop, cst, csosn, ncm })) {
+                todosProdutos.push({ grupo: aba, linha });
             }
         }
-        
-        // Agrupar produtos por grupo para retornar
-        const produtosPorGrupo = {
-            "Aliquota 1,54%": [],
-            "Aliquota 4%": [],
-            "Aliquota 7%": []
-        };
-        
-        todosProdutos.forEach(item => {
-            if (produtosPorGrupo[item.grupo]) {
-                produtosPorGrupo[item.grupo].push(item.linha);
-            }
+
+        // Agrupar por aba conforme o modelo selecionado.
+        const produtosPorGrupo = {};
+        for (const aba of regras.abas) produtosPorGrupo[aba] = [];
+        todosProdutos.forEach((item) => {
+            if (produtosPorGrupo[item.grupo]) produtosPorGrupo[item.grupo].push(item.linha);
         });
-        
-        console.log(`Total de produtos extraídos deste XML: ${todosProdutos.length}`);
-        console.log(`  - Aliquota 1,54%: ${produtosPorGrupo["Aliquota 1,54%"].length}`);
-        console.log(`  - Aliquota 4%: ${produtosPorGrupo["Aliquota 4%"].length}`);
-        console.log(`  - Aliquota 7%: ${produtosPorGrupo["Aliquota 7%"].length}`);
 
         return { cnpj, periodo, razaoSocial, resultados: produtosPorGrupo };
     } catch (error) {
@@ -3895,12 +4053,7 @@ function workerHintHtml() {
 }
 
 async function detectDirbiWorker() {
-    try {
-        const res = await fetch(DIRBI_WORKER + '/health', { method: 'GET' });
-        if (!res.ok) return null;
-        const j = await res.json();
-        return (j && j.ok) ? j : null;
-    } catch { return null; }
+    return window.workerHealth(DIRBI_WORKER);
 }
 
 // Lê um File como string latin1 (ISO-8859-1) byte-a-byte: cada byte vira 1 char
@@ -4122,14 +4275,14 @@ async function processDirbiNode() {
         setStatus('Iniciando no Node...');
         const pathEl = document.getElementById('dirbi-inbox-path');
         const inboxPath = pathEl && pathEl.value.trim() ? pathEl.value.trim() : undefined;
-        const start = await (await fetch(DIRBI_WORKER + '/dirbi/start', {
+        const start = await (await window.workerFetch(DIRBI_WORKER + '/dirbi/start', {
             method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inboxPath }),
         })).json();
         if (!start.ok || !start.jobId) throw new Error(start.error || 'falha ao iniciar');
         const jobId = start.jobId;
         let st;
         for (;;) {
-            st = await (await fetch(DIRBI_WORKER + '/dirbi/status/' + encodeURIComponent(jobId))).json();
+            st = await (await window.workerFetch(DIRBI_WORKER + '/dirbi/status/' + encodeURIComponent(jobId))).json();
             if (st.error) throw new Error(st.error);
             const prog = st.phase === 'lendo'
                 ? `Lendo XML... ${st.filesDone}/${st.filesTotal} arquivo(s)`
@@ -4139,7 +4292,7 @@ async function processDirbiNode() {
             await new Promise((r) => setTimeout(r, 600));
         }
         // baixa o resultado (xlsx ou zip)
-        const res = await fetch(DIRBI_WORKER + '/dirbi/result/' + encodeURIComponent(jobId));
+        const res = await window.workerFetch(DIRBI_WORKER + '/dirbi/result/' + encodeURIComponent(jobId));
         if (!res.ok) throw new Error('resultado indisponível');
         const blob = await res.blob();
         triggerDownload(blob, st.resultName || 'DIRBI.xlsx');
@@ -7402,10 +7555,20 @@ function _fortesRowsToReportMap(rows) {
     if (!rows || !rows.length) return map;
     let hIdx = -1, iCh = -1, iVal = -1;
     const lim = Math.min(rows.length, 25);
+    // Seleção da coluna de VALOR: o relatório de reconciliação tem DUAS colunas "valor"
+    // ("Valor do Fortes" = valor atual/errado, "Valor do SIGA" = valor correto/alvo). A
+    // autoridade é o SIGA. Preferimos a coluna cujo header cite "siga"/"correto"; senão a
+    // primeira "valor" que NÃO seja "fortes"; por fim qualquer "valor" (CSV SIGA de 1 coluna).
+    const pickValor = (cells) => {
+        let v = cells.findIndex(c => c.includes('valor') && (c.includes('siga') || c.includes('correto')));
+        if (v === -1) v = cells.findIndex(c => c.includes('valor') && !c.includes('fortes'));
+        if (v === -1) v = cells.findIndex(c => c.includes('valor'));
+        return v;
+    };
     for (let h = 0; h < lim; h++) {
         const cells = (rows[h] || []).map(c => String(c == null ? '' : c).toLowerCase());
         const ic = cells.findIndex(c => c.includes('chave'));
-        const iv = cells.findIndex(c => c.includes('valor'));
+        const iv = pickValor(cells);
         if (ic !== -1 && iv !== -1) { hIdx = h; iCh = ic; iVal = iv; break; }
     }
     if (hIdx === -1) return map;
@@ -7587,29 +7750,32 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
         }
         const pnms = body.filter(b => b.t === 'PNM');
         if (!pnms.length) { for (let k = i; k < j; k++) out.push(lines[k]); i = j; continue; }
-        // Despesa = campos do NFM ORIGINAL para TODA nota (mono ou multi-CFOP):
-        // frete(26)+seguro(27)+outras(28)+IPI(31)+ST(32)+serviços(33) − desconto(34). ICMS
-        // importação (29/30) não entra. Cada campo em centavos antes de somar (evita erro de
-        // ponto flutuante). Desconto entra NEGATIVO → aumenta o líquido (relatório 300 +
-        // desconto 50 → líquido 350: o Fortes abate o desconto na entrada).
-        // COMPROVADO PELO RELATÓRIO REAL (A & R, 2026-06-18): em 63/63 notas multi-CFOP com
-        // gabarito, despesa = relatório − Σbruto = despNFM. A hipótese Σidx61 batia em só 42/63
-        // (perdia IPI/ST/desconto reais; idx61 é 0,00 no arquivo). Logo multi-CFOP NÃO muda a
-        // despesa — usa a mesma fonte do mono.
-        // Única especialização multi-CFOP: o produto 1910 (bonificação/doação) recebe VALOR
-        // CHEIO — seu bruto original fica FORA do rateio do líquido; só os demais distribuem o
-        // restante. (Não validável pelo relatório, que só dá o total da nota; testar no Fortes.)
+        // Despesa da nota = Σ do campo DESPESAS das PNM (idx9). O NFM apenas TOTALIZA essa soma;
+        // os campos de despesa do NFM (26/27/28/31/32/33) são 0 na origem. MUDANÇA 2026-07-14:
+        // antes a despesa vinha desses campos do NFM (validado A&R 63 notas, 2026-06-18). A troca
+        // pra PNM idx9 corrige notas cujo NFM não totalizava as despesas (doc total saía sem elas).
+        // Reavaliar A&R: se lá a despesa vinha só do NFM (PNM idx9 = 0), reintroduzir fallback.
         const cNfm = (idx) => Math.round((parseFortesNumber(nfm[idx]) || 0) * 100);
         const cfopOf = (b) => (b.f[2] || '').replace(/\D/g, '');
         const cfopsSet = new Set(pnms.map(cfopOf));
         const isMulti = cfopsSet.size >= 2;
         const fixo = pnms.map(b => isMulti && cfopOf(b) === '1910'); // 1910 multi-CFOP = valor cheio
-        // Nota SÓ-1910 (bonificação/doação pura): sem despesa — valor cheio = total do relatório.
-        // Zera TODOS os campos de despesa do NFM (frete/seguro/outras/IPI/ST/serviços/desconto)
-        // e despC=0, de modo que líquido = total = relatório (decisão do Josué, 2026-06-18).
+        // Nota SÓ-1910 (bonificação/doação pura): zera os campos de despesa do NFM.
+        // Atenção: a despesa (IPI) NÃO é forçada a 0 aqui — ver despC abaixo.
         const so1910 = cfopsSet.size === 1 && cfopsSet.has('1910');
         if (so1910) { [26, 27, 28, 31, 32, 33, 34].forEach(ix => { nfm[ix] = '0.00'; }); }
-        const despC = so1910 ? 0 : (cNfm(26) + cNfm(27) + cNfm(28) + cNfm(31) + cNfm(32) + cNfm(33) - cNfm(34));
+        // Despesa da nota = Σ PNM idx9 (rollup do campo35/idx34), o IPI, contado UMA vez.
+        // Diagnóstico 2026-07-16 (FILIAL02+04, 774 notas): campo32(idx31) == Σidx9 SEMPRE — o IPI
+        // já está no rollup das PNM, então somá-lo de novo dobrava a despesa (2×IPI) nas notas com
+        // IPI>0. campo35(idx34) = IPI + campo33(ICMS-ST retido); usar idx34 reintroduziria o retido
+        // (que a regra manda ZERAR, ver zeraIcmsSt) em 40 notas J&T. Logo a despesa
+        // correta é Σidx9 = IPI sem retido, sem double-count. O total do lançamento continua batendo
+        // o relatório: applyValueCorrection re-soma P + despesa = R (só muda o split produto/despesa).
+        // Vale TAMBÉM na nota só-1910: o Fortes soma o IPI ao líquido em qualquer nota, então os
+        // produtos têm de receber R − IPI. Forçar despC=0 aqui (como antes) dava Σcampo44 = R e o
+        // lançamento entrava com R + IPI (ex.: nota ...1810443906, R=194.31, IPI=3.33 → 197.64).
+        // Só-1910 sem IPI não muda: Σidx9 = 0.
+        const despC = pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[9]) || 0) * 100), 0);
         const totC = Math.round(valorTotal * 100);
         // Desoneração entra SÓ no idx43 da linha do produto — nada de desoneração no NFM nem
         // no INM. Logo líquido = total - despesas (o bruto idx8/38/39 soma ao líquido).
@@ -7637,27 +7803,39 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             const nb = targets[x];
             const s = fsNum2(nb / 100);
             b.f[8] = s; b.f[38] = s; b.f[39] = s;
-            const dc = Math.round((parseFortesNumber(b.f[61]) || 0) * 100);
-            const dnc = Math.round((parseFortesNumber(b.f[42]) || 0) * 100); // desoneração (idx42), não muda
-            b.f[43] = fsNum2((nb + dc - dnc) / 100);
+            // Campo 44 (idx43) = Valor Bruto + Frete/Seguro/Outras (idx61) − Desconto/ICMS
+            // Desonerado (idx42) — fórmula que o Fortes VALIDA. Gravamos idx43 = BRUTO PURO
+            // (idx61=0, idx42=0): campo 44 = bruto + 0 − 0 = idx43 ✓, e INM = Σ idx43 = Σ bruto = P.
+            // A despesa (idx9) NÃO entra no idx43 nem na INM. Motivo (descoberto 2026-07-14): o SIGA
+            // lança a nota SOMANDO a despesa ao total que lê; se a despesa já estivesse no idx43, o
+            // SIGA somaria de novo (R + d, errado). Logo o valor lançado = Σ idx43 = P, e o SIGA
+            // re-soma d → P + d = R (relatório). A despesa vira totalizador do NFM (idx31/34), não
+            // do valor do produto. NÃO reintroduzir despesa no idx43 nem no idx61.
+            b.f[61] = '0.00';
+            b.f[42] = '0.00';
+            b.f[43] = fsNum2(nb / 100);
             const cf = (b.f[2] || '').replace(/\D/g, '');
             const cad = cadastro[cf];
             if (cad) { if (cad.cst) b.f[5] = cad.cst; if (cad.pis) { b.f[36] = cad.pis; b.f[37] = cad.pis; } }
         });
-        // idx28 (outras despesas) é PRESERVADO — agora é fonte de cálculo, não destino.
-        nfm[35] = fsNum2(liqC / 100); // campo 36 = LÍQUIDO (era o total do documento)
-        const lq = fsNum2(liqC / 100);
-        nfm[25] = lq; nfm[51] = lq; nfm[52] = lq;
+        // INM e NFM-líquido = soma do valor do PNM (idx43) — é o que o Fortes valida ("soma do CFOP
+        // do INM difere da soma do valor líquido do PNM") e é por onde o SIGA lança a nota. Como
+        // idx43 agora = bruto + despesa (desconto zerado, despesa movida p/ idx61), Σ idx43 =
+        // produtos + despesas = relatório. Assim INM e idx68 já entram no SIGA com o valor certo.
         const groups = []; const gm = new Map();
+        let liqRealC = 0; // Σ idx43 = valor líquido real da nota (= Σ INM = NFM-líquido)
         pnms.forEach(b => {
             const cf = (b.f[2] || '').replace(/\D/g, ''), cs = b.f[5] || '';
             const key = cf + '|' + cs;
             let g = gm.get(key);
             if (!g) { g = { cf, cs, c: 0 }; gm.set(key, g); groups.push(g); }
-            // INM = Σ bruto do grupo (SÓ idx8, sem idx61 nem desoneração). Como Σ bruto = líquido
-            // por construção (distribuição acima), Σ INM = líquido = nfm[35].
-            g.c += Math.round((parseFortesNumber(b.f[8]) || 0) * 100);
+            const liq43 = Math.round((parseFortesNumber(b.f[43]) || 0) * 100);
+            g.c += liq43; liqRealC += liq43;
         });
+        // A escrita dos totais do NFM (idx25/31/34/35/51/52/68) foi movida para repairNfmTotals
+        // (passo 3 do pipeline, autoridade única e por último). Aqui só reconstruímos as INM:
+        // INM = Σ idx43 = Σ bruto = P por grupo CFOP+CST (é o que o Fortes valida contra o PNM).
+        void liqRealC; // ainda somado acima junto com os grupos; totais do NFM saem em repairNfmTotals
         const tplArr = tpl || ['INM', '0.00', 'CE', '', '', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '0.00', '', '', '', '', '0', '', '', '', '', '', '', 'N', ''];
         const newInm = groups.map(g => {
             const f = tplArr.slice();
@@ -7673,8 +7851,9 @@ function applyValueCorrection(lines, reportMap, cadastro, summary) {
             if (b.t === 'INM_SLOT') { newInm.forEach(s => out.push(s)); }
             else out.push(b.t === 'PNM' ? b.f.join('|') : b.raw);
         });
-        const gsum = groups.reduce((a, g) => a + g.c, 0);
-        if (Math.abs(gsum - liqC) > 1) summary.recheck.push({ chave, esperado: liqC / 100, obtido: gsum / 100 });
+        // Checagem: a distribuição do bruto (idx8) tem de somar liqC (invariante da etapa acima).
+        const bsum = pnms.reduce((a, b) => a + Math.round((parseFortesNumber(b.f[8]) || 0) * 100), 0);
+        if (Math.abs(bsum - liqC) > 1) summary.recheck.push({ chave, esperado: liqC / 100, obtido: bsum / 100 });
         summary.notasCorrigidas++;
         i = j;
     }
@@ -7714,15 +7893,219 @@ function normalizeNoteOrder(lines) {
     return out;
 }
 
+// Reparo/gravação dos totalizadores do NFM a partir das PNM da mesma nota. É a AUTORIDADE
+// ÚNICA dos totais do NFM (roda por último no pipeline). Modelo 2026-07-14 (SIGA re-soma a
+// despesa ao total que lê), com P = Σ PNM idx8 e d = Σ PNM idx9:
+//   NFM idx25 (campo 26) = P        → é ONDE O SIGA LÊ o total do documento; soma d → P+d = R ✓
+//   NFM idx35 (campo 36) = P − d    → o manual chama este de "total do documento", mas o SIGA
+//                                     NÃO o lê (erro do sistema contábil: lê o campo 26, não o
+//                                     36). Causa das falhas anteriores. Fica com P − d.
+//   NFM idx31 (DESPESA)                  = d
+//   NFM idx34 (DESCONTO/DESPESAS TOTAL)  = d
+//   NFM idx51 / idx52 / idx68 (espelhos) = P − d
+// idx25 = P também é o "valor total dos produtos" correto (= Σ idx8 pós-ajuste), então não há
+// conflito semântico — só o idx35 carrega P − d. Todo total é gravado JÁ REDUZIDO de d (exceto
+// o idx25, que o SIGA re-soma), pro valor lançado cair certo. Pura e idempotente (idx8/idx9 não
+// mudam entre execuções): nota já correta sai idêntica. Roda ANTES e DEPOIS do ajuste.
+function repairNfmTotals(lines) {
+    const out = lines.slice();
+    const cNum = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
+    let i = 0;
+    while (i < out.length) {
+        if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
+        let j = i + 1;
+        while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
+        let prodC = 0, despC = 0, temPnm = false;
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('PNM|') !== 0) continue;
+            const f = out[k].split('|');
+            prodC += cNum(f[8]); // idx8 = valor total do produto  → Σ = P
+            despC += cNum(f[9]); // idx9 = despesas do produto     → Σ = d
+            temPnm = true;
+        }
+        const nfm = out[i].split('|');
+        if (temPnm && nfm.length > 35) {
+            const P = fsNum2(prodC / 100);                 // P = Σ idx8
+            const pMinusD = fsNum2((prodC - despC) / 100); // P − d
+            const dStr = fsNum2(despC / 100);              // d (despesa)
+            nfm[25] = P;        // campo 26: o SIGA lê AQUI o total → soma d → R
+            nfm[31] = dStr;
+            nfm[34] = dStr;
+            nfm[35] = pMinusD;  // campo 36: "doc total" do manual (SIGA ignora)
+            if (nfm.length > 52) { nfm[51] = pMinusD; nfm[52] = pMinusD; }
+            if (nfm.length > 68) nfm[68] = pMinusD;
+            out[i] = nfm.join('|');
+        }
+        i = j;
+    }
+    return out;
+}
+
+// Limpeza (só visão, NÃO altera cálculo): o ERP de origem preenche dois campos-lixo no fim
+// das linhas PNM (ex.: "...|1.1858|9|||||N|" — uma alíquota e um código), que QUEBRAM a
+// importação no Fortes/SIGA. Apaga apenas esses dois campos, deixando a cauda "...|||||||N|".
+// Ancorado no FIM da linha (independe da contagem de campos) e idempotente: se já estiverem
+// vazios, sai idêntico. Só toca linhas PNM cuja cauda case o padrão exato (dois valores + 4
+// campos vazios + "N"); qualquer outra fica intacta. Nenhum campo de cálculo é tocado.
+function blankPnmTailJunk(lines) {
+    const re = /\|[^|]*\|[^|]*(\|\|\|\|\|N\|?)$/;
+    return lines.map(L => (L.indexOf('PNM|') === 0 ? L.replace(re, '||$1') : L));
+}
+
+// Normaliza linhas INM ao formato canônico do Fortes: o valor do resumo (idx1, 2º campo) deve
+// aparecer TAMBÉM no idx9 (10º campo), e os campos 6/7/8/9 (idx5/6/7/8) devem ser 0.00. Corrige
+// INM "mal formatada" da fonte (valor espalhado em idx5/idx9). Idempotente: INM já no formato
+// (as reconstruídas por applyValueCorrection, onde idx1==idx9 e idx5..8=0) saem idênticas. Não
+// altera valor de cálculo — só realoca o MESMO valor (idx1) pro campo certo e zera os intermediários.
+// INM canônica: o subtotal de cada CFOP+CST (idx1 e idx9) DEVE ser a soma do campo44 (idx43) de
+// TODOS os PNM daquele CFOP+CST na nota — recalculado na hora, em TODA nota (inclusive as que não
+// estão no relatório). Corrige INM que vieram da origem com valor "pronto" divergente (ex.: ICMS-ST
+// embutido no INM mas não no campo44). Também zera os campos 6/7/8/9 (idx5..8). Idempotente: INM já
+// correta (as reconstruídas por applyValueCorrection, idx1=Σidx43) sai idêntica. INM sem PNM
+// correspondente (grupo inexistente) NÃO é tocada. Grupo: PNM (idx2 CFOP, idx5 CST) ↔ INM (idx3, idx19).
+// "Valor líquido do PNM" na conta do Fortes = campo44 (idx43) + IPI (idx9) + ICMS-ST (idx14)
+// + FCP-ST (idx89). É contra a SOMA disso, por CFOP, que o Fortes valida o INM — e acusava
+// "A soma dos valores do CFOP X do registro INM (a) difere da soma do valor líquido do
+// registro PNM (b)" quando o INM levava só o campo44. Índices confirmados por dump do .fs.
+function pnmLiquido(f) {
+    const n = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
+    return n(f[43]) + n(f[9]) + n(f[14]) + n(f[89]);
+}
+
+function rebuildInmFromPnm(lines) {
+    const out = lines.slice();
+    const cCents = (v) => Math.round((parseFortesNumber(v) || 0) * 100);
+    let i = 0;
+    while (i < out.length) {
+        if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
+        let j = i + 1;
+        while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
+        // Soma idx43 (campo44) das PNM agrupada por CFOP+CST-ICMS (bucket) e, dentro dele, por
+        // CST-PIS/COFINS (idx35/idx36). Uma nota pode ter VÁRIOS INM no mesmo CFOP+CST-ICMS
+        // separados só pelo CST de PIS/COFINS — mas o INM NÃO carrega esse CST. Distribuição
+        // Σ-preservante: o nº de INM da origem (K) manda; as somas por grupo (G, na ordem de 1ª
+        // aparição das PNM) são repartidas entre os K INM daquele bucket sem perder nem duplicar:
+        //  - K == G  : 1 grupo por INM (preserva o split — ex.: nota com 2 INM = 170.40 e 600.60);
+        //  - K < G   : primeiros K-1 INM levam 1 grupo; o último absorve a soma dos grupos restantes
+        //              (Fortes às vezes emite 1 só INM cobrindo vários grupos PIS → não pode perder);
+        //  - K > G   : primeiros G INM levam os grupos; os INM extras (duplicados) zeram.
+        // Em todos os casos Σ(INM do bucket) == Σ(idx43 das PNM do bucket).
+        const buckets = new Map(); // "cfop|cstIcms" -> Map("pis|cofins" -> centavos)
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('PNM|') !== 0) continue;
+            const f = out[k].split('|');
+            const bk = (f[2] || '').replace(/\D/g, '') + '|' + (f[5] || '');
+            const pk = (f[36] || '') + '|' + (f[37] || '');
+            if (!buckets.has(bk)) buckets.set(bk, new Map());
+            const g = buckets.get(bk);
+            g.set(pk, (g.get(pk) || 0) + pnmLiquido(f));
+        }
+        // Conta os INM de cada bucket (K) pra saber como repartir as somas de grupo.
+        const inmCount = new Map();
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('INM|') !== 0) continue;
+            const f = out[k].split('|');
+            if (f.length <= 19) continue;
+            const bk = (f[3] || '').replace(/\D/g, '') + '|' + (f[19] || '');
+            inmCount.set(bk, (inmCount.get(bk) || 0) + 1);
+        }
+        // Monta a fila de valores (em centavos) a atribuir por bucket, já colapsando/zerando
+        // conforme K vs G, de modo que a soma da fila == soma dos grupos.
+        const queues = new Map();
+        for (const [bk, g] of buckets) {
+            const G = Array.from(g.values());
+            const K = inmCount.get(bk) || 0;
+            let q;
+            if (K === 0) { q = []; }
+            else if (K >= G.length) { q = G.concat(new Array(K - G.length).fill(0)); }
+            else { q = G.slice(0, K - 1); q.push(G.slice(K - 1).reduce((a, b) => a + b, 0)); }
+            queues.set(bk, q);
+        }
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('INM|') !== 0) continue;
+            const f = out[k].split('|');
+            if (f.length <= 19) continue;
+            const bk = (f[3] || '').replace(/\D/g, '') + '|' + (f[19] || '');
+            const q = queues.get(bk);
+            if (!q || !q.length) continue; // INM sem PNM do mesmo bucket: não mexe
+            const tt = fsNum2(q.shift() / 100);
+            // Formato canônico do INM: valor no idx1 E no idx9 (campo10=campo2); campos 6/7/8/9
+            // (idx5..8 = base/alíq/valor de PIS/COFINS/ST) zerados. Sem isso, sobra lixo da origem.
+            f[1] = tt; f[9] = tt;
+            f[5] = '0.00'; f[6] = '0.00'; f[7] = '0.00'; f[8] = '0.00';
+            out[k] = f.join('|');
+        }
+        i = j;
+    }
+    return out;
+}
+
+// Checagens proativas nas linhas PAR (participantes), independentes do ajuste de valores:
+//  - campo 6 (idx5) = Inscrição Estadual: tem 9 dígitos. Se for só dígitos e tiver 1..8, faz
+//    zero-pad à esquerda até 9 (ex.: "67537570" → "067537570"). ISENTO/vazio/≥9 ficam intactos.
+//  - campo 18 (idx17) = número do endereço: não pode conter letra. Se tiver QUALQUER letra
+//    (ex.: "S/N", "SN"), esvazia o campo. Só-dígitos fica como está.
+function sanitizePar(lines) {
+    return lines.map(L => {
+        if (L.indexOf('PAR|') !== 0) return L;
+        const f = L.split('|');
+        if (f.length > 5 && /^\d{1,8}$/.test(f[5])) f[5] = f[5].padStart(9, '0');
+        if (f.length > 17 && /[A-Za-z]/.test(f[17])) f[17] = '';
+        return f.join('|');
+    });
+}
+
+// ICMS-ST fora do cálculo (2026-07-16): nas notas do relatório, zera o ICMS-ST tanto na PNM
+// (campo 15 = idx14) quanto no NFM (campo 33 = idx32, que é a soma dos campo15 das PNM).
+// PNM campo15: o Fortes SOMA esse campo ao valor do produto pra formar o "líquido do PNM". Nas
+// notas ajustadas o INM é reconstruído como Σ idx43, então o líquido tem de ser idx43 (campo15=0)
+// pra bater o INM. NFM campo33: não deve inflar a despesa/total do lançamento (decisão p/ TODAS as
+// empresas). Notas FORA do relatório NÃO são tocadas — o INM delas vem da origem já COM o ST
+// embutido (INM = idx43 + campo15), então manter o campo15 original é o que valida. Chave: NFM idx66.
+function zeraIcmsSt(lines) {
+    const out = lines.slice();
+    let i = 0;
+    while (i < out.length) {
+        if (out[i].indexOf('NFM|') !== 0) { i++; continue; }
+        let j = i + 1;
+        while (j < out.length && out[j].indexOf('NFM|') !== 0 && out[j].indexOf('TRA|') !== 0) j++;
+        const nfm = out[i].split('|');
+        if (nfm.length > 32) { nfm[32] = '0.00'; out[i] = nfm.join('|'); }
+        for (let k = i + 1; k < j; k++) {
+            if (out[k].indexOf('PNM|') === 0) {
+                const f = out[k].split('|');
+                if (f.length > 14) f[14] = '0.00';  // campo15 = ICMS-ST (Retido)
+                if (f.length > 89) f[89] = '0.00';  // FCP-ST (entra no líquido que o Fortes confere)
+                out[k] = f.join('|');
+            } else if (out[k].indexOf('INM|') === 0) {
+                const f = out[k].split('|');
+                if (f.length > 32) { f[32] = '0.00'; out[k] = f.join('|'); } // FCP-ST do resumo
+            }
+        }
+        i = j;
+    }
+    return out;
+}
+
 function runFortesCorrection(fsText, reportMap, cadastro, instructionsText) {
     const parsed = parseFortesFile(fsText);
     let lines = parsed.lines.slice();
     const summary = { notasCorrigidas: 0, notasSemRelatorio: [], grupo1: 0, grupo2: 0, recheck: [], brutoInviavel: [] };
     if (instructionsText && instructionsText.trim()) lines = applyInstructionsLean(lines, instructionsText, summary);
     applyGrupo1Scan(lines, summary);
-    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary);
-    lines = normalizeNoteOrder(lines); // garante NFM→PNM→INM→SNM→DNM em TODA nota
+    lines = repairNfmTotals(lines); // passo 1: NFM totaliza produtos + despesas das PNM
+    lines = applyValueCorrection(lines, reportMap, cadastro || {}, summary); // passo 2: bate doc total c/ relatório
+    lines = repairNfmTotals(lines); // passo 3: re-totaliza pós-ajuste (doc total volta a bater PNM)
+    lines = normalizeNoteOrder(lines); // passo 4: garante NFM→PNM→INM→SNM→DNM em TODA nota
     lines = fixTraCount(lines);
+    // ICMS-ST/FCP-ST zerados ANTES do rebuild: o INM é Σ do líquido das PNM, então o zeramento
+    // tem de acontecer primeiro pra INM e líquido fecharem. Vale em TODAS as notas (não só as do
+    // relatório): o Fortes recusa o campo15 (ICMS Retido) preenchido, e como o rebuild roda depois,
+    // o INM sai coerente com o líquido zerado em qualquer nota.
+    lines = zeraIcmsSt(lines); // passo 5a: ICMS-ST (PNM campo15 + NFM campo33) e FCP-ST = 0.00 em toda nota
+    lines = rebuildInmFromPnm(lines); // passo 5b: INM = Σ líquido (campo44+IPI+ICMS-ST+FCP-ST) por CFOP+CST+CST-PIS/COFINS
+    lines = blankPnmTailJunk(lines); // passo 6: apaga campos-lixo no fim das PNM (só visão)
+    lines = sanitizePar(lines); // passo 7: PAR — IE (idx5) pad→9 díg; nº endereço (idx17) sem letras
     return { text: lines.join('\n'), summary };
 }
 
@@ -9407,12 +9790,7 @@ function createBaixarNfcePage(mainContent) {
     }
 
     async function detectWorker() {
-        try {
-            const res = await fetch(WORKER_BASE + '/health', { method: 'GET' });
-            if (!res.ok) return false;
-            const j = await res.json();
-            return !!(j && j.ok);
-        } catch { return false; }
+        return !!(await window.workerHealth(WORKER_BASE));
     }
 
 
@@ -9421,7 +9799,7 @@ function createBaixarNfcePage(mainContent) {
         if (!companiesPayload || !companiesPayload.length) return false;
         let resp;
         try {
-            const res = await fetch(WORKER_BASE + '/nfce/start', {
+            const res = await window.workerFetch(WORKER_BASE + '/nfce/start', {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
@@ -9469,7 +9847,7 @@ function createBaixarNfcePage(mainContent) {
         let allDone = true;
         for (const jobId of jobIds) {
             try {
-                const res = await fetch(WORKER_BASE + '/nfce/status/' + encodeURIComponent(jobId));
+                const res = await window.workerFetch(WORKER_BASE + '/nfce/status/' + encodeURIComponent(jobId));
                 if (!res.ok) { allDone = false; continue; }
                 const st = await res.json();
                 applyStatus(jobId, st);
@@ -9495,7 +9873,7 @@ function createBaixarNfcePage(mainContent) {
     // Baixa o ZIP de uma empresa do worker (blob) e entrega via fila de downloads.
     async function downloadCompanyZip(jobId, id, zipName) {
         try {
-            const res = await fetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
+            const res = await window.workerFetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
             if (!res.ok) return;
             const blob = await res.blob();
             enqueueDownload(blob, zipName || ('NFCe_' + id + '.zip'));
@@ -9787,6 +10165,910 @@ function createBaixarNfcePage(mainContent) {
     });
 }
 //---------------------------------- FIM Baixar NFCe ----------------------------------//
+
+//---------------------------------- INÍCIO Baixar NFe (XML) ----------------------------------//
+// Espelha createBaixarNfcePage com deltas: SEM token JWT (usa certificado A1
+// .pfx+senha por empresa), FILTRO modelo 55, rotas /nfe/*, SEM fallback no
+// browser (mTLS+SOAP só roda no worker Node).
+// ponytail: mirror deliberado do closure de NFCe. Helpers de anel/polling/parser
+// são privados àquela função; dedup exigiria extrair ~400 linhas de UI stateful
+// de uma página em produção (regressão no download NFCe que já funciona). A
+// duplicação fica contida nesta função. Upgrade: extrair helpers puros p/ escopo
+// de módulo num refactor dedicado sobre AS DUAS páginas, com teste manual de ambas.
+function createBaixarNfePage(mainContent) {
+    const CONCURRENCY = 2; // SEFAZ limita consumo por CNPJ — conservador (ver Task 6)
+
+    mainContent.innerHTML = `
+        <h1>Baixar NFe (XML)</h1>
+        <style>
+            .bn-shell { max-width: 920px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.4rem; }
+            .bn-dropzone { position: relative; min-height: 200px; border: 2px dashed var(--color-info-dark); border-radius: var(--card-border-radius); background: var(--color-white); box-shadow: var(--box-shadow); padding: 1.2rem; cursor: pointer; transition: border-color .2s ease, background .2s ease; display: flex; }
+            .bn-dropzone:hover, .bn-dropzone.bn-dragover { border-color: var(--color-primary); background: rgba(115,128,243,0.05); }
+            .bn-dropzone.has-reports { cursor: default; }
+            .bn-dz-empty { margin: auto; text-align: center; color: var(--color-info-dark); display: flex; flex-direction: column; align-items: center; gap: 0.6rem; pointer-events: none; }
+            .bn-dz-empty .material-icons-sharp { font-size: 3rem; opacity: 0.7; }
+            .bn-report-grid { display: grid; gap: 0.9rem; width: 100%; grid-auto-rows: 1fr; }
+            .bn-report-card { background: rgba(115,128,243,0.07); border: 1px solid rgba(115,128,243,0.35); border-radius: 0.8rem; padding: 1rem; display: flex; flex-direction: column; justify-content: center; gap: 0.45rem; min-height: 78px; animation: bnPop .28s cubic-bezier(0.16,1,0.3,1); transition: transform .35s cubic-bezier(0.16,1,0.3,1), opacity .35s ease; }
+            .bn-report-card .bn-rc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
+            .bn-report-card .bn-rc-count { font-size: 0.82rem; color: var(--color-primary); font-weight: 600; }
+            .bn-report-card .bn-rc-emp { font-size: 0.74rem; color: var(--color-info-dark); }
+            .bn-report-card.bn-merge { transform: scale(0.6); opacity: 0; }
+            @keyframes bnPop { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+            .bn-cert-list { display: flex; flex-direction: column; gap: 0.7rem; }
+            .bn-cert-card { background: var(--color-white); border: 1px solid rgba(115,128,243,0.30); border-left: 4px solid var(--color-primary); border-radius: 0.7rem; box-shadow: var(--box-shadow); padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; transition: transform .35s cubic-bezier(0.16,1,0.3,1), opacity .35s ease, border-color .2s ease; }
+            .bn-cert-card.bn-missing { border-left-color: var(--color-danger); border-color: var(--color-danger); }
+            .bn-cert-card.bn-merge { transform: scale(0.6); opacity: 0; }
+            .bn-cc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+            .bn-cc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
+            .bn-cc-count { font-size: 0.76rem; color: var(--color-primary); font-weight: 600; white-space: nowrap; }
+            .bn-cc-fields { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+            .bn-cc-file { flex: 1 1 220px; display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; cursor: pointer; color: var(--color-info-dark); font-size: 0.82rem; background: transparent; transition: border-color .2s ease, color .2s ease; overflow: hidden; }
+            .bn-cc-file:hover { border-color: var(--color-primary); }
+            .bn-cc-file.has-file { border-color: var(--color-success); color: var(--color-success); }
+            .bn-cc-file .material-icons-sharp { font-size: 1.1rem; }
+            .bn-cc-fname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .bn-cc-pass, .bn-cc-emp { flex: 1 1 180px; padding: 0.55rem 0.7rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-size: 0.85rem; }
+            .bn-cc-emp.has-emp { border-color: var(--color-success); }
+            .bn-cc-hint { font-size: 0.74rem; color: var(--color-info-dark); }
+            .bn-cc-hint.bn-warn { color: var(--color-danger); font-weight: 600; }
+            .bn-start-btn { padding: 0.8rem 1.6rem; border: none; border-radius: 0.6rem; background: var(--color-success); color: #fff; cursor: pointer; font-weight: 700; font-size: 0.95rem; align-self: flex-start; transition: opacity .2s ease, transform .1s ease; }
+            .bn-start-btn:disabled { opacity: 0.5; cursor: default; }
+            .bn-start-btn:not(:disabled):active { transform: translateY(1px); }
+            #bn-stage-download { animation: bnFadeIn .45s ease; }
+            @keyframes bnFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+            .bn-unified { position: relative; background: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: 1.4rem 1.4rem 0.9rem; display: flex; flex-direction: column; gap: 1rem; min-height: 300px; }
+            .bn-rings { display: grid; gap: 1.2rem 1.4rem; justify-items: center; align-items: start; flex: 1; padding-top: 0.4rem; }
+            .bn-ring-item { display: flex; flex-direction: column; align-items: center; gap: 0.55rem; width: 100%; }
+            .bn-ring { position: relative; width: 100%; max-width: 200px; aspect-ratio: 1 / 1; container-type: inline-size; }
+            .bn-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            .bn-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
+            .bn-ring .bn-track { stroke: rgba(125,141,161,0.20); }
+            .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .1s linear; }
+            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .1s linear; }
+            .bn-ring-item.done .bn-arc-yellow { stroke: #2bb673; }
+            .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+            .bn-ring-pct { font-weight: 700; color: var(--color-dark); font-size: clamp(0.95rem, 18cqw, 1.7rem); }
+            .bn-ring-label { font-size: 0.78rem; color: var(--color-dark); text-align: center; line-height: 1.25; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+            .bn-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid rgba(125,141,161,0.18); padding-top: 0.7rem; }
+            .bn-footer-text { font-size: 0.85rem; color: var(--color-dark); font-weight: 600; }
+            .bn-footer-text .bn-err { color: var(--color-danger); }
+            .bn-mini-ring { position: relative; width: 34px; height: 34px; flex: 0 0 auto; }
+            .bn-mini-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            .bn-mini-ring circle { fill: none; stroke-width: 5; stroke-linecap: round; }
+            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+            .bn-unified:hover .bn-tooltip { opacity: 1; }
+            .bn-tooltip-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        </style>
+        <div class="bn-shell">
+            <div id="bn-stage-select" style="display: flex; flex-direction: column; gap: 1.2rem;">
+                <div id="bn-dropzone" class="bn-dropzone">
+                    <div id="bn-dz-empty" class="bn-dz-empty">
+                        <span class="material-icons-sharp">cloud_upload</span>
+                        <div style="font-weight: 600; color: var(--color-dark);">Clique ou arraste os relatórios</div>
+                        <div style="font-size: 0.82rem;">Um ou mais arquivos .xls / .xlsx (SIGA/SIGET) — só chaves modelo 55 (NFe) entram</div>
+                    </div>
+                    <div id="bn-report-grid" class="bn-report-grid" style="display: none;"></div>
+                </div>
+                <input type="file" id="bn-file" accept=".xls,.xlsx,.csv,.txt" multiple style="display: none;">
+
+                <div id="bn-cert-area" style="display: none; flex-direction: column; gap: 0.5rem;">
+                    <div style="font-size: 0.86rem; color: var(--color-dark); font-weight: 600;">Empresa e certificado A1 por relatório</div>
+                    <div style="font-size: 0.78rem; color: var(--color-info-dark);">Informe a <b>empresa dona do certificado</b> (a que recebeu as notas), anexe o <b>.pfx / .p12</b> e a senha. Em relatório de entradas o CNPJ das chaves é o do <b>fornecedor</b>, por isso a empresa precisa ser dita aqui. O certificado trafega só até o worker local (127.0.0.1) e nunca é gravado em disco.</div>
+                    <datalist id="bn-empresas"></datalist>
+                    <div id="bn-cert-list" class="bn-cert-list"></div>
+                </div>
+
+                <div id="bn-quota-hint" style="font-size: 0.8rem; min-height: 1rem;"></div>
+                <div id="bn-worker-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
+
+                <button id="bn-start" type="button" class="bn-start-btn" disabled>Iniciar Download NFe</button>
+            </div>
+
+            <div id="bn-stage-download" style="display: none;">
+                <div id="bn-unified" class="bn-unified">
+                    <div id="bn-tooltip" class="bn-tooltip"></div>
+                    <div id="bn-rings" class="bn-rings"></div>
+                    <div class="bn-footer">
+                        <span id="bn-footer-text" class="bn-footer-text">0 erros | 0%</span>
+                        <div id="bn-mini-ring" class="bn-mini-ring"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // ---------- refs de DOM ----------
+    const fileInput = document.getElementById('bn-file');
+    const dropzone = document.getElementById('bn-dropzone');
+    const dzEmpty = document.getElementById('bn-dz-empty');
+    const reportGrid = document.getElementById('bn-report-grid');
+    const certArea = document.getElementById('bn-cert-area');
+    const certList = document.getElementById('bn-cert-list');
+    const startBtn = document.getElementById('bn-start');
+    const stageSelect = document.getElementById('bn-stage-select');
+    const stageDownload = document.getElementById('bn-stage-download');
+    const ringsWrap = document.getElementById('bn-rings');
+    const footerText = document.getElementById('bn-footer-text');
+    const miniRingWrap = document.getElementById('bn-mini-ring');
+    const tooltipEl = document.getElementById('bn-tooltip');
+
+    // ---------- estado ----------
+    // { id, fileName, keys:[chave modelo 55], meta:Map<chave,{nNF,dhEmi,vNF}> }
+    let reports = [];
+    let reportSeq = 0;
+    // Empresas no estágio de download (1 anel por grupo cnpj+mês).
+    const companies = new Map();
+    // Certificado por RELATÓRIO (não por CNPJ da chave): reportId -> { rid, fileName,
+    // cnpj, keys:Set, pfxFile, pfxName, senha }.
+    // Por que por relatório: a chave carrega o CNPJ do EMITENTE. Num relatório de
+    // entradas isso é o fornecedor — 346 chaves deram 102 CNPJs distintos no teste real,
+    // o que pediria 102 certificados. O CNPJ interessado não está no dado; quem sabe é
+    // o usuário. Um relatório do portal da SEFAZ é sempre de uma empresa só.
+    const certGroups = new Map();
+    // CNPJ(14) -> Razão Social (contribuintes cadastrados).
+    const contributorsByCnpj = new Map();
+
+    // ---------- helpers básicos ----------
+    const cleanDigits = (s) => String(s || '').replace(/\D/g, '');
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+    const isModelo55 = (chave) => chave.length === 44 && chave.substring(20, 22) === '55';
+
+    function parseKeys(text) {
+        const out = [];
+        const seen = new Set();
+        if (!text) return out;
+        const re = /\d[\d.\-\/]{38,}\d/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            const k = m[0].replace(/\D/g, '');
+            if (k.length !== 44) continue;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(k);
+        }
+        return out;
+    }
+
+    // ---------- parser de relatório SIGA/SIGET (réplica local, como no NFCe) ----------
+    function parseCsvLineBN(line) {
+        const out = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+                else cur += ch;
+            } else {
+                if (ch === '"') inQuotes = true;
+                else if (ch === ',') { out.push(cur); cur = ''; }
+                else cur += ch;
+            }
+        }
+        out.push(cur);
+        return out.map((s) => s.trim());
+    }
+
+    function normalizeDate(s) {
+        const t = String(s || '').trim();
+        let m = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return m[1] + '-' + m[2] + '-' + m[3];
+        m = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1];
+        m = t.match(/(\d{2})-(\d{2})-(\d{4})/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1];
+        return t.slice(0, 10);
+    }
+
+    const cellStr = (c) => String(c == null ? '' : c).trim();
+    function parseReportRows(rows) {
+        if (!rows || rows.length < 2) return null;
+        let headerIdx = -1, header = null, idxChave = -1, idxValor = -1;
+        const scanLimit = Math.min(rows.length, 25);
+        for (let h = 0; h < scanLimit; h++) {
+            const cells = (rows[h] || []).map((c) => cellStr(c).toLowerCase());
+            const ic = cells.findIndex((c) => c.includes('chave'));
+            const iv = cells.findIndex((c) => c.includes('valor'));
+            if (ic !== -1 && iv !== -1) { headerIdx = h; header = cells; idxChave = ic; idxValor = iv; break; }
+        }
+        if (headerIdx === -1) return null;
+        const idxNum = header.findIndex((h) => h.includes('número') || h.includes('numero'));
+        const idxData = header.findIndex((h) => h.includes('data') || h.includes('emiss'));
+        const map = new Map();
+        for (let i = headerIdx + 1; i < rows.length; i++) {
+            const cols = rows[i] || [];
+            const key = cleanDigits(cellStr(cols[idxChave]));
+            if (!/^\d{44}$/.test(key)) continue;
+            const vNF = cellStr(cols[idxValor]);
+            const nNF = idxNum !== -1 ? cellStr(cols[idxNum]) : '';
+            const dhEmi = idxData !== -1 ? normalizeDate(cellStr(cols[idxData])) : '';
+            map.set(key, { nNF, dhEmi, vNF });
+        }
+        return map.size ? map : null;
+    }
+
+    function parseReportText(text) {
+        const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim() !== '');
+        return parseReportRows(lines.map((l) => parseCsvLineBN(l)));
+    }
+
+    function parseReportWorkbook(arrayBuffer) {
+        if (typeof XLSX === 'undefined') return { map: null, text: '' };
+        let wb;
+        try { wb = XLSX.read(arrayBuffer, { type: 'array' }); } catch (e) { return { map: null, text: '' }; }
+        let bestMap = null;
+        let dump = '';
+        for (const name of wb.SheetNames) {
+            const sheet = wb.Sheets[name];
+            if (!sheet) continue;
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+            dump += rows.map((r) => (r || []).join('\t')).join('\n') + '\n';
+            if (!bestMap) { const m = parseReportRows(rows); if (m) bestMap = m; }
+        }
+        return { map: bestMap, text: dump };
+    }
+
+    // Lê arquivos → relatórios. Filtra chaves para modelo 55 (NFe) já aqui.
+    async function readFiles(files) {
+        const out = [];
+        for (const f of files) {
+            try {
+                const name = (f.name || '').toLowerCase();
+                const isBinary = name.endsWith('.xls') || name.endsWith('.xlsx');
+                let reportMap = null, fallbackText = '';
+                if (isBinary) {
+                    const parsed = parseReportWorkbook(await f.arrayBuffer());
+                    reportMap = parsed.map; fallbackText = parsed.text;
+                } else {
+                    fallbackText = await f.text();
+                    reportMap = parseReportText(fallbackText);
+                }
+                const meta = new Map();
+                let keys = [];
+                if (reportMap) { reportMap.forEach((m, k) => { if (isModelo55(k)) { meta.set(k, m); keys.push(k); } }); }
+                else { keys = parseKeys(fallbackText).filter(isModelo55); }
+                if (!keys.length) { console.warn('Nenhuma chave modelo 55 em ' + f.name); continue; }
+                out.push({ id: ++reportSeq, fileName: f.name, keys, meta });
+            } catch (e) {
+                console.warn('Falha ao ler ' + f.name + ': ' + (e && e.message));
+            }
+        }
+        return out;
+    }
+
+    // pfx File -> base64 (ArrayBuffer → binário → btoa). Certificados A1 são pequenos.
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => {
+                try {
+                    const bytes = new Uint8Array(fr.result);
+                    let bin = '';
+                    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                    resolve(btoa(bin));
+                } catch (e) { reject(e); }
+            };
+            fr.onerror = () => reject(fr.error || new Error('Falha ao ler o certificado'));
+            fr.readAsArrayBuffer(file);
+        });
+    }
+
+    // ---------- chaves/mês (idêntico ao NFCe) ----------
+    const RING_R = 52, RING_C = 2 * Math.PI * RING_R;
+    const MINI_R = 14.5, MINI_C = 2 * Math.PI * MINI_R;
+    let miniBlue = null, miniYellow = null;
+
+    const clamp01 = (x) => Math.max(0, Math.min(1, x));
+    const cnpjFromKey = (chave) => String(chave).substring(6, 20);
+    function ymFromKey(chave) {
+        const aa = String(chave).substring(2, 4);
+        const mmNum = parseInt(String(chave).substring(4, 6), 10);
+        const mm = (mmNum >= 1 && mmNum <= 12) ? String(mmNum).padStart(2, '0') : '00';
+        return { mm, yyyy: '20' + aa };
+    }
+    function monthYearFromKey(chave) { const { mm, yyyy } = ymFromKey(chave); return mm + '-' + yyyy; }
+    function yyyymmFromKey(chave) { const { mm, yyyy } = ymFromKey(chave); return yyyy + mm; }
+    const sanitizeFileName = (s) => String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'EMPRESA';
+    const setArc = (circleEl, frac, circ) => { if (circleEl) circleEl.style.strokeDashoffset = String(circ * (1 - clamp01(frac))); };
+    const cnpjLabel = (cnpj) => 'CNPJ ' + (typeof formatCNPJ === 'function' ? formatCNPJ(cnpj) : cnpj);
+
+    // ---------- estágio de seleção: cards de relatório ----------
+    function renderReportCards() {
+        if (!reports.length) {
+            reportGrid.style.display = 'none';
+            dzEmpty.style.display = 'flex';
+            dropzone.classList.remove('has-reports');
+            return;
+        }
+        dzEmpty.style.display = 'none';
+        reportGrid.style.display = 'grid';
+        dropzone.classList.add('has-reports');
+        const n = reports.length;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+        reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+        reportGrid.innerHTML = reports.map((r) => {
+            // Emitentes das notas — 1 sugere saídas, vários sugerem entradas. Não é a
+            // empresa dona do certificado: essa é escolhida no card do certificado.
+            const emitentes = cnpjsDoRelatorio(r);
+            const nEmit = emitentes.size;
+            const emp = nEmit === 1
+                ? (contributorsByCnpj.get(Array.from(emitentes)[0]) || cnpjLabel(Array.from(emitentes)[0]))
+                : (nEmit ? nEmit + ' emitentes distintos' : '');
+            const nKeys = r.keys.length;
+            return '<div class="bn-report-card">' +
+                '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
+                '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + ' modelo 55</div>' +
+                (emp ? '<div class="bn-rc-emp">' + escapeHtml(emp) + '</div>' : '') +
+                '</div>';
+        }).join('');
+    }
+
+    // CNPJs distintos que aparecem nas chaves do relatório (emitentes das notas).
+    function cnpjsDoRelatorio(r) {
+        const s = new Set();
+        for (const chave of r.keys) if (isModelo55(chave)) s.add(cnpjFromKey(chave));
+        return s;
+    }
+
+    // Um grupo por relatório, preservando empresa/pfx/senha já preenchidos (sobrevive
+    // ao re-render quando entra novo arquivo).
+    function rebuildCertGroups() {
+        const next = new Map();
+        for (const r of reports) {
+            const old = certGroups.get(r.id);
+            const emitentes = cnpjsDoRelatorio(r);
+            // Um só CNPJ nas chaves = relatório de saídas: a empresa é ela mesma e dá
+            // para preencher sozinho. Vários = entradas, e só o usuário sabe qual é.
+            const auto = emitentes.size === 1 ? Array.from(emitentes)[0] : '';
+            next.set(r.id, {
+                rid: r.id, fileName: r.fileName,
+                cnpj: old ? old.cnpj : auto,
+                emitentes,
+                keys: new Set(r.keys.filter(isModelo55)),
+                pfxFile: old ? old.pfxFile : null,
+                pfxName: old ? old.pfxName : '',
+                senha: old ? old.senha : '',
+            });
+        }
+        certGroups.clear();
+        next.forEach((v, k) => certGroups.set(k, v));
+    }
+
+    function renderEmpresaOptions() {
+        const dl = document.getElementById('bn-empresas');
+        if (!dl) return;
+        dl.innerHTML = Array.from(contributorsByCnpj.entries())
+            .map(([cnpj, nome]) => '<option value="' + cnpj + '">' + escapeHtml(nome) + '</option>')
+            .join('');
+    }
+
+    // Texto de apoio do card: razão social quando reconhecida, e o aviso de saídas.
+    function cardHint(g) {
+        if (!g.cnpj) return { txt: 'Escolha a empresa dona do certificado (as notas são dela).', warn: false };
+        const nome = contributorsByCnpj.get(g.cnpj);
+        // Empresa == único emitente das chaves: é um relatório de saídas. A SEFAZ não
+        // distribui ao emitente a NF-e que ele mesmo emitiu (rejeição 641, medido).
+        if (g.emitentes.size === 1 && g.emitentes.has(g.cnpj)) {
+            return { txt: 'Relatório de saídas: são notas emitidas por esta empresa. A SEFAZ recusa entregá-las ao próprio emitente (rejeição 641) — use o relatório de entradas.', warn: true };
+        }
+        return { txt: nome ? nome : cnpjLabel(g.cnpj), warn: false };
+    }
+
+    function renderCertGroups() {
+        rebuildCertGroups();
+        const groups = Array.from(certGroups.values());
+        if (!groups.length) { certList.innerHTML = ''; certArea.style.display = 'none'; updateStartButton(); return; }
+        certArea.style.display = 'flex';
+        renderEmpresaOptions();
+        certList.innerHTML = groups.map((g) => {
+            const nKeys = g.keys.size;
+            const hasPfx = !!g.pfxFile;
+            const fname = hasPfx ? escapeHtml(g.pfxName) : 'Selecionar .pfx / .p12';
+            const icon = hasPfx ? 'verified_user' : 'upload_file';
+            const hint = cardHint(g);
+            return '<div class="bn-cert-card" data-rid="' + g.rid + '">' +
+                '<div class="bn-cc-head">' +
+                    '<span class="bn-cc-name">' + escapeHtml(g.fileName) + '</span>' +
+                    '<span class="bn-cc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + '</span>' +
+                '</div>' +
+                '<div class="bn-cc-fields">' +
+                    '<input type="text" class="bn-cc-emp' + (g.cnpj ? ' has-emp' : '') + '" list="bn-empresas" data-rid="' + g.rid + '" placeholder="CNPJ da empresa" autocomplete="off" inputmode="numeric">' +
+                    '<label class="bn-cc-file' + (hasPfx ? ' has-file' : '') + '">' +
+                        '<span class="material-icons-sharp">' + icon + '</span>' +
+                        '<span class="bn-cc-fname">' + fname + '</span>' +
+                        '<input type="file" accept=".pfx,.p12" data-rid="' + g.rid + '" style="display:none">' +
+                    '</label>' +
+                    '<input type="password" class="bn-cc-pass" data-rid="' + g.rid + '" placeholder="Senha do certificado" autocomplete="off">' +
+                '</div>' +
+                '<div class="bn-cc-hint' + (hint.warn ? ' bn-warn' : '') + '">' + escapeHtml(hint.txt) + '</div>' +
+            '</div>';
+        }).join('');
+        wireCertCards();
+        updateStartButton();
+    }
+
+    // Liga os campos por relatório. Senha e CNPJ são repostos via .value (não via
+    // atributo HTML) p/ não ter que escapar aspas e p/ não vazar a senha no innerHTML.
+    function wireCertCards() {
+        const gid = (inp) => certGroups.get(parseInt(inp.getAttribute('data-rid'), 10));
+        certList.querySelectorAll('.bn-cc-emp').forEach((inp) => {
+            const g = gid(inp);
+            if (g) inp.value = g.cnpj || '';
+            const onChange = () => {
+                const gg = gid(inp);
+                if (!gg) return;
+                gg.cnpj = cleanDigits(inp.value).slice(0, 14);
+                inp.classList.toggle('has-emp', gg.cnpj.length === 14);
+                const card = inp.closest('.bn-cert-card');
+                if (card) {
+                    card.classList.remove('bn-missing');
+                    const hintEl = card.querySelector('.bn-cc-hint');
+                    if (hintEl) {
+                        const h = cardHint(gg);
+                        hintEl.textContent = h.txt;
+                        hintEl.classList.toggle('bn-warn', h.warn);
+                    }
+                }
+                updateStartButton();
+            };
+            inp.addEventListener('input', onChange);
+            inp.addEventListener('change', onChange); // seleção no datalist
+        });
+        certList.querySelectorAll('.bn-cc-pass').forEach((inp) => {
+            const g = gid(inp);
+            if (g) inp.value = g.senha || '';
+            inp.addEventListener('input', () => {
+                const gg = gid(inp);
+                if (gg) gg.senha = inp.value;
+                const card = inp.closest('.bn-cert-card');
+                if (card) card.classList.remove('bn-missing');
+                updateStartButton();
+            });
+        });
+        certList.querySelectorAll('.bn-cc-file input[type=file]').forEach((inp) => {
+            inp.addEventListener('change', () => {
+                const f = inp.files && inp.files[0];
+                const g = gid(inp);
+                if (g && f) { g.pfxFile = f; g.pfxName = f.name; }
+                renderCertGroups(); // reflete nome do arquivo / ícone "verificado"
+            });
+        });
+    }
+
+    // Um relatório está pronto quando tem empresa (14 dígitos), .pfx e senha.
+    const groupReady = (g) => g.keys.size === 0 ||
+        (String(g.cnpj || '').length === 14 && !!g.pfxFile && String(g.senha || '').length > 0);
+
+    // Teto medido da SEFAZ: 20 consultas por hora por CNPJ, e `consChNFe` gasta uma
+    // consulta por nota. Dizer isso ANTES de começar evita o usuário achar que o
+    // download travou quando o job parar na 20ª de um lote de centenas.
+    const MAX_CONSULTAS_HORA = 20;
+    function updateQuotaHint() {
+        const el = document.getElementById('bn-quota-hint');
+        if (!el) return;
+        // Chaves por empresa: o teto é por CNPJ, então relatórios de empresas
+        // diferentes não disputam a mesma quota.
+        const porEmpresa = new Map();
+        certGroups.forEach((g) => {
+            if (!g.cnpj || !g.keys.size) return;
+            porEmpresa.set(g.cnpj, (porEmpresa.get(g.cnpj) || 0) + g.keys.size);
+        });
+        const maior = Math.max(0, ...porEmpresa.values());
+        if (maior <= MAX_CONSULTAS_HORA) { el.innerHTML = ''; return; }
+        const horas = Math.ceil(maior / MAX_CONSULTAS_HORA);
+        el.innerHTML = '<span style="color:var(--color-warning, #f5b301); font-weight:600;">⚠ ' +
+            'A SEFAZ libera ' + MAX_CONSULTAS_HORA + ' consultas por hora por CNPJ, e cada nota gasta uma. ' +
+            'A empresa com mais chaves tem ' + maior + ': virão ' + MAX_CONSULTAS_HORA +
+            ' por rodada — o lote inteiro levaria cerca de ' + horas + ' ' + (horas === 1 ? 'hora' : 'horas') +
+            ', repetindo o download a cada hora.</span>';
+    }
+
+    // Habilita "Iniciar" só quando todo relatório com chaves está pronto.
+    function updateStartButton() {
+        const groups = Array.from(certGroups.values());
+        const totalKeys = groups.reduce((a, g) => a + g.keys.size, 0);
+        updateQuotaHint();
+        if (!totalKeys) { startBtn.disabled = true; return; }
+        startBtn.disabled = !groups.every(groupReady);
+    }
+
+    async function handleSelectStageFiles(files) {
+        const novos = await readFiles(files);
+        if (!novos.length) return;
+        reports.push(...novos);
+        renderReportCards();
+        renderCertGroups();
+    }
+
+    // ---------- empresas + anéis (idêntico ao NFCe) ----------
+    function ringSvg() {
+        return '<svg viewBox="0 0 120 120">' +
+            '<circle class="bn-track" cx="60" cy="60" r="' + RING_R + '"></circle>' +
+            '<circle class="bn-arc-blue" cx="60" cy="60" r="' + RING_R + '" stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '"></circle>' +
+            '<circle class="bn-arc-yellow" cx="60" cy="60" r="' + RING_R + '" stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '"></circle>' +
+            '</svg>';
+    }
+
+    function layoutRings() {
+        const n = companies.size;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : n <= 9 ? 3 : 4;
+        ringsWrap.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+    }
+
+    function createCompany(compKey, id, cnpj, sampleKey, total) {
+        const nomeCad = contributorsByCnpj.get(cnpj) || '';
+        const comp = {
+            compKey, id, cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
+            monthLabel: monthYearFromKey(sampleKey),
+            total: total || 0, downloaded: 0, errors: 0,
+            phase: 'download', zipProgress: 0,
+            zipReady: false, zipDownloaded: false,
+            els: null,
+        };
+        companies.set(compKey, comp);
+        const item = document.createElement('div');
+        item.className = 'bn-ring-item';
+        item.innerHTML =
+            '<div class="bn-ring">' + ringSvg() + '<div class="bn-ring-center"><div class="bn-ring-pct">0%</div></div></div>' +
+            '<div class="bn-ring-label"></div>';
+        ringsWrap.appendChild(item);
+        comp.els = {
+            root: item,
+            blue: item.querySelector('.bn-arc-blue'),
+            yellow: item.querySelector('.bn-arc-yellow'),
+            pct: item.querySelector('.bn-ring-pct'),
+            name: item.querySelector('.bn-ring-label'),
+        };
+        comp.els.name.textContent = comp.nome || cnpjLabel(cnpj);
+        layoutRings();
+        return comp;
+    }
+
+    function updateRing(comp) {
+        const els = comp.els; if (!els) return;
+        const dlFrac = comp.total ? (comp.downloaded + comp.errors) / comp.total : 0;
+        if (comp.phase === 'download') {
+            setArc(els.blue, dlFrac, RING_C);
+            setArc(els.yellow, 0, RING_C);
+            els.pct.textContent = Math.round(dlFrac * 100) + '%';
+            els.root.classList.remove('done');
+        } else {
+            setArc(els.blue, 1, RING_C);
+            setArc(els.yellow, comp.zipProgress, RING_C);
+            els.pct.textContent = Math.round(comp.zipProgress * 100) + '%';
+            if (comp.phase === 'done') { els.root.classList.add('done'); els.pct.textContent = '100%'; }
+        }
+        if (comp.nome) els.name.textContent = comp.nome;
+    }
+
+    function buildMiniRing() {
+        miniRingWrap.innerHTML = '<svg viewBox="0 0 40 40">' +
+            '<circle cx="20" cy="20" r="' + MINI_R + '" style="stroke:rgba(125,141,161,0.20)"></circle>' +
+            '<circle class="mb" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-primary)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:#f5b301" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '</svg>';
+        miniBlue = miniRingWrap.querySelector('.mb');
+        miniYellow = miniRingWrap.querySelector('.my');
+    }
+
+    function updateFooter() {
+        let totErr = 0, totKeys = 0, totDl = 0, zipSum = 0, allDownloaded = true;
+        const n = companies.size;
+        companies.forEach((c) => {
+            totErr += c.errors;
+            totKeys += c.total;
+            totDl += (c.downloaded + c.errors);
+            zipSum += c.zipProgress;
+            if (c.phase === 'download') allDownloaded = false;
+        });
+        const dlFrac = totKeys ? totDl / totKeys : 0;
+        const pct = Math.round(dlFrac * 100);
+        footerText.innerHTML = '<span class="bn-err">' + totErr + ' ' + (totErr === 1 ? 'erro' : 'erros') + '</span> | ' + pct + '%';
+        setArc(miniBlue, dlFrac, MINI_C);
+        setArc(miniYellow, (allDownloaded && n) ? zipSum / n : 0, MINI_C);
+    }
+
+    function updateTooltip() {
+        const rows = [];
+        companies.forEach((c) => {
+            const nm = c.nome || cnpjLabel(c.cnpj);
+            rows.push('<div class="bn-tooltip-row">' + escapeHtml(nm) + ': ' + c.downloaded + ' | ' + c.total + '</div>');
+        });
+        tooltipEl.innerHTML = rows.join('') || '—';
+    }
+
+    // ---------- fila de downloads (idêntico ao NFCe) ----------
+    const downloadQueue = [];
+    let downloadDraining = false;
+    function enqueueDownload(blob, name) {
+        downloadQueue.push({ blob, name });
+        drainDownloads();
+    }
+    async function drainDownloads() {
+        if (downloadDraining) return;
+        downloadDraining = true;
+        while (downloadQueue.length) {
+            const { blob, name } = downloadQueue.shift();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = name; a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            await delay(1200);
+            if (a.parentNode) document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }
+        downloadDraining = false;
+    }
+
+    // ---------- motor: worker local + polling (rotas /nfe/*) ----------
+    const WORKER_BASE = 'http://127.0.0.1:47620';
+    const jobIds = [];
+    let polling = false;
+    let useWorker = null;
+    let lastLaunchError = '';
+
+    // Agrupa por (empresa do relatório + mês da chave). A empresa vem do card, NÃO da
+    // chave — em entradas a chave carrega o CNPJ do fornecedor.
+    // Lê cada .pfx uma única vez. NUNCA loga pfxB64/senha.
+    async function buildCompanies() {
+        const byGroup = new Map();
+        for (const r of reports) {
+            const g = certGroups.get(r.id);
+            if (!g || !g.pfxFile || String(g.cnpj || '').length !== 14) continue;
+            const pfxB64 = await fileToBase64(g.pfxFile);
+            for (const chave of r.keys) {
+                if (!isModelo55(chave)) continue;
+                const id = g.cnpj + '-' + yyyymmFromKey(chave);
+                let c = byGroup.get(id);
+                if (!c) { c = { id, cnpj: g.cnpj, pfxB64, senha: String(g.senha || ''), keys: [], meta: {}, _seen: new Set() }; byGroup.set(id, c); }
+                if (!c._seen.has(chave)) { c._seen.add(chave); c.keys.push(chave); }
+                const m = r.meta && r.meta.get(chave);
+                if (m) c.meta[chave] = m;
+            }
+        }
+        return Array.from(byGroup.values()).filter((c) => c.keys.length).map((c) => {
+            delete c._seen;
+            return c;
+        });
+    }
+
+    // workerHealth trata o pareamento (pede o token quando o worker ainda não está pareado).
+    async function detectWorker() {
+        return !!(await window.workerHealth(WORKER_BASE));
+    }
+
+    async function launchJob(companiesPayload) {
+        if (!companiesPayload || !companiesPayload.length) return false;
+        let resp;
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/nfe/start', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
+            });
+            resp = await res.json();
+        } catch (e) { lastLaunchError = 'worker inacessível: ' + ((e && e.message) || 'erro de rede'); return false; }
+        if (!resp || !resp.ok || !resp.jobId) {
+            lastLaunchError = (resp && resp.error) || 'falha ao iniciar o worker';
+            footerText.innerHTML = '<span class="bn-err">' + escapeHtml(lastLaunchError) + '</span>';
+            return false;
+        }
+        lastLaunchError = '';
+        const jobId = resp.jobId;
+        jobIds.push(jobId);
+        for (const c of companiesPayload) {
+            const compKey = jobId + '|' + c.id;
+            if (!companies.has(compKey)) createCompany(compKey, c.id, c.cnpj, c.keys[0], c.keys.length);
+        }
+        updateFooter();
+        updateTooltip();
+        startPolling();
+        return true;
+    }
+
+    function applyStatus(jobId, st) {
+        for (const cs of st.companies) {
+            const comp = companies.get(jobId + '|' + (cs.id || cs.cnpj));
+            if (!comp) continue;
+            comp.total = cs.total;
+            comp.downloaded = cs.downloaded;
+            comp.errors = cs.errors;
+            if (cs.nome && cs.nome.indexOf('CNPJ ') !== 0) comp.nome = cs.nome;
+            if (cs.phase === 'done') { comp.phase = 'done'; comp.zipProgress = 1; }
+            else if (cs.phase === 'zip') { comp.phase = 'zip'; comp.zipProgress = 0.5; }
+            else comp.phase = 'download';
+            updateRing(comp);
+            if (cs.zipReady && !comp.zipDownloaded) {
+                comp.zipDownloaded = true;
+                downloadCompanyZip(jobId, cs.id || cs.cnpj, cs.zipName);
+            }
+        }
+    }
+
+    async function pollOnce() {
+        let allDone = true;
+        for (const jobId of jobIds) {
+            try {
+                const res = await window.workerFetch(WORKER_BASE + '/nfe/status/' + encodeURIComponent(jobId));
+                if (!res.ok) { allDone = false; continue; }
+                const st = await res.json();
+                applyStatus(jobId, st);
+                if (!st.done) allDone = false;
+            } catch { allDone = false; }
+        }
+        updateFooter();
+        updateTooltip();
+        return allDone;
+    }
+
+    async function startPolling() {
+        if (polling) return;
+        polling = true;
+        for (;;) {
+            const done = await pollOnce();
+            if (done) break;
+            await delay(800);
+        }
+        polling = false;
+        await explicarFalhas();
+    }
+
+    /**
+     * Ao fim do job, troca o "N erros" mudo pelo motivo dominante. A causa mais provável
+     * é a SEFAZ cortar por consumo (656) no meio do lote, e sem isto o usuário via só um
+     * número grande sem saber que as notas restantes nem foram tentadas.
+     */
+    async function explicarFalhas() {
+        const comFalha = Array.from(companies.values()).filter((c) => c.errors > 0);
+        if (!comFalha.length) return;
+        const linhas = [];
+        for (const comp of comFalha) {
+            const [jobId, id] = String(comp.compKey).split('|');
+            try {
+                const res = await window.workerFetch(WORKER_BASE + '/nfe/detail/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
+                if (!res.ok) continue;
+                const det = await res.json();
+                const contagem = new Map();
+                for (const f of det.failures || []) {
+                    const motivo = String(f.motivo || 'erro').replace(/^não tentado \([^:]+:\s*/, '').slice(0, 90);
+                    contagem.set(motivo, (contagem.get(motivo) || 0) + 1);
+                }
+                const top = Array.from(contagem.entries()).sort((a, b) => b[1] - a[1])[0];
+                if (top) linhas.push((comp.nome || cnpjLabel(comp.cnpj)) + ': ' + top[1] + '× ' + top[0]);
+            } catch { /* detail é diagnóstico: se falhar, fica só a contagem */ }
+        }
+        if (!linhas.length) return;
+        footerText.innerHTML = '<span class="bn-err">' + escapeHtml(linhas[0]) + '</span>';
+        tooltipEl.innerHTML = linhas.map((l) => '<div class="bn-tooltip-row">' + escapeHtml(l) + '</div>').join('');
+    }
+
+    async function downloadCompanyZip(jobId, id, zipName) {
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/nfe/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
+            if (!res.ok) return;
+            const blob = await res.blob();
+            enqueueDownload(blob, zipName || ('NFe_' + id + '.zip'));
+        } catch (e) {
+            console.warn('Falha ao baixar ZIP de ' + id + ': ' + (e && e.message));
+        }
+    }
+
+    // ---------- segurança: zera senhas do DOM e credenciais do payload ----------
+    function clearSecrets(groups) {
+        document.querySelectorAll('.bn-cc-pass').forEach((i) => { i.value = ''; });
+        certGroups.forEach((g) => { g.senha = ''; });
+        if (groups) groups.forEach((c) => { c.pfxB64 = ''; c.senha = ''; });
+    }
+
+    // ---------- início do download (só worker — sem fallback no browser) ----------
+    async function startDownload() {
+        if (!certGroups.size) return;
+        // Validação: destaca relatórios sem empresa, sem .pfx ou sem senha.
+        let missing = false;
+        certList.querySelectorAll('.bn-cert-card').forEach((card) => {
+            const g = certGroups.get(parseInt(card.getAttribute('data-rid'), 10));
+            const bad = g && !groupReady(g);
+            card.classList.toggle('bn-missing', !!bad);
+            if (bad) missing = true;
+        });
+        if (missing) return;
+
+        startBtn.disabled = true;
+        useWorker = await detectWorker();
+        if (!useWorker) {
+            // mTLS + SOAP não roda no navegador — sem worker não há como processar.
+            const ws = document.getElementById('bn-worker-status');
+            if (ws) ws.innerHTML = workerHintHtml();
+            startBtn.disabled = false;
+            return;
+        }
+
+        let groups;
+        try {
+            groups = await buildCompanies();
+        } catch (e) {
+            showLaunchError('falha ao ler o certificado: ' + ((e && e.message) || 'erro'));
+            startBtn.disabled = false;
+            return;
+        }
+        if (!groups.length) { showLaunchError('nenhuma chave modelo 55 com certificado válido'); startBtn.disabled = false; return; }
+
+        // transição de estágio
+        Array.from(certList.children).forEach((c) => c.classList.add('bn-merge'));
+        Array.from(reportGrid.children).forEach((c) => c.classList.add('bn-merge'));
+        await delay(360);
+        stageSelect.style.display = 'none';
+        stageDownload.style.display = 'block';
+        buildMiniRing();
+
+        const ok = await launchJob(groups);
+        clearSecrets(groups); // limpa senha do DOM + base64 do payload logo após enviar
+
+        if (!ok && !companies.size) {
+            // reverte ao estágio de seleção e MOSTRA o erro (não deixa escondido no footer).
+            stageDownload.style.display = 'none';
+            stageSelect.style.display = 'flex';
+            startBtn.disabled = false;
+            showLaunchError(lastLaunchError || 'falha ao iniciar o download');
+        }
+    }
+
+    // Mostra erro de launch no estágio de seleção (visível), não no footer escondido.
+    function showLaunchError(msg) {
+        const ws = document.getElementById('bn-worker-status');
+        if (ws) ws.innerHTML = '<span style="color:var(--color-danger); font-weight:600;">✕ ' + escapeHtml(String(msg || '')) + '</span>';
+    }
+
+    // ---------- carga de contribuintes (CNPJ → razão social) ----------
+    async function loadContributors() {
+        try {
+            const list = await loadDataSync('contributors', []);
+            (list || []).forEach((c) => {
+                const cnpj = String(c.cnpj || '').replace(/\D/g, '');
+                if (cnpj.length === 14 && c.razaoSocial) contributorsByCnpj.set(cnpj, c.razaoSocial);
+            });
+        } catch (e) {
+            console.warn('Não foi possível carregar contribuintes: ' + (e && e.message));
+        }
+    }
+
+    // ====================== wiring ======================
+    dropzone.addEventListener('click', () => {
+        if (stageDownload.style.display === 'block') return;
+        fileInput.click();
+    });
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('bn-dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('bn-dragover'));
+    dropzone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('bn-dragover');
+        const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+        if (files.length) await handleSelectStageFiles(files);
+    });
+
+    fileInput.addEventListener('change', async () => {
+        const files = Array.from(fileInput.files || []);
+        fileInput.value = '';
+        if (!files.length) return;
+        await handleSelectStageFiles(files);
+    });
+
+    startBtn.addEventListener('click', () => { startDownload(); });
+
+    loadContributors().then(() => { renderReportCards(); renderCertGroups(); });
+    renderReportCards();
+    updateStartButton();
+
+    // Detecta o worker no load. Sem worker, banner de instrução (sem fallback).
+    detectWorker().then((ok) => {
+        const ws = document.getElementById('bn-worker-status');
+        if (!ws) return;
+        ws.innerHTML = ok
+            ? '<span style="color:var(--color-success); font-weight:600;">● Worker Node detectado — pronto p/ baixar NFe via certificado A1.</span>'
+            : workerHintHtml();
+    });
+}
+//---------------------------------- FIM Baixar NFe (XML) ----------------------------------//
 
 // Funções de exportação globais para NFe | NFCe Comparison
 function exportToPDF() {
@@ -10969,18 +12251,13 @@ async function completeUserRegistration(name, username, control, password, profi
         await saveDataSync('registeredUsers', existingUsers);
         console.log('✅ Usuário atualizado e sincronizado:', existingUsers[userIndex]);
 
-        // Propaga metadados para o Supabase (user_profiles), casando por username.
-        // Best-effort: só funciona se houver sessão admin ativa (RLS). Não bloqueia o
-        // fluxo local. LIMITAÇÕES: (1) mudar `control` aqui NÃO altera a permissão
-        // efetiva no Supabase — current_user_is_admin() lê de auth.jwt().user_metadata,
-        // que só muda via admin API; (2) troca de senha de outro usuário não propaga ao
-        // auth.users (também exige admin API). Ambos ficam para a Edge Function admin.
+        // Propaga dados de EXIBIÇÃO para user_profiles (nome, foto). Best-effort: só
+        // funciona com sessão ativa (RLS) e não bloqueia o fluxo local.
         let supabaseAviso = '';
         if (window.supabaseSync?.auth?.updateProfile && window.supabaseSync.isConfigured()) {
             const upd = await window.supabaseSync.auth.updateProfile({
                 username: existingUser.username,
                 fullName: name,
-                control: control,
                 profileImage: profileImage,
             });
             if (!upd.ok && upd.error !== 'sem-sessao') {
@@ -10989,18 +12266,26 @@ async function completeUserRegistration(name, username, control, password, profi
             }
         }
 
-        // Senha (e control) precisam ir ao auth.users via Edge Function admin —
-        // updateProfile só toca user_profiles e não muda a senha de login. Só dispara
-        // quando uma nova senha foi informada na edição.
-        if (password && window.supabaseSync?.auth?.updateUser && window.supabaseSync.isConfigured()) {
-            const updPwd = await window.supabaseSync.auth.updateUser({
+        // Senha e permissão vivem em auth.users e só mudam pela Edge Function admin.
+        //
+        // A condição era `if (password && ...)`: trocar SÓ o control não disparava nada,
+        // então rebaixar um administrador aparecia na UI mas não revogava nada na nuvem —
+        // a pessoa continuava admin de fato. Agora dispara quando qualquer um dos dois muda.
+        const controlMudou = control !== existingUser.control;
+        if ((password || controlMudou) && window.supabaseSync?.auth?.updateUser && window.supabaseSync.isConfigured()) {
+            const updAuth = await window.supabaseSync.auth.updateUser({
                 username: existingUser.username,
-                password,
-                control,
+                password: password || undefined,
+                control: controlMudou ? control : undefined,
             });
-            if (!updPwd.ok && updPwd.error !== 'sem-sessao') {
-                console.warn('⚠️ Falha ao atualizar senha no Supabase:', updPwd.error);
-                supabaseAviso += '\n\n(Atenção: a nova senha foi salva localmente, mas não foi aplicada no login da nuvem: ' + updPwd.error + ')';
+            if (!updAuth.ok && updAuth.error !== 'sem-sessao') {
+                console.warn('⚠️ Falha ao atualizar auth.users no Supabase:', updAuth.error);
+                // Permissão desalinhada é mais grave que senha: a UI passa a mostrar um
+                // nível de acesso que a nuvem não aplica. Por isso o aviso é explícito.
+                supabaseAviso += controlMudou
+                    ? '\n\n⚠️ A PERMISSÃO NÃO FOI ALTERADA NA NUVEM (' + updAuth.error + ').'
+                      + '\nO usuário mantém o acesso anterior no Supabase. Refaça a edição.'
+                    : '\n\n(Atenção: a nova senha foi salva localmente, mas não foi aplicada no login da nuvem: ' + updAuth.error + ')';
             }
         }
 

@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
+const access = require('./access');
 const { buildZip, readZip } = require('./zip');
 
 // Resolve o modelo na 1ª localização que existir:
@@ -46,8 +47,18 @@ function resolveTemplatePath() {
 const TEMPLATE_PATH = resolveTemplatePath();
 const INBOX_DEFAULT = process.env.DIRBI_INBOX || path.join(__dirname, '..', 'inbox');
 
+// Raiz permitida para `inboxPath`. Sem essa trava, `startJob({inboxPath})` varre
+// qualquer pasta legível da máquina — travessia de diretório disparável por qualquer
+// página aberta no navegador do contador.
+const INBOX_ROOT = path.resolve(process.env.DIRBI_ROOT || INBOX_DEFAULT);
+
+/** @see access.resolveUnder */
+const resolveInbox = (requested) => access.resolveUnder(INBOX_ROOT, requested);
+
 const jobs = new Map();
-let jobSeq = 0;
+
+// Aleatório, não sequencial — ver comentário equivalente em lib/nfce.js.
+const newJobId = () => access.newJobId('dirbi');
 
 // ----------------------------------------------------- regras do modelo ----
 // Idêntico ao browser: D4:D21, cada célula 1+ NCMs separados por não-dígitos.
@@ -224,8 +235,10 @@ const sanitize = (s) => String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').rep
 
 // ------------------------------------------------------- job lifecycle ----
 function startJob(payload) {
-    const inbox = (payload && payload.inboxPath) ? String(payload.inboxPath) : INBOX_DEFAULT;
-    const id = 'dirbi-' + (++jobSeq);
+    const resolved = resolveInbox(payload && payload.inboxPath);
+    if (!resolved.ok) return { id: null, error: resolved.error, done: true };
+    const inbox = resolved.dir;
+    const id = newJobId();
     const job = {
         id, inbox, createdAt: Date.now(), phase: 'lendo',
         filesDone: 0, filesTotal: 0, empresas: 0, xmlInvalidos: 0,
@@ -316,7 +329,7 @@ function getResult(jobId) {
 }
 
 function inboxInfo() {
-    return { inbox: INBOX_DEFAULT, template: TEMPLATE_PATH, templateExists: fs.existsSync(TEMPLATE_PATH) };
+    return { inbox: INBOX_DEFAULT, root: INBOX_ROOT, template: TEMPLATE_PATH, templateExists: fs.existsSync(TEMPLATE_PATH) };
 }
 
-module.exports = { startJob, getStatus, getResult, inboxInfo, parseDirbiNcmRules, matchDirbiRow, accumulateXml };
+module.exports = { startJob, getStatus, getResult, inboxInfo, resolveInbox, parseDirbiNcmRules, matchDirbiRow, accumulateXml };

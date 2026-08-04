@@ -29,7 +29,9 @@ const OUT_ZIP = path.join(OUT_DIR, 'softtech-worker.zip');
 // NÃO inclui node_modules/dist: o launcher roda `npm install` na 1ª vez.
 const FILES = [
     ['server.js', 'server.js'],
+    ['lib/access.js', 'lib/access.js'],
     ['lib/nfce.js', 'lib/nfce.js'],
+    ['lib/nfe.js', 'lib/nfe.js'],
     ['lib/dirbi.js', 'lib/dirbi.js'],
     ['lib/zip.js', 'lib/zip.js'],
     ['DIRBI MES-ANO.xlsx', 'DIRBI MES-ANO.xlsx'],

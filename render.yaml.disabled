@@ -26,6 +26,17 @@ services:
         value: "3.12.4"
       - key: ICMS_API_LOG_LEVEL
         value: INFO
+      # Liga as exigências de produção. Sem as chaves abaixo, o boot ABORTA (exit 1) —
+      # deploy quebrado é visível, API aberta não é.
+      - key: ICMS_API_ENV
+        value: prod
+      # Render gera e injeta; o valor nunca aparece no repositório.
+      - key: ICMS_API_KEY
+        generateValue: true
+      # Chave separada para as rotas de escrita (POST /api/icms/biblioteca).
+      - key: ICMS_API_ADMIN_KEY
+        generateValue: true
       # Definir no dashboard (sync:false) — origin(s) do frontend, separadas por vírgula.
+      # O boot aborta se ficar no default de localhost.
       - key: ICMS_API_CORS_ORIGINS
         sync: false
