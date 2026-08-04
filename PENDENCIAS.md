@@ -28,6 +28,30 @@ Itens conhecidos para resolver depois. Ordem não é prioridade.
   de `procNFe` para notas sem manifestação do destinatário. Por `consChNFe` veio
   `procNFe` completo sem manifestação nenhuma — não se pode assumir que vale para os dois.
 
+#### Sondagens de `distNSU` em 2026-08-03 — ambas rejeitadas, pergunta em aberto
+
+Duas tentativas, com 1 h de intervalo, as duas com a mesma resposta:
+
+```
+cStat 656 | Rejeicao: Consumo Indevido (Deve ser utilizado o ultNSU nas
+solicitacoes subsequentes. Tente apos 1 hora)
+ultNSU retornado: 000000000103111 | maxNSU: 000000000000000
+```
+
+- 22:24 com `ultNSU=0` (partida do zero é punida, é o comportamento documentado).
+- 23:30 com `ultNSU=103111` — o cursor que a própria SEFAZ devolveu na 1ª rejeição,
+  que é o padrão de "solicitação subsequente". **Mesma rejeição**, e o `ultNSU` devolvido
+  não mudou. Como na 1ª tentativa mandei `0` e recebi `103111`, o número é dado real da
+  SEFAZ, não eco do que enviei: o fluxo DFe deste CNPJ já está em 103111.
+- **Não sabemos ainda** se `distNSU` devolve `procNFe` ou `resNFe`: nenhuma das duas
+  chamadas chegou a retornar documento.
+- **Hipótese principal, não provada:** outro sistema (fsist ou o que a empresa usa)
+  já consome esse fluxo e avançou o cursor até 103111. Se a penalidade/quota de consumo
+  é por CNPJ, estamos disputando a mesma janela com um consumidor que não controlamos —
+  o que inviabilizaria `distNSU` aqui sem antes descobrir e coordenar com esse consumidor.
+- **Próximo passo sugerido (não é mais sondagem cega):** descobrir quem consome o fluxo
+  da A&R antes de gastar outra hora. Sondar de novo só depois disso.
+
 ### P3 — Rebundle do worker (`download/softtech-worker.zip`) desatualizado
 - `scripts/bundle-worker.js` passou a incluir `lib/access.js` (token/allowlist) e
   `lib/nfe.js`. O zip publicado em `download/` ainda é o antigo: quem baixar hoje pega um
