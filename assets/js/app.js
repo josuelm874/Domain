@@ -9129,6 +9129,8 @@ function createBaixarNfcePage(mainContent) {
             .bn-info:hover::after { opacity: 1; }
             #bn-token { width: 100%; padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical; word-break: break-all; }
             #bn-jwt-status { font-size: 0.85rem; min-height: 1.1rem; }
+            .bn-harvest-btn { padding: 0.35rem 0.8rem; border: 1px solid var(--color-primary); border-radius: 0.45rem; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 600; font-size: 0.8rem; }
+            .bn-harvest-btn:disabled { opacity: 0.5; cursor: default; }
             .bn-start-btn { padding: 0.8rem 1.6rem; border: none; border-radius: 0.6rem; background: var(--color-success); color: #fff; cursor: pointer; font-weight: 700; font-size: 0.95rem; align-self: flex-start; transition: opacity .2s ease, transform .1s ease; }
             .bn-start-btn:disabled { opacity: 0.5; cursor: default; }
             .bn-start-btn:not(:disabled):active { transform: translateY(1px); }
@@ -9182,6 +9184,7 @@ function createBaixarNfcePage(mainContent) {
                     <div id="bn-global-token-wrap" style="display: none; flex-direction: column; gap: 0.4rem;">
                         <div class="bn-token-row">
                             <label for="bn-token">Token JWT (global)</label>
+                            <button id="bn-harvest" type="button" class="bn-harvest-btn" title="Loga no Ambiente Seguro pelo colhedor local (porta 47621) e preenche o token">Colher token</button>
                         </div>
                         <textarea id="bn-token" rows="2" placeholder="Cole o token JWT (vale 24h), ou a URL completa do /xml/ contendo apiKey=…"></textarea>
                         <div id="bn-jwt-status"></div>
@@ -9219,6 +9222,7 @@ function createBaixarNfcePage(mainContent) {
     const dzEmpty = document.getElementById('bn-dz-empty');
     const reportGrid = document.getElementById('bn-report-grid');
     const jwtStatus = document.getElementById('bn-jwt-status');
+    const harvestBtn = document.getElementById('bn-harvest');
     const startBtn = document.getElementById('bn-start');
     const stageSelect = document.getElementById('bn-stage-select');
     const stageDownload = document.getElementById('bn-stage-download');
@@ -9432,6 +9436,123 @@ function createBaixarNfcePage(mainContent) {
             });
         }
         startBtn.disabled = !ok;
+    }
+
+    // ---------- colhedor de token (sidecar :47621) ----------
+    // O sidecar Node+Playwright (`harvester/harvest-server.js`) loga headless no
+    // Ambiente Seguro e devolve 1 JWT — que vale 24h e serve TODAS as empresas.
+    // Aqui só consumimos: o token colhido entra no MESMO `#bn-token` que o usuário
+    // preencheria à mão, então `updateStartButton` e `buildCompanies` continuam
+    // intocados — o sidecar é só mais uma fonte do campo que já existia.
+    const HARVEST_BASE = 'http://127.0.0.1:47621';
+
+    // Injeta o token no campo global e deixa a validação existente decidir se o
+    // botão Iniciar acende (JWT podre continua barrado, venha de onde vier).
+    function applyHarvestedToken(token) {
+        tokenInput.value = token;
+        refreshJwtStatus();
+    }
+
+    function harvestInfo(msg) {
+        jwtStatus.textContent = msg;
+        jwtStatus.style.color = 'var(--color-info-dark)';
+    }
+
+    function harvestError(msg) {
+        jwtStatus.textContent = msg;
+        jwtStatus.style.color = 'var(--color-danger)';
+    }
+
+    // Cache válido no sidecar → usa direto. Senão abre o modal de credenciais.
+    async function harvestToken() {
+        harvestBtn.disabled = true;
+        harvestInfo('Consultando o colhedor de token…');
+        let j;
+        try {
+            const res = await fetch(HARVEST_BASE + '/nfce/token');
+            j = await res.json();
+        } catch (e) {
+            harvestError('Colhedor de token fora do ar. Suba com: cd harvester && node harvest-server.js');
+            harvestBtn.disabled = false;
+            return;
+        }
+        harvestBtn.disabled = false;
+        if (j && j.ok && j.token) { applyHarvestedToken(j.token); return; }
+        showHarvestLoginModal();
+    }
+
+    // Modal CPF+senha. As credenciais vivem só nos inputs deste modal: nunca são
+    // logadas, nunca vão para variável de escopo maior, e os campos são limpos
+    // antes de o DOM ser descartado.
+    function showHarvestLoginModal() {
+        const modal = document.createElement('div');
+        modal.className = 'protected-modal animate-section';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <span class="material-icons-sharp">badge</span>
+                <h3>Ambiente Seguro SEFAZ</h3>
+                <p>CPF e senha do contador. Usados só para colher o token — não ficam salvos.</p>
+                <input type="text" id="bn-hv-cpf" placeholder="CPF" autocomplete="off" autofocus>
+                <input type="password" id="bn-hv-senha" placeholder="Senha" autocomplete="off">
+                <p class="error-message" id="bn-hv-error" style="display: none; color: var(--color-danger); margin-top: 1rem; font-size: 0.9rem;"></p>
+                <button id="bn-hv-ok" type="button" class="bn-start-btn" style="align-self: center; margin-top: 1rem;">Colher token</button>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const cpfEl = modal.querySelector('#bn-hv-cpf');
+        const senhaEl = modal.querySelector('#bn-hv-senha');
+        const errEl = modal.querySelector('#bn-hv-error');
+        const okBtn = modal.querySelector('#bn-hv-ok');
+
+        function close() {
+            cpfEl.value = '';
+            senhaEl.value = '';
+            modal.classList.add('fade-out');
+            setTimeout(() => modal.remove(), 400);
+        }
+
+        async function submit() {
+            const cpf = cleanDigits(cpfEl.value);
+            const senha = senhaEl.value;
+            if (!cpf || !senha) {
+                errEl.textContent = 'Informe CPF e senha.';
+                errEl.style.display = 'block';
+                return;
+            }
+            okBtn.disabled = true;
+            errEl.style.display = 'none';
+            // O login headless abre Chromium, navega e espera o MFe: ~30s é normal.
+            harvestInfo('Logando no Ambiente Seguro (pode levar ~30s)…');
+            let j;
+            try {
+                const res = await fetch(HARVEST_BASE + '/nfce/token', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ cpf, senha }),
+                });
+                j = await res.json();
+            } catch (e) {
+                j = { ok: false, error: 'colhedor de token fora do ar' };
+            }
+            if (j && j.ok && j.token) {
+                close();
+                applyHarvestedToken(j.token);
+                return;
+            }
+            okBtn.disabled = false;
+            senhaEl.value = '';
+            senhaEl.focus();
+            errEl.textContent = (j && j.error) || 'falha ao colher o token';
+            errEl.style.display = 'block';
+            refreshJwtStatus();
+        }
+
+        okBtn.addEventListener('click', submit);
+        senhaEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') submit(); });
+        modal.addEventListener('click', (e) => {
+            if (e.target.classList.contains('protected-modal')) close();
+        });
     }
 
     // Alterna entre token global e token por empresa.
@@ -10088,6 +10209,7 @@ function createBaixarNfcePage(mainContent) {
 
     addBtn.addEventListener('click', () => fileInput.click());
     startBtn.addEventListener('click', () => { startDownload(); });
+    harvestBtn.addEventListener('click', () => { harvestToken(); });
     tokenInput.addEventListener('input', refreshJwtStatus);
     globalModeChk.addEventListener('change', onModeToggle);
 
