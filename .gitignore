@@ -22,6 +22,10 @@ yarn-error.log*
 node_modules/
 package-lock.json
 yarn.lock
+# Exceção: o worker é distribuído como .zip e o start.bat roda `npm install` na
+# máquina do usuário. Sem o lock, o caret de exceljs resolve versão diferente a
+# cada instalação — e `scripts/bundle-worker.js` exige o arquivo para empacotar.
+!worker/package-lock.json
 
 # Python (API ICMS)
 __pycache__/
