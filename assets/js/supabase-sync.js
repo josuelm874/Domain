@@ -232,14 +232,17 @@ function authOnChange(callback) {
 }
 
 /**
- * Atualiza metadados do perfil no Supabase (user_profiles), casando por username.
- * Best-effort: exige sessão admin (RLS UPDATE permite auth.uid()=id OR admin).
- * NÃO altera auth.users nem user_metadata — logo, mudar `control` aqui não muda a
- * permissão efetiva no Supabase (current_user_is_admin lê do JWT). Isso fica para a
- * Edge Function admin, fora do escopo deste wrapper.
+ * Atualiza metadados de EXIBIÇÃO do perfil (user_profiles), casando por username.
+ * Exige sessão (RLS UPDATE permite auth.uid()=id OR admin).
+ *
+ * Não aceita mais `control`: a permissão vive em auth.users.app_metadata e só o
+ * service_role escreve nela (migration 20260803120000). `user_profiles.control` virou
+ * espelho, mantido pelo trigger z_sync_profile_control. Gravar aqui criaria uma segunda
+ * fonte de verdade que o trigger sobrescreveria depois — para mudar permissão, use
+ * `authUpdateUser` (Edge Function update-user).
  * @returns {Promise<{ok:boolean, error?:string}>}
  */
-async function authUpdateProfile({ username, fullName, control, profileImage }) {
+async function authUpdateProfile({ username, fullName, profileImage }) {
     if (!supabaseReadyPromise) initSupabase();
     const ready = await supabaseReadyPromise;
     if (!ready) return { ok: false, error: 'Supabase não configurado' };
@@ -247,10 +250,6 @@ async function authUpdateProfile({ username, fullName, control, profileImage }) 
 
     const patch = { updated_at: new Date().toISOString() };
     if (fullName !== undefined) patch.full_name = fullName;
-    if (control !== undefined) {
-        patch.control = control;
-        patch.role = control === 'administrador' ? 'admin' : 'operator';
-    }
     if (profileImage !== undefined) patch.profile_image = profileImage;
 
     const { error } = await supabaseClient

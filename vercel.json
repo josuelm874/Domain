@@ -31,7 +31,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com https://unpkg.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://softtech-icms-api.onrender.com https://cfe.sefaz.ce.gov.br:8443 http://localhost:47620 http://127.0.0.1:47620; frame-src 'none'; object-src 'none'; base-uri 'self'"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com https://unpkg.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cfe.sefaz.ce.gov.br:8443 http://localhost:47620 http://127.0.0.1:47620; frame-src 'none'; object-src 'none'; base-uri 'self'"
         }
       ]
     }

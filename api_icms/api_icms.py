@@ -16,10 +16,12 @@ Segurança aplicada:
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 from collections import Counter
 from datetime import datetime
@@ -54,14 +56,56 @@ ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get("ICMS_API_CORS_ORIGINS", DEFAULT_CORS).split(",") if o.strip()
 ]
 
-# Token opcional. Se setado, requests precisam enviar X-API-Key.
+# Ambiente. Em "prod", chaves deixam de ser opcionais (ver _validar_config).
+ENV = os.environ.get("ICMS_API_ENV", "dev").strip().lower()
+IS_PROD = ENV == "prod"
+
+# Token de acesso. Em dev pode ficar vazio (API só escuta em 127.0.0.1); em prod é
+# obrigatório — CORS não é controle de acesso, qualquer cliente não-browser o ignora.
 API_KEY = os.environ.get("ICMS_API_KEY", "").strip()
+
+# Token separado para as rotas que ESCREVEM no servidor. Escrita e leitura não podem
+# compartilhar credencial: quem processa XML não precisa poder trocar a biblioteca de
+# razões sociais, e corromper esse arquivo altera silenciosamente o nome que sai nas
+# planilhas entregues ao cliente.
+ADMIN_KEY = os.environ.get("ICMS_API_ADMIN_KEY", "").strip()
 
 # Limites de payload (default 25 MB total).
 MAX_UPLOAD_MB = int(os.environ.get("ICMS_API_MAX_UPLOAD_MB", "25"))
 
 # Limites de processamento.
 MAX_XML_FILES = int(os.environ.get("ICMS_API_MAX_XML_FILES", "500"))
+
+
+# ===================== Validação de configuração =====================
+
+def _validar_config() -> None:
+    """Aborta o boot se a configuração de produção estiver insegura.
+
+    Falhar alto é intencional: um deploy quebrado é visível, uma API aberta não. O
+    incidente que motivou a regra equivalente em scripts/gen-config.js foi exatamente
+    esse — configuração faltando gerando comportamento silenciosamente errado.
+    """
+    if not IS_PROD:
+        return
+
+    erros = []
+    if not API_KEY:
+        erros.append("ICMS_API_KEY é obrigatória quando ICMS_API_ENV=prod")
+    if not ADMIN_KEY:
+        erros.append("ICMS_API_ADMIN_KEY é obrigatória quando ICMS_API_ENV=prod")
+    if ADMIN_KEY and ADMIN_KEY == API_KEY:
+        erros.append("ICMS_API_ADMIN_KEY deve ser diferente de ICMS_API_KEY")
+    if ALLOWED_ORIGINS == [o.strip() for o in DEFAULT_CORS.split(",")]:
+        erros.append("ICMS_API_CORS_ORIGINS não configurada (ainda no default de localhost)")
+
+    if erros:
+        for e in erros:
+            logger.critical("Configuração inválida: %s", e)
+        sys.exit(1)
+
+
+_validar_config()
 
 
 # ===================== App =====================
@@ -138,14 +182,34 @@ _XML_PARSER = etree.XMLParser(
 
 # ===================== Auth simples =====================
 
+def _match(sent: str, expected: str) -> bool:
+    """Compara em tempo constante — comparação com `!=` vaza o prefixo por timing."""
+    return bool(expected) and hmac.compare_digest(sent.encode(), expected.encode())
+
+
 def _check_api_key() -> Response | None:
-    """Valida X-API-Key se ICMS_API_KEY estiver configurada."""
+    """Valida X-API-Key se ICMS_API_KEY estiver configurada.
+
+    Em prod a chave sempre existe (_validar_config aborta o boot sem ela), então este
+    early-return só vale em dev, onde a API escuta apenas em 127.0.0.1.
+    """
     if not API_KEY:
         return None
-    sent = request.headers.get("X-API-Key", "").strip()
-    if sent != API_KEY:
-        logger.warning("Tentativa de acesso sem X-API-Key válida de %s", request.remote_addr)
+    if not _match(request.headers.get("X-API-Key", "").strip(), API_KEY):
+        logger.warning("Acesso sem X-API-Key válida de %s", request.remote_addr)
         return jsonify({"error": "Unauthorized"}), 401
+    return None
+
+
+def _check_admin_key() -> Response | None:
+    """Exige X-Admin-Key nas rotas que escrevem no servidor.
+
+    Sem chave de admin configurada, a rota fica FECHADA em vez de aberta — o default
+    inverso é o que deixava `POST /biblioteca` gravável por qualquer um.
+    """
+    if not _match(request.headers.get("X-Admin-Key", "").strip(), ADMIN_KEY):
+        logger.warning("Acesso admin negado para %s", request.remote_addr)
+        return jsonify({"error": "Forbidden: requer X-Admin-Key"}), 403
     return None
 
 
@@ -417,7 +481,11 @@ def biblioteca_get():
 
 @app.route("/api/icms/biblioteca", methods=["POST"])
 def biblioteca_post():
-    """Sobrescreve a biblioteca de razões (admin)."""
+    """Sobrescreve a biblioteca de razões. Exige X-Admin-Key."""
+    negado = _check_admin_key()
+    if negado is not None:
+        return negado
+
     payload = request.get_json(silent=True) or {}
     raw = payload.get("raw", "")
     if not isinstance(raw, str):
@@ -436,9 +504,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("ICMS_API_PORT", "5000"))
     debug = os.environ.get("ICMS_API_DEBUG", "false").lower() == "true"
 
-    logger.info("API ICMS ST iniciando em %s:%d (debug=%s)", host, port, debug)
+    logger.info("API ICMS ST iniciando em %s:%d (env=%s, debug=%s)", host, port, ENV, debug)
     logger.info("CORS origins: %s", ALLOWED_ORIGINS)
     logger.info("API key obrigatória: %s", "sim" if API_KEY else "não")
+    logger.info("Admin key configurada: %s", "sim" if ADMIN_KEY else "não (rotas de escrita fechadas)")
     logger.info("Limite de upload: %d MB", MAX_UPLOAD_MB)
     logger.info("Diretório temporário: %s", TEMP_DIR)
 
