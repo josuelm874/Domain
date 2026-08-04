@@ -99,3 +99,35 @@ test('fetchNfeXml: cStat 656 -> kind consumo', async () => {
         (e) => e.kind === 'consumo'
     );
 });
+
+// ------------------------------------------------ achados do E2E real (2026-08-03) ----
+const chamar = (poster) => fetchNfeXml({
+    chave: CH, cnpj: '12345678000199', cufAutor: '23', tpAmb: 1,
+    pfx: Buffer.from('x'), passphrase: '', poster,
+});
+const lote = (schema, xml) => {
+    const b64 = zlib.gzipSync(Buffer.from(xml, 'utf8')).toString('base64');
+    return `<retDistDFeInt><cStat>138</cStat><loteDistDFeInt><docZip NSU="1" schema="${schema}">${b64}</docZip></loteDistDFeInt></retDistDFeInt>`;
+};
+
+test('fetchNfeXml: cStat 641 (emitente) -> kind emitente', async () => {
+    const poster = async () => ({ status: 200, text: '<retDistDFeInt><cStat>641</cStat><xMotivo>Rejeicao: NF-e indisponivel para o emitente</xMotivo></retDistDFeInt>' });
+    await assert.rejects(() => chamar(poster), (e) => e.kind === 'emitente');
+});
+
+test('fetchNfeXml: só resNFe (resumo) não passa como XML da nota', async () => {
+    const poster = async () => ({ status: 200, text: lote('resNFe_v1.01.xsd', `<resNFe><chNFe>${CH}</chNFe></resNFe>`) });
+    await assert.rejects(() => chamar(poster), (e) => e.kind === 'resumo');
+});
+
+test('fetchNfeXml: escolhe o procNFe quando o lote traz evento junto', async () => {
+    const evento = `<procEventoNFe><chNFe>${CH}</chNFe></procEventoNFe>`;
+    const nota = `<nfeProc versao="4.00"><NFe><infNFe Id="NFe${CH}"></infNFe></NFe></nfeProc>`;
+    const b64 = (s) => zlib.gzipSync(Buffer.from(s, 'utf8')).toString('base64');
+    const resp = '<retDistDFeInt><cStat>138</cStat><loteDistDFeInt>' +
+        `<docZip NSU="1" schema="procEventoNFe_v1.00.xsd">${b64(evento)}</docZip>` +
+        `<docZip NSU="2" schema="procNFe_v4.00.xsd">${b64(nota)}</docZip>` +
+        '</loteDistDFeInt></retDistDFeInt>';
+    const out = await chamar(async () => ({ status: 200, text: resp }));
+    assert.match(out, /<nfeProc/);
+});

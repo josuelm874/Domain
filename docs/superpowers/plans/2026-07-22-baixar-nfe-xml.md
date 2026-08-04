@@ -774,3 +774,43 @@ Só o Josué pode rodar (precisa de `.pfx` real + senha + chaves reais de entrad
 **Type consistency:** `companyStatus` e as assinaturas `getStatus/getCompanyDetail/getCompanyZip/startJob` batem com o consumo do browser (`applyStatus` usa `cs.id||cs.cnpj`, `zipReady`, `zipName`, `phase`). `fetchNfeXml`/`postDistDFeVia`/`parseRetDistDFe`/`buildDistDFeIntSoap`/`unwrapDocZip` consistentes entre tasks. ✓
 
 **Nota de honestidade:** endpoint SEFAZ, `versao` do schema e `cUFAutor` são hipóteses até a Task 0 confirmar. Nenhum valor chutado entra em produção sem essa confirmação.
+
+---
+
+## Resultado do E2E real — 2026-08-03 (Task 10 executada)
+
+Rodado com certificado A1 de produção da A&R (CNPJ 19154453000109) e dois relatórios
+reais de junho/2026 do portal da SEFAZ-CE: 50 chaves de saídas (empresa emitente) e
+346 de entradas (empresa destinatária). Tudo abaixo é medição, não suposição.
+
+### Confirmado
+
+- **Endpoint e contrato:** `https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx`
+  com `distDFeInt versao="1.01"` responde. Entradas voltam `cStat 138`, `schema=procNFe_v4.00.xsd`,
+  XML `nfeProc` completo (~16 KB), sem manifestação do destinatário.
+- **Pipeline inteiro:** mTLS → SOAP → `docZip` base64+gzip → XML → ZIP por empresa →
+  download pelo worker. 15 XMLs válidos, nome do arquivo = chave, `<dest>` = a empresa.
+
+### Refutado (o plano assumia errado)
+
+1. **`--openssl-legacy-provider` é obrigatório.** O OpenSSL 3 recusa o PKCS#12 das ACs
+   brasileiras (`Unsupported PKCS12 PFX data`) mesmo com a senha certa. Sem isso, nenhum
+   certificado A1 carrega. O worker passou a se re-executar com a flag (`server.js`).
+2. **Relatório de saídas não serve.** Toda chave emitida pela própria empresa volta
+   `cStat 641 — NF-e indisponivel para o emitente`. O webservice distribui a terceiros
+   interessados, não ao emitente. O caso de uso é só entradas.
+3. **O CNPJ interessado não está na chave.** Em entradas, `chave[6:20]` é o CNPJ do
+   fornecedor: 346 chaves deram 102 CNPJs distintos. A UI agrupava por aí e pediria 102
+   certificados. Agora a empresa é escolhida por relatório.
+4. **Teto de 20 consultas/hora por CNPJ** (`cStat 656`, texto da própria SEFAZ). É
+   absoluto, não de frequência: espaçar não compra consulta. `consChNFe` gasta uma por
+   nota, então lote grande é inviável por esta rota. Ver P2 em PENDENCIAS.md (`distNSU`).
+5. **`cUFAutor` é validado só contra o XSD.** `23` e `35` devolveram o mesmo documento;
+   `99` deu rejeição 215. Derivar da chave é seguro — não precisa de campo na tela.
+
+### Fora do plano, corrigido no caminho
+
+- `resNFe` (resumo) era aceito como se fosse a NF-e: viraria um ZIP de arquivos inúteis
+  com nome de XML. Agora só `procNFe` entra; resumo vira falha explicada.
+- O ZIP era batizado com o `<emit>` do primeiro XML — em entradas, o nome do fornecedor.
+  Agora o nome sai da parte cujo CNPJ é o do certificado.

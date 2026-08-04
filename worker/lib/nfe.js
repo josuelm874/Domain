@@ -21,6 +21,7 @@ const zlib = require('zlib');
 const https = require('https');
 const { URL } = require('url');
 const { buildZip } = require('./zip');
+const { newJobId } = require('./access');
 
 // ---------------------------------------------------------------- contrato ----
 const WSDL_NS = 'http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe';
@@ -90,19 +91,45 @@ function parseRetDistDFe(responseXml) {
 }
 
 // ------------------------------------------------------------ POST mTLS ----
+/**
+ * Erro de carga do certificado A1. O OpenSSL 3 (Node >= 17) tira RC2-40/3DES-SHA1 do
+ * provider padrão, e é exatamente isso que quase todo .pfx de AC brasileira usa —
+ * então o Node recusa com "Unsupported PKCS12 PFX data" mesmo com a senha certa.
+ * Quem resolve é o provider legacy (ver o re-exec em server.js); aqui só traduzimos
+ * a mensagem, porque a original manda o usuário procurar erro de senha que não existe.
+ * Medido em 2026-08-03 com um A1 real: sem a flag falha 100%, com a flag carrega.
+ */
+function translatePfxError(e) {
+    const msg = (e && e.message) || '';
+    if (/PKCS12|pkcs12|mac verify/i.test(msg)) {
+        const legacy = /Unsupported PKCS12 PFX data/i.test(msg);
+        return makeErr('cert', legacy
+            ? 'certificado em formato legado: o worker precisa rodar com o provider legacy do OpenSSL ' +
+              '(NODE_OPTIONS=--openssl-legacy-provider). Reinicie o worker por uma versão nova.'
+            : 'certificado ou senha inválidos (' + msg + ')');
+    }
+    return e;
+}
+
 // Poster real: https.request com TLS mútuo (pfx). Zero deps.
 function httpsPostMtls({ url, headers, body, pfx, passphrase }) {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
-        const req = https.request({
-            method: 'POST', hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search,
-            headers, pfx, passphrase, // TLS client cert
-        }, (res) => {
-            const chunks = [];
-            res.on('data', (c) => chunks.push(c));
-            res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
-        });
-        req.on('error', reject);
+        let req;
+        try {
+            req = https.request({
+                method: 'POST', hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search,
+                headers, pfx, passphrase, // TLS client cert
+            }, (res) => {
+                const chunks = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+            });
+        } catch (e) {
+            reject(translatePfxError(e)); // pfx ruim estoura já na montagem do request
+            return;
+        }
+        req.on('error', (e) => reject(translatePfxError(e)));
         req.write(body);
         req.end();
     });
@@ -124,17 +151,34 @@ function postDistDFe(opts) {
 }
 
 // ------------------------------------------------------------ baixar 1 NFe ----
+// Só `procNFe` é a NF-e completa. O mesmo lote pode trazer `resNFe` (resumo, ~10
+// campos — devolvido quando falta manifestação do destinatário) e `procEventoNFe`.
+// Aceitar qualquer um deles gera um ZIP de arquivos inúteis com nome de XML: falha
+// silenciosa, pior que erro. Medido em 2026-08-03: entradas voltam procNFe_v4.00.
+const isProcNFe = (d) => /procNFe/i.test(d.schema || '') ||
+    /<(nfeProc|NFe)\b/.test(String(d.xml || '').slice(0, 400));
+const isResumo = (d) => /resNFe/i.test(d.schema || '') || /<resNFe\b/.test(String(d.xml || '').slice(0, 400));
+
 async function fetchNfeXml({ chave, cnpj, cufAutor, tpAmb, pfx, passphrase, endpoint, poster }) {
     const soap = buildDistDFeIntSoap({ tpAmb: tpAmb || 1, cufAutor, cnpj, chave });
     const text = await postDistDFeVia(poster || httpsPostMtls, { endpoint: endpoint || DISTDFE_URL_PROD, pfx, passphrase, soap });
     const ret = parseRetDistDFe(text);
     if (ret.cStat === '656') throw makeErr('consumo', 'Consumo indevido (656): ' + (ret.xMotivo || ''));
+    // 641: a SEFAZ não entrega ao emitente a NF-e que ele mesmo emitiu por este
+    // webservice (ele já a tem). Relatório de SAÍDAS não serve para este fluxo.
+    if (ret.cStat === '641') throw makeErr('emitente', 'NF-e emitida pela própria empresa — a SEFAZ não a distribui ao emitente (641). Use o relatório de entradas.');
     if (!ret.docs.length) {
         if (ret.cStat === '137' || ret.cStat === '138') throw makeErr('notfound', 'Sem documento p/ a chave (cStat ' + ret.cStat + ')');
         throw makeErr('cstat', 'cStat ' + ret.cStat + ': ' + (ret.xMotivo || ''));
     }
     // Acha o doc cuja chave bate (o lote pode trazer eventos além da NFe).
-    const hit = ret.docs.find((d) => d.xml.indexOf(chave) !== -1) || ret.docs[0];
+    const daChave = ret.docs.filter((d) => d.xml.indexOf(chave) !== -1);
+    const candidatos = daChave.length ? daChave : ret.docs;
+    const hit = candidatos.find(isProcNFe);
+    if (!hit) {
+        if (candidatos.some(isResumo)) throw makeErr('resumo', 'SEFAZ devolveu só o resumo (resNFe) — falta manifestação do destinatário para liberar o XML completo.');
+        throw makeErr('schema', 'lote sem procNFe (schemas: ' + candidatos.map((d) => d.schema || '?').join(', ') + ')');
+    }
     const innerM = hit.xml.match(/Id="NFe(\d{44})"/) || hit.xml.match(/<chNFe>(\d{44})<\/chNFe>/);
     if (innerM && innerM[1] !== chave) throw makeErr('mismatch', 'XML retornou chave ' + innerM[1] + ', esperado ' + chave);
     return hit.xml;
@@ -144,8 +188,27 @@ async function fetchNfeXml({ chave, cnpj, cufAutor, tpAmb, pfx, passphrase, endp
 // Espelha lib/nfce.js:152-325. Troca token/taxid por pfx/senha/cufAutor/tpAmb,
 // filtra chaves p/ modelo 55, e descarta credenciais ao fim do job.
 const DEFAULT_CONCURRENCY = 2; // SEFAZ limita consumo por CNPJ — conservador
+const ABORT_KINDS = new Set(['consumo', 'cert', 'emitente']);
+
+/*
+ * TETO DA SEFAZ — 20 consultas por hora, por CNPJ.
+ *
+ * Medido em 2026-08-03 com certificado real: 346 chaves em rajada morreram na 16ª, e a
+ * própria SEFAZ disse o número em cStat 656 —
+ *   "Rejeicao: Consumo Indevido (Ultrapassou o limite de 20 consultas por hora)".
+ *
+ * O teto é ABSOLUTO (consultas por hora), não de frequência: espaçar as chamadas não
+ * compra mais nenhuma. Como `consChNFe` gasta 1 consulta por nota, o modo por lista de
+ * chaves só serve para lotes pequenos. Em vez de queimar a quota com tentativas que já
+ * nascem rejeitadas, o job para no orçamento e diz quantas chaves ficaram.
+ *
+ * Volume grande pede `distNSU` (até 50 documentos por consulta), que a spec original
+ * deixou fora de escopo — ver docs/superpowers/plans/2026-07-22-baixar-nfe-xml.md.
+ */
+const MAX_CONSULTAS_HORA = 20;
+const DEFAULT_INTERVAL_MS = 1000; // espaçamento gentil; não é o que protege a quota
+
 const jobs = new Map();
-let jobSeq = 0;
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt) => 500 * Math.pow(2, attempt);
@@ -196,10 +259,23 @@ function conferirXml(xml, exp) {
     }
     return diffs;
 }
+/**
+ * Nome da empresa DONA do job, para batizar o ZIP. Tem que ser a parte cujo CNPJ é o do
+ * certificado: num relatório de entradas o `<emit>` é o FORNECEDOR, e usar o primeiro
+ * deles nomeava o ZIP com o nome de outra empresa (visto no E2E de 2026-08-03:
+ * "NFe 06-2026_J. SLEIMAN..." num ZIP de notas da A&R). Sem casar CNPJ, fica sem nome —
+ * o ZIP cai no rótulo "CNPJ nnn", que é feio mas verdadeiro.
+ */
 function tryResolveName(comp, xml) {
     if (comp.nomeResolved) return;
-    const m = xml.match(/<emit>[\s\S]*?<xNome>([^<]+)<\/xNome>/) || xml.match(/<emit>[\s\S]*?<xFant>([^<]+)<\/xFant>/);
-    if (m && m[1]) { comp.nome = m[1].trim(); comp.nomeResolved = true; }
+    for (const tag of ['dest', 'emit']) {
+        const bloco = xml.match(new RegExp('<' + tag + '>[\\s\\S]*?</' + tag + '>'));
+        if (!bloco) continue;
+        const doc = bloco[0].match(/<CNPJ>(\d{14})<\/CNPJ>/);
+        if (!doc || doc[1] !== comp.cnpj) continue;
+        const nome = bloco[0].match(/<xNome>([^<]+)<\/xNome>/) || bloco[0].match(/<xFant>([^<]+)<\/xFant>/);
+        if (nome && nome[1]) { comp.nome = nome[1].trim(); comp.nomeResolved = true; return; }
+    }
 }
 
 // ------------------------------------------------------------ lifecycle ----
@@ -207,7 +283,17 @@ function startJob(payload) {
     const concurrency = Math.max(1, Math.min(20, parseInt(payload.concurrency, 10) || DEFAULT_CONCURRENCY));
     const incoming = Array.isArray(payload.companies) ? payload.companies : [];
     const poster = payload._poster || null; // hook de teste; produção usa mTLS real
-    const id = 'nfe-' + (++jobSeq);
+    // 0 desliga a pausa (usado nos testes, que não falam com a SEFAZ).
+    const intervalMs = payload.intervalMs == null
+        ? DEFAULT_INTERVAL_MS
+        : Math.max(0, Math.min(60_000, parseInt(payload.intervalMs, 10) || 0));
+    // 0 = sem orçamento (testes). Padrão = o teto medido da SEFAZ.
+    const maxConsultas = payload.maxConsultas == null
+        ? MAX_CONSULTAS_HORA
+        : Math.max(0, parseInt(payload.maxConsultas, 10) || 0);
+    // ID aleatório: sequencial (`nfe-1`) é adivinhável e dispensaria o atacante de
+    // saber qualquer coisa para baixar o ZIP de outra sessão.
+    const id = newJobId('nfe');
     const companies = new Map();
 
     for (const c of incoming) {
@@ -224,8 +310,15 @@ function startJob(payload) {
         let pfx;
         try { pfx = Buffer.from(pfxB64, 'base64'); } catch { continue; }
         if (!pfx || !pfx.length) continue;
-        const cnpj = cleanDigits(c.cnpj) || (keys[0] ? keys[0].substring(6, 20) : '');
+        // CNPJ do INTERESSADO (dono do certificado) — obrigatório e não dedutível da
+        // chave: em relatório de entradas a chave carrega o CNPJ do FORNECEDOR, não o
+        // da empresa. Assinar com um CNPJ perguntando por outro é rejeição na certa.
+        const cnpj = cleanDigits(c.cnpj);
+        if (cnpj.length !== 14) continue;
         const gid = String(c.id || '').trim() || (cnpj + '-' + (keys[0] ? yyyymmFromKey(keys[0]) : '000000'));
+        // cUFAutor: medido em 2026-08-03 que a SEFAZ só valida contra o XSD (código de
+        // UF existente), não contra o certificado — 23 e 35 devolveram o mesmo doc, 99
+        // deu rejeição 215 (falha de esquema). Derivar da chave é seguro.
         const cufAutor = cleanDigits(c.cufAutor) || (keys[0] ? keys[0].substring(0, 2) : '');
         const tpAmb = parseInt(c.tpAmb, 10) || 1;
         const meta = new Map();
@@ -234,6 +327,7 @@ function startJob(payload) {
         }
         companies.set(gid, {
             id: gid, cnpj, pfx, senha: String(c.senha || ''), cufAutor, tpAmb, poster,
+            intervalMs, proximaEm: 0, maxConsultas, consultas: 0,
             nome: '', nomeResolved: false,
             monthLabel: keys[0] ? monthYearFromKey(keys[0]) : '',
             keys, pending: keys.slice(), total: keys.length,
@@ -259,8 +353,39 @@ function nextJob(job) {
     return { comp, chave: comp.pending.shift() };
 }
 
+// Espera a vez desta empresa. Serializa as consultas do mesmo CNPJ mesmo com vários
+// runners: a quota da SEFAZ é por CNPJ, não por conexão.
+async function aguardarVez(comp) {
+    if (!comp.intervalMs) return;
+    const agora = Date.now();
+    const quando = Math.max(agora, comp.proximaEm || 0);
+    comp.proximaEm = quando + comp.intervalMs;
+    if (quando > agora) await delay(quando - agora);
+}
+
+// Encerra a empresa quando o orçamento de consultas acabou. As chaves que sobraram não
+// viram tentativa: elas seriam 656 na certa e ainda contariam contra a próxima hora.
+function pararPorLimite(comp, chave) {
+    const motivo = 'não baixada: teto de ' + comp.maxConsultas +
+        ' consultas/hora da SEFAZ atingido — rode de novo na próxima hora';
+    comp.aborted = true;
+    comp.abortReason = motivo;
+    const restantes = [chave].concat(comp.pending.splice(0));
+    for (const k of restantes) {
+        comp.errors++;
+        comp.failures.push({ chave: k, motivo });
+    }
+}
+
 async function processChave(comp, chave) {
+    if (comp.maxConsultas && comp.consultas >= comp.maxConsultas) {
+        pararPorLimite(comp, chave);
+        maybeFinalizeCompany(comp);
+        return;
+    }
+    comp.consultas++;
     try {
+        await aguardarVez(comp);
         const xml = await fetchNfeXml({
             chave, cnpj: comp.cnpj, cufAutor: comp.cufAutor, tpAmb: comp.tpAmb,
             pfx: comp.pfx, passphrase: comp.senha, poster: comp.poster,
@@ -277,14 +402,18 @@ async function processChave(comp, chave) {
     } catch (err) {
         comp.errors++;
         comp.failures.push({ chave, motivo: (err && err.message) || 'erro' });
-        // Consumo indevido = SEFAZ bloqueou esta empresa: aborta SÓ ela (não o job).
-        if (err && err.kind === 'consumo' && !comp.aborted) {
+        // Falhas que valem para TODAS as chaves da empresa — insistir só queima quota:
+        //   consumo  SEFAZ bloqueou o CNPJ
+        //   cert     .pfx não carrega (formato/senha) — nenhuma chave vai passar
+        //   emitente relatório é de saídas; a SEFAZ rejeita a empresa emitente inteira
+        // Aborta SÓ esta empresa; as outras do job seguem.
+        if (err && ABORT_KINDS.has(err.kind) && !comp.aborted) {
             comp.aborted = true;
             comp.abortReason = err.message;
             while (comp.pending.length) {
                 const k = comp.pending.shift();
                 comp.errors++;
-                comp.failures.push({ chave: k, motivo: 'não tentado (consumo indevido: ' + err.message + ')' });
+                comp.failures.push({ chave: k, motivo: 'não tentado (' + err.kind + ': ' + err.message + ')' });
             }
         }
     }

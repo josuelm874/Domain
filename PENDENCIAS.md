@@ -14,6 +14,26 @@ Itens conhecidos para resolver depois. Ordem não é prioridade.
 - A UI agora endereça empresas por `id = <cnpj>-<YYYYMM>` (separação por mês). O worker (`worker/lib/nfce.js`) foi atualizado para casar.
 - **Ação:** rebuildar/redistribuir o `.exe` do worker (na máquina pessoal) para a versão nova. Worker antigo + UI nova = anéis não atualizam (a UI tem fallback `id || cnpj`, mas o worker antigo não devolve `id`).
 
+### P2 — Baixar NFe: teto de 20 consultas/hora inviabiliza lote grande
+- **Medido em 2026-08-03** com certificado A1 real: a SEFAZ rejeita com cStat 656 —
+  `Rejeicao: Consumo Indevido (Ultrapassou o limite de 20 consultas por hora)`.
+- `consChNFe` (o modo implementado) gasta **1 consulta por nota**. Um mês de entradas
+  reais (346 notas) precisaria de ~18 horas em rodadas de 20.
+- **Mitigado, não resolvido:** o worker agora para no orçamento de 20 e entrega o ZIP do
+  que baixou (`maxConsultas` em `worker/lib/nfe.js`); a tela avisa antes de começar.
+- **Caminho para resolver:** `distNSU` — o modo em lote do mesmo webservice, até **50
+  documentos por consulta** (20 consultas/hora × 50 = 1000 docs/hora). A spec original
+  deixou fora de escopo (`docs/superpowers/specs/2026-07-22-baixar-nfe-xml-design.md`).
+- **Risco a medir antes:** via `distNSU` a SEFAZ pode devolver `resNFe` (resumo) em vez
+  de `procNFe` para notas sem manifestação do destinatário. Por `consChNFe` veio
+  `procNFe` completo sem manifestação nenhuma — não se pode assumir que vale para os dois.
+
+### P3 — Rebundle do worker (`download/softtech-worker.zip`) desatualizado
+- `scripts/bundle-worker.js` passou a incluir `lib/access.js` (token/allowlist) e
+  `lib/nfe.js`. O zip publicado em `download/` ainda é o antigo: quem baixar hoje pega um
+  worker que quebra no `require('./lib/access')`.
+- **Ação:** rodar `node scripts/bundle-worker.js` e republicar. Ver também P1b.
+
 ## Resolvido
 
 ### ✓ Zip NFCe — separação por mês + nome com mês 2 dígitos (2026-06-29)

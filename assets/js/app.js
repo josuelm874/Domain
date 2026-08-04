@@ -5,6 +5,74 @@
     window.debugLog = (_location, _message, _data = {}) => { /* no-op */ };
     const debugLog = window.debugLog;
 
+    // ==================== PONTE COM O WORKER LOCAL ====================
+    // O worker (worker/server.js) passou a exigir um token de pareamento em
+    // `x-worker-token`, porque loopback não é fronteira de segurança para o
+    // navegador: sem token, qualquer página aberta pelo usuário fala com
+    // 127.0.0.1:47620 e lê os XMLs fiscais. Todo acesso ao worker passa por aqui.
+    const WORKER_TOKEN_KEY = 'workerPairToken';
+
+    window.getWorkerToken = () => {
+        try { return localStorage.getItem(WORKER_TOKEN_KEY) || ''; } catch { return ''; }
+    };
+
+    /**
+     * Pede o token ao usuário e persiste. Retorna '' se ele cancelar.
+     * ponytail: prompt() resolve o pareamento sem UI nova. Quando existir tela de
+     * configurações, mover para um campo lá e manter isto como fallback.
+     * @returns {string}
+     */
+    window.promptWorkerToken = function promptWorkerToken() {
+        const v = window.prompt(
+            'Token de pareamento do worker local.\n\n' +
+            'Ele aparece na janela do worker, no bloco "PAREAMENTO".\n' +
+            'Cole aqui — só precisa fazer isso uma vez nesta máquina:',
+            window.getWorkerToken()
+        );
+        if (v === null) return '';
+        const t = v.trim();
+        if (t) { try { localStorage.setItem(WORKER_TOKEN_KEY, t); } catch { /* modo privado */ } }
+        return t;
+    };
+
+    /**
+     * fetch para o worker com o token injetado. Em 401, pede o token e repete UMA vez.
+     * @param {string} url
+     * @param {RequestInit} [init]
+     * @returns {Promise<Response>}
+     */
+    window.workerFetch = async function workerFetch(url, init = {}) {
+        const send = (token) => fetch(url, {
+            ...init,
+            headers: { ...(init.headers || {}), 'x-worker-token': token },
+        });
+        const res = await send(window.getWorkerToken());
+        if (res.status !== 401) return res;
+        const novo = window.promptWorkerToken();
+        return novo ? send(novo) : res;
+    };
+
+    /**
+     * /health + pareamento. `/health` é a única rota sem token, então serve para
+     * detectar o worker antes de estar pareado — e devolve `paired` para sabermos
+     * se vale pedir o token AGORA, em vez de deixar o usuário levar 401 no meio do job.
+     * @param {string} base
+     * @returns {Promise<object|null>} JSON do health, ou null se o worker não responde
+     */
+    window.workerHealth = async function workerHealth(base) {
+        try {
+            let res = await window.workerFetch(base + '/health');
+            if (!res.ok) return null;
+            let j = await res.json();
+            if (!j || !j.ok) return null;
+            if (!j.paired && window.promptWorkerToken()) {
+                res = await window.workerFetch(base + '/health');
+                if (res.ok) j = await res.json();
+            }
+            return j;
+        } catch { return null; }
+    };
+
     // ==================== HASH DE SENHA — SEGURO (PBKDF2-SHA-256) ====================
     // Substitui o legacy `generateUltraSecureHash` (btoa+reverse, criptograficamente quebrado).
     // PBKDF2 com 100k iterações + SHA-256 é o mínimo defensável em 2025 para client-side hashing.
@@ -1126,6 +1194,17 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="box animate-section baixar-nfe-box" style="animation-delay: 0.05s; cursor: pointer;">
+                            <div class="box-content">
+                                <div class="box-icon">
+                                    <span class="material-icons-sharp">request_page</span>
+                                </div>
+                                <div class="box-info">
+                                    <h3>Baixar NFe</h3>
+                                    <p>Baixar XMLs de NFe (modelo 55) da SEFAZ via certificado A1</p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="box animate-section pis-cofins-box" style="animation-delay: 0.05s; cursor: pointer;">
                             <div class="box-content">
                                 <div class="box-icon">
@@ -1277,6 +1356,12 @@
                 baixarNfceBox.addEventListener('click', () => navigateTo('baixar-nfce'));
             }
 
+            // Card "Baixar NFe" → abre a página de download de NFe (modelo 55, cert A1)
+            const baixarNfeBox = document.querySelector('.baixar-nfe-box');
+            if (baixarNfeBox) {
+                baixarNfeBox.addEventListener('click', () => navigateTo('baixar-nfe'));
+            }
+
             // Card "PIS/COFINS + MIT" → abre modal de cálculo e geração de MIT
             const pisCofinsBox = document.querySelector('.pis-cofins-box');
             if (pisCofinsBox) {
@@ -1345,6 +1430,9 @@
         }
         else if (page === 'baixar-nfce') {
             createBaixarNfcePage(mainContent);
+        }
+        else if (page === 'baixar-nfe') {
+            createBaixarNfePage(mainContent);
         }
         else if (page === 'checagem-transferencias') {
             createChecagemTransferenciasPage(mainContent);
@@ -3965,12 +4053,7 @@ function workerHintHtml() {
 }
 
 async function detectDirbiWorker() {
-    try {
-        const res = await fetch(DIRBI_WORKER + '/health', { method: 'GET' });
-        if (!res.ok) return null;
-        const j = await res.json();
-        return (j && j.ok) ? j : null;
-    } catch { return null; }
+    return window.workerHealth(DIRBI_WORKER);
 }
 
 // Lê um File como string latin1 (ISO-8859-1) byte-a-byte: cada byte vira 1 char
@@ -4192,14 +4275,14 @@ async function processDirbiNode() {
         setStatus('Iniciando no Node...');
         const pathEl = document.getElementById('dirbi-inbox-path');
         const inboxPath = pathEl && pathEl.value.trim() ? pathEl.value.trim() : undefined;
-        const start = await (await fetch(DIRBI_WORKER + '/dirbi/start', {
+        const start = await (await window.workerFetch(DIRBI_WORKER + '/dirbi/start', {
             method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inboxPath }),
         })).json();
         if (!start.ok || !start.jobId) throw new Error(start.error || 'falha ao iniciar');
         const jobId = start.jobId;
         let st;
         for (;;) {
-            st = await (await fetch(DIRBI_WORKER + '/dirbi/status/' + encodeURIComponent(jobId))).json();
+            st = await (await window.workerFetch(DIRBI_WORKER + '/dirbi/status/' + encodeURIComponent(jobId))).json();
             if (st.error) throw new Error(st.error);
             const prog = st.phase === 'lendo'
                 ? `Lendo XML... ${st.filesDone}/${st.filesTotal} arquivo(s)`
@@ -4209,7 +4292,7 @@ async function processDirbiNode() {
             await new Promise((r) => setTimeout(r, 600));
         }
         // baixa o resultado (xlsx ou zip)
-        const res = await fetch(DIRBI_WORKER + '/dirbi/result/' + encodeURIComponent(jobId));
+        const res = await window.workerFetch(DIRBI_WORKER + '/dirbi/result/' + encodeURIComponent(jobId));
         if (!res.ok) throw new Error('resultado indisponível');
         const blob = await res.blob();
         triggerDownload(blob, st.resultName || 'DIRBI.xlsx');
@@ -9707,12 +9790,7 @@ function createBaixarNfcePage(mainContent) {
     }
 
     async function detectWorker() {
-        try {
-            const res = await fetch(WORKER_BASE + '/health', { method: 'GET' });
-            if (!res.ok) return false;
-            const j = await res.json();
-            return !!(j && j.ok);
-        } catch { return false; }
+        return !!(await window.workerHealth(WORKER_BASE));
     }
 
 
@@ -9721,7 +9799,7 @@ function createBaixarNfcePage(mainContent) {
         if (!companiesPayload || !companiesPayload.length) return false;
         let resp;
         try {
-            const res = await fetch(WORKER_BASE + '/nfce/start', {
+            const res = await window.workerFetch(WORKER_BASE + '/nfce/start', {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
@@ -9769,7 +9847,7 @@ function createBaixarNfcePage(mainContent) {
         let allDone = true;
         for (const jobId of jobIds) {
             try {
-                const res = await fetch(WORKER_BASE + '/nfce/status/' + encodeURIComponent(jobId));
+                const res = await window.workerFetch(WORKER_BASE + '/nfce/status/' + encodeURIComponent(jobId));
                 if (!res.ok) { allDone = false; continue; }
                 const st = await res.json();
                 applyStatus(jobId, st);
@@ -9795,7 +9873,7 @@ function createBaixarNfcePage(mainContent) {
     // Baixa o ZIP de uma empresa do worker (blob) e entrega via fila de downloads.
     async function downloadCompanyZip(jobId, id, zipName) {
         try {
-            const res = await fetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
+            const res = await window.workerFetch(WORKER_BASE + '/nfce/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
             if (!res.ok) return;
             const blob = await res.blob();
             enqueueDownload(blob, zipName || ('NFCe_' + id + '.zip'));
@@ -10087,6 +10165,910 @@ function createBaixarNfcePage(mainContent) {
     });
 }
 //---------------------------------- FIM Baixar NFCe ----------------------------------//
+
+//---------------------------------- INÍCIO Baixar NFe (XML) ----------------------------------//
+// Espelha createBaixarNfcePage com deltas: SEM token JWT (usa certificado A1
+// .pfx+senha por empresa), FILTRO modelo 55, rotas /nfe/*, SEM fallback no
+// browser (mTLS+SOAP só roda no worker Node).
+// ponytail: mirror deliberado do closure de NFCe. Helpers de anel/polling/parser
+// são privados àquela função; dedup exigiria extrair ~400 linhas de UI stateful
+// de uma página em produção (regressão no download NFCe que já funciona). A
+// duplicação fica contida nesta função. Upgrade: extrair helpers puros p/ escopo
+// de módulo num refactor dedicado sobre AS DUAS páginas, com teste manual de ambas.
+function createBaixarNfePage(mainContent) {
+    const CONCURRENCY = 2; // SEFAZ limita consumo por CNPJ — conservador (ver Task 6)
+
+    mainContent.innerHTML = `
+        <h1>Baixar NFe (XML)</h1>
+        <style>
+            .bn-shell { max-width: 920px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.4rem; }
+            .bn-dropzone { position: relative; min-height: 200px; border: 2px dashed var(--color-info-dark); border-radius: var(--card-border-radius); background: var(--color-white); box-shadow: var(--box-shadow); padding: 1.2rem; cursor: pointer; transition: border-color .2s ease, background .2s ease; display: flex; }
+            .bn-dropzone:hover, .bn-dropzone.bn-dragover { border-color: var(--color-primary); background: rgba(115,128,243,0.05); }
+            .bn-dropzone.has-reports { cursor: default; }
+            .bn-dz-empty { margin: auto; text-align: center; color: var(--color-info-dark); display: flex; flex-direction: column; align-items: center; gap: 0.6rem; pointer-events: none; }
+            .bn-dz-empty .material-icons-sharp { font-size: 3rem; opacity: 0.7; }
+            .bn-report-grid { display: grid; gap: 0.9rem; width: 100%; grid-auto-rows: 1fr; }
+            .bn-report-card { background: rgba(115,128,243,0.07); border: 1px solid rgba(115,128,243,0.35); border-radius: 0.8rem; padding: 1rem; display: flex; flex-direction: column; justify-content: center; gap: 0.45rem; min-height: 78px; animation: bnPop .28s cubic-bezier(0.16,1,0.3,1); transition: transform .35s cubic-bezier(0.16,1,0.3,1), opacity .35s ease; }
+            .bn-report-card .bn-rc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
+            .bn-report-card .bn-rc-count { font-size: 0.82rem; color: var(--color-primary); font-weight: 600; }
+            .bn-report-card .bn-rc-emp { font-size: 0.74rem; color: var(--color-info-dark); }
+            .bn-report-card.bn-merge { transform: scale(0.6); opacity: 0; }
+            @keyframes bnPop { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+            .bn-cert-list { display: flex; flex-direction: column; gap: 0.7rem; }
+            .bn-cert-card { background: var(--color-white); border: 1px solid rgba(115,128,243,0.30); border-left: 4px solid var(--color-primary); border-radius: 0.7rem; box-shadow: var(--box-shadow); padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; transition: transform .35s cubic-bezier(0.16,1,0.3,1), opacity .35s ease, border-color .2s ease; }
+            .bn-cert-card.bn-missing { border-left-color: var(--color-danger); border-color: var(--color-danger); }
+            .bn-cert-card.bn-merge { transform: scale(0.6); opacity: 0; }
+            .bn-cc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+            .bn-cc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
+            .bn-cc-count { font-size: 0.76rem; color: var(--color-primary); font-weight: 600; white-space: nowrap; }
+            .bn-cc-fields { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+            .bn-cc-file { flex: 1 1 220px; display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; cursor: pointer; color: var(--color-info-dark); font-size: 0.82rem; background: transparent; transition: border-color .2s ease, color .2s ease; overflow: hidden; }
+            .bn-cc-file:hover { border-color: var(--color-primary); }
+            .bn-cc-file.has-file { border-color: var(--color-success); color: var(--color-success); }
+            .bn-cc-file .material-icons-sharp { font-size: 1.1rem; }
+            .bn-cc-fname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .bn-cc-pass, .bn-cc-emp { flex: 1 1 180px; padding: 0.55rem 0.7rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-size: 0.85rem; }
+            .bn-cc-emp.has-emp { border-color: var(--color-success); }
+            .bn-cc-hint { font-size: 0.74rem; color: var(--color-info-dark); }
+            .bn-cc-hint.bn-warn { color: var(--color-danger); font-weight: 600; }
+            .bn-start-btn { padding: 0.8rem 1.6rem; border: none; border-radius: 0.6rem; background: var(--color-success); color: #fff; cursor: pointer; font-weight: 700; font-size: 0.95rem; align-self: flex-start; transition: opacity .2s ease, transform .1s ease; }
+            .bn-start-btn:disabled { opacity: 0.5; cursor: default; }
+            .bn-start-btn:not(:disabled):active { transform: translateY(1px); }
+            #bn-stage-download { animation: bnFadeIn .45s ease; }
+            @keyframes bnFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+            .bn-unified { position: relative; background: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: 1.4rem 1.4rem 0.9rem; display: flex; flex-direction: column; gap: 1rem; min-height: 300px; }
+            .bn-rings { display: grid; gap: 1.2rem 1.4rem; justify-items: center; align-items: start; flex: 1; padding-top: 0.4rem; }
+            .bn-ring-item { display: flex; flex-direction: column; align-items: center; gap: 0.55rem; width: 100%; }
+            .bn-ring { position: relative; width: 100%; max-width: 200px; aspect-ratio: 1 / 1; container-type: inline-size; }
+            .bn-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            .bn-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
+            .bn-ring .bn-track { stroke: rgba(125,141,161,0.20); }
+            .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .1s linear; }
+            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .1s linear; }
+            .bn-ring-item.done .bn-arc-yellow { stroke: #2bb673; }
+            .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+            .bn-ring-pct { font-weight: 700; color: var(--color-dark); font-size: clamp(0.95rem, 18cqw, 1.7rem); }
+            .bn-ring-label { font-size: 0.78rem; color: var(--color-dark); text-align: center; line-height: 1.25; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+            .bn-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid rgba(125,141,161,0.18); padding-top: 0.7rem; }
+            .bn-footer-text { font-size: 0.85rem; color: var(--color-dark); font-weight: 600; }
+            .bn-footer-text .bn-err { color: var(--color-danger); }
+            .bn-mini-ring { position: relative; width: 34px; height: 34px; flex: 0 0 auto; }
+            .bn-mini-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+            .bn-mini-ring circle { fill: none; stroke-width: 5; stroke-linecap: round; }
+            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+            .bn-unified:hover .bn-tooltip { opacity: 1; }
+            .bn-tooltip-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        </style>
+        <div class="bn-shell">
+            <div id="bn-stage-select" style="display: flex; flex-direction: column; gap: 1.2rem;">
+                <div id="bn-dropzone" class="bn-dropzone">
+                    <div id="bn-dz-empty" class="bn-dz-empty">
+                        <span class="material-icons-sharp">cloud_upload</span>
+                        <div style="font-weight: 600; color: var(--color-dark);">Clique ou arraste os relatórios</div>
+                        <div style="font-size: 0.82rem;">Um ou mais arquivos .xls / .xlsx (SIGA/SIGET) — só chaves modelo 55 (NFe) entram</div>
+                    </div>
+                    <div id="bn-report-grid" class="bn-report-grid" style="display: none;"></div>
+                </div>
+                <input type="file" id="bn-file" accept=".xls,.xlsx,.csv,.txt" multiple style="display: none;">
+
+                <div id="bn-cert-area" style="display: none; flex-direction: column; gap: 0.5rem;">
+                    <div style="font-size: 0.86rem; color: var(--color-dark); font-weight: 600;">Empresa e certificado A1 por relatório</div>
+                    <div style="font-size: 0.78rem; color: var(--color-info-dark);">Informe a <b>empresa dona do certificado</b> (a que recebeu as notas), anexe o <b>.pfx / .p12</b> e a senha. Em relatório de entradas o CNPJ das chaves é o do <b>fornecedor</b>, por isso a empresa precisa ser dita aqui. O certificado trafega só até o worker local (127.0.0.1) e nunca é gravado em disco.</div>
+                    <datalist id="bn-empresas"></datalist>
+                    <div id="bn-cert-list" class="bn-cert-list"></div>
+                </div>
+
+                <div id="bn-quota-hint" style="font-size: 0.8rem; min-height: 1rem;"></div>
+                <div id="bn-worker-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
+
+                <button id="bn-start" type="button" class="bn-start-btn" disabled>Iniciar Download NFe</button>
+            </div>
+
+            <div id="bn-stage-download" style="display: none;">
+                <div id="bn-unified" class="bn-unified">
+                    <div id="bn-tooltip" class="bn-tooltip"></div>
+                    <div id="bn-rings" class="bn-rings"></div>
+                    <div class="bn-footer">
+                        <span id="bn-footer-text" class="bn-footer-text">0 erros | 0%</span>
+                        <div id="bn-mini-ring" class="bn-mini-ring"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // ---------- refs de DOM ----------
+    const fileInput = document.getElementById('bn-file');
+    const dropzone = document.getElementById('bn-dropzone');
+    const dzEmpty = document.getElementById('bn-dz-empty');
+    const reportGrid = document.getElementById('bn-report-grid');
+    const certArea = document.getElementById('bn-cert-area');
+    const certList = document.getElementById('bn-cert-list');
+    const startBtn = document.getElementById('bn-start');
+    const stageSelect = document.getElementById('bn-stage-select');
+    const stageDownload = document.getElementById('bn-stage-download');
+    const ringsWrap = document.getElementById('bn-rings');
+    const footerText = document.getElementById('bn-footer-text');
+    const miniRingWrap = document.getElementById('bn-mini-ring');
+    const tooltipEl = document.getElementById('bn-tooltip');
+
+    // ---------- estado ----------
+    // { id, fileName, keys:[chave modelo 55], meta:Map<chave,{nNF,dhEmi,vNF}> }
+    let reports = [];
+    let reportSeq = 0;
+    // Empresas no estágio de download (1 anel por grupo cnpj+mês).
+    const companies = new Map();
+    // Certificado por RELATÓRIO (não por CNPJ da chave): reportId -> { rid, fileName,
+    // cnpj, keys:Set, pfxFile, pfxName, senha }.
+    // Por que por relatório: a chave carrega o CNPJ do EMITENTE. Num relatório de
+    // entradas isso é o fornecedor — 346 chaves deram 102 CNPJs distintos no teste real,
+    // o que pediria 102 certificados. O CNPJ interessado não está no dado; quem sabe é
+    // o usuário. Um relatório do portal da SEFAZ é sempre de uma empresa só.
+    const certGroups = new Map();
+    // CNPJ(14) -> Razão Social (contribuintes cadastrados).
+    const contributorsByCnpj = new Map();
+
+    // ---------- helpers básicos ----------
+    const cleanDigits = (s) => String(s || '').replace(/\D/g, '');
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+    const isModelo55 = (chave) => chave.length === 44 && chave.substring(20, 22) === '55';
+
+    function parseKeys(text) {
+        const out = [];
+        const seen = new Set();
+        if (!text) return out;
+        const re = /\d[\d.\-\/]{38,}\d/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            const k = m[0].replace(/\D/g, '');
+            if (k.length !== 44) continue;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(k);
+        }
+        return out;
+    }
+
+    // ---------- parser de relatório SIGA/SIGET (réplica local, como no NFCe) ----------
+    function parseCsvLineBN(line) {
+        const out = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false; }
+                else cur += ch;
+            } else {
+                if (ch === '"') inQuotes = true;
+                else if (ch === ',') { out.push(cur); cur = ''; }
+                else cur += ch;
+            }
+        }
+        out.push(cur);
+        return out.map((s) => s.trim());
+    }
+
+    function normalizeDate(s) {
+        const t = String(s || '').trim();
+        let m = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return m[1] + '-' + m[2] + '-' + m[3];
+        m = t.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1];
+        m = t.match(/(\d{2})-(\d{2})-(\d{4})/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1];
+        return t.slice(0, 10);
+    }
+
+    const cellStr = (c) => String(c == null ? '' : c).trim();
+    function parseReportRows(rows) {
+        if (!rows || rows.length < 2) return null;
+        let headerIdx = -1, header = null, idxChave = -1, idxValor = -1;
+        const scanLimit = Math.min(rows.length, 25);
+        for (let h = 0; h < scanLimit; h++) {
+            const cells = (rows[h] || []).map((c) => cellStr(c).toLowerCase());
+            const ic = cells.findIndex((c) => c.includes('chave'));
+            const iv = cells.findIndex((c) => c.includes('valor'));
+            if (ic !== -1 && iv !== -1) { headerIdx = h; header = cells; idxChave = ic; idxValor = iv; break; }
+        }
+        if (headerIdx === -1) return null;
+        const idxNum = header.findIndex((h) => h.includes('número') || h.includes('numero'));
+        const idxData = header.findIndex((h) => h.includes('data') || h.includes('emiss'));
+        const map = new Map();
+        for (let i = headerIdx + 1; i < rows.length; i++) {
+            const cols = rows[i] || [];
+            const key = cleanDigits(cellStr(cols[idxChave]));
+            if (!/^\d{44}$/.test(key)) continue;
+            const vNF = cellStr(cols[idxValor]);
+            const nNF = idxNum !== -1 ? cellStr(cols[idxNum]) : '';
+            const dhEmi = idxData !== -1 ? normalizeDate(cellStr(cols[idxData])) : '';
+            map.set(key, { nNF, dhEmi, vNF });
+        }
+        return map.size ? map : null;
+    }
+
+    function parseReportText(text) {
+        const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim() !== '');
+        return parseReportRows(lines.map((l) => parseCsvLineBN(l)));
+    }
+
+    function parseReportWorkbook(arrayBuffer) {
+        if (typeof XLSX === 'undefined') return { map: null, text: '' };
+        let wb;
+        try { wb = XLSX.read(arrayBuffer, { type: 'array' }); } catch (e) { return { map: null, text: '' }; }
+        let bestMap = null;
+        let dump = '';
+        for (const name of wb.SheetNames) {
+            const sheet = wb.Sheets[name];
+            if (!sheet) continue;
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+            dump += rows.map((r) => (r || []).join('\t')).join('\n') + '\n';
+            if (!bestMap) { const m = parseReportRows(rows); if (m) bestMap = m; }
+        }
+        return { map: bestMap, text: dump };
+    }
+
+    // Lê arquivos → relatórios. Filtra chaves para modelo 55 (NFe) já aqui.
+    async function readFiles(files) {
+        const out = [];
+        for (const f of files) {
+            try {
+                const name = (f.name || '').toLowerCase();
+                const isBinary = name.endsWith('.xls') || name.endsWith('.xlsx');
+                let reportMap = null, fallbackText = '';
+                if (isBinary) {
+                    const parsed = parseReportWorkbook(await f.arrayBuffer());
+                    reportMap = parsed.map; fallbackText = parsed.text;
+                } else {
+                    fallbackText = await f.text();
+                    reportMap = parseReportText(fallbackText);
+                }
+                const meta = new Map();
+                let keys = [];
+                if (reportMap) { reportMap.forEach((m, k) => { if (isModelo55(k)) { meta.set(k, m); keys.push(k); } }); }
+                else { keys = parseKeys(fallbackText).filter(isModelo55); }
+                if (!keys.length) { console.warn('Nenhuma chave modelo 55 em ' + f.name); continue; }
+                out.push({ id: ++reportSeq, fileName: f.name, keys, meta });
+            } catch (e) {
+                console.warn('Falha ao ler ' + f.name + ': ' + (e && e.message));
+            }
+        }
+        return out;
+    }
+
+    // pfx File -> base64 (ArrayBuffer → binário → btoa). Certificados A1 são pequenos.
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => {
+                try {
+                    const bytes = new Uint8Array(fr.result);
+                    let bin = '';
+                    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                    resolve(btoa(bin));
+                } catch (e) { reject(e); }
+            };
+            fr.onerror = () => reject(fr.error || new Error('Falha ao ler o certificado'));
+            fr.readAsArrayBuffer(file);
+        });
+    }
+
+    // ---------- chaves/mês (idêntico ao NFCe) ----------
+    const RING_R = 52, RING_C = 2 * Math.PI * RING_R;
+    const MINI_R = 14.5, MINI_C = 2 * Math.PI * MINI_R;
+    let miniBlue = null, miniYellow = null;
+
+    const clamp01 = (x) => Math.max(0, Math.min(1, x));
+    const cnpjFromKey = (chave) => String(chave).substring(6, 20);
+    function ymFromKey(chave) {
+        const aa = String(chave).substring(2, 4);
+        const mmNum = parseInt(String(chave).substring(4, 6), 10);
+        const mm = (mmNum >= 1 && mmNum <= 12) ? String(mmNum).padStart(2, '0') : '00';
+        return { mm, yyyy: '20' + aa };
+    }
+    function monthYearFromKey(chave) { const { mm, yyyy } = ymFromKey(chave); return mm + '-' + yyyy; }
+    function yyyymmFromKey(chave) { const { mm, yyyy } = ymFromKey(chave); return yyyy + mm; }
+    const sanitizeFileName = (s) => String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'EMPRESA';
+    const setArc = (circleEl, frac, circ) => { if (circleEl) circleEl.style.strokeDashoffset = String(circ * (1 - clamp01(frac))); };
+    const cnpjLabel = (cnpj) => 'CNPJ ' + (typeof formatCNPJ === 'function' ? formatCNPJ(cnpj) : cnpj);
+
+    // ---------- estágio de seleção: cards de relatório ----------
+    function renderReportCards() {
+        if (!reports.length) {
+            reportGrid.style.display = 'none';
+            dzEmpty.style.display = 'flex';
+            dropzone.classList.remove('has-reports');
+            return;
+        }
+        dzEmpty.style.display = 'none';
+        reportGrid.style.display = 'grid';
+        dropzone.classList.add('has-reports');
+        const n = reports.length;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+        reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+        reportGrid.innerHTML = reports.map((r) => {
+            // Emitentes das notas — 1 sugere saídas, vários sugerem entradas. Não é a
+            // empresa dona do certificado: essa é escolhida no card do certificado.
+            const emitentes = cnpjsDoRelatorio(r);
+            const nEmit = emitentes.size;
+            const emp = nEmit === 1
+                ? (contributorsByCnpj.get(Array.from(emitentes)[0]) || cnpjLabel(Array.from(emitentes)[0]))
+                : (nEmit ? nEmit + ' emitentes distintos' : '');
+            const nKeys = r.keys.length;
+            return '<div class="bn-report-card">' +
+                '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
+                '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + ' modelo 55</div>' +
+                (emp ? '<div class="bn-rc-emp">' + escapeHtml(emp) + '</div>' : '') +
+                '</div>';
+        }).join('');
+    }
+
+    // CNPJs distintos que aparecem nas chaves do relatório (emitentes das notas).
+    function cnpjsDoRelatorio(r) {
+        const s = new Set();
+        for (const chave of r.keys) if (isModelo55(chave)) s.add(cnpjFromKey(chave));
+        return s;
+    }
+
+    // Um grupo por relatório, preservando empresa/pfx/senha já preenchidos (sobrevive
+    // ao re-render quando entra novo arquivo).
+    function rebuildCertGroups() {
+        const next = new Map();
+        for (const r of reports) {
+            const old = certGroups.get(r.id);
+            const emitentes = cnpjsDoRelatorio(r);
+            // Um só CNPJ nas chaves = relatório de saídas: a empresa é ela mesma e dá
+            // para preencher sozinho. Vários = entradas, e só o usuário sabe qual é.
+            const auto = emitentes.size === 1 ? Array.from(emitentes)[0] : '';
+            next.set(r.id, {
+                rid: r.id, fileName: r.fileName,
+                cnpj: old ? old.cnpj : auto,
+                emitentes,
+                keys: new Set(r.keys.filter(isModelo55)),
+                pfxFile: old ? old.pfxFile : null,
+                pfxName: old ? old.pfxName : '',
+                senha: old ? old.senha : '',
+            });
+        }
+        certGroups.clear();
+        next.forEach((v, k) => certGroups.set(k, v));
+    }
+
+    function renderEmpresaOptions() {
+        const dl = document.getElementById('bn-empresas');
+        if (!dl) return;
+        dl.innerHTML = Array.from(contributorsByCnpj.entries())
+            .map(([cnpj, nome]) => '<option value="' + cnpj + '">' + escapeHtml(nome) + '</option>')
+            .join('');
+    }
+
+    // Texto de apoio do card: razão social quando reconhecida, e o aviso de saídas.
+    function cardHint(g) {
+        if (!g.cnpj) return { txt: 'Escolha a empresa dona do certificado (as notas são dela).', warn: false };
+        const nome = contributorsByCnpj.get(g.cnpj);
+        // Empresa == único emitente das chaves: é um relatório de saídas. A SEFAZ não
+        // distribui ao emitente a NF-e que ele mesmo emitiu (rejeição 641, medido).
+        if (g.emitentes.size === 1 && g.emitentes.has(g.cnpj)) {
+            return { txt: 'Relatório de saídas: são notas emitidas por esta empresa. A SEFAZ recusa entregá-las ao próprio emitente (rejeição 641) — use o relatório de entradas.', warn: true };
+        }
+        return { txt: nome ? nome : cnpjLabel(g.cnpj), warn: false };
+    }
+
+    function renderCertGroups() {
+        rebuildCertGroups();
+        const groups = Array.from(certGroups.values());
+        if (!groups.length) { certList.innerHTML = ''; certArea.style.display = 'none'; updateStartButton(); return; }
+        certArea.style.display = 'flex';
+        renderEmpresaOptions();
+        certList.innerHTML = groups.map((g) => {
+            const nKeys = g.keys.size;
+            const hasPfx = !!g.pfxFile;
+            const fname = hasPfx ? escapeHtml(g.pfxName) : 'Selecionar .pfx / .p12';
+            const icon = hasPfx ? 'verified_user' : 'upload_file';
+            const hint = cardHint(g);
+            return '<div class="bn-cert-card" data-rid="' + g.rid + '">' +
+                '<div class="bn-cc-head">' +
+                    '<span class="bn-cc-name">' + escapeHtml(g.fileName) + '</span>' +
+                    '<span class="bn-cc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + '</span>' +
+                '</div>' +
+                '<div class="bn-cc-fields">' +
+                    '<input type="text" class="bn-cc-emp' + (g.cnpj ? ' has-emp' : '') + '" list="bn-empresas" data-rid="' + g.rid + '" placeholder="CNPJ da empresa" autocomplete="off" inputmode="numeric">' +
+                    '<label class="bn-cc-file' + (hasPfx ? ' has-file' : '') + '">' +
+                        '<span class="material-icons-sharp">' + icon + '</span>' +
+                        '<span class="bn-cc-fname">' + fname + '</span>' +
+                        '<input type="file" accept=".pfx,.p12" data-rid="' + g.rid + '" style="display:none">' +
+                    '</label>' +
+                    '<input type="password" class="bn-cc-pass" data-rid="' + g.rid + '" placeholder="Senha do certificado" autocomplete="off">' +
+                '</div>' +
+                '<div class="bn-cc-hint' + (hint.warn ? ' bn-warn' : '') + '">' + escapeHtml(hint.txt) + '</div>' +
+            '</div>';
+        }).join('');
+        wireCertCards();
+        updateStartButton();
+    }
+
+    // Liga os campos por relatório. Senha e CNPJ são repostos via .value (não via
+    // atributo HTML) p/ não ter que escapar aspas e p/ não vazar a senha no innerHTML.
+    function wireCertCards() {
+        const gid = (inp) => certGroups.get(parseInt(inp.getAttribute('data-rid'), 10));
+        certList.querySelectorAll('.bn-cc-emp').forEach((inp) => {
+            const g = gid(inp);
+            if (g) inp.value = g.cnpj || '';
+            const onChange = () => {
+                const gg = gid(inp);
+                if (!gg) return;
+                gg.cnpj = cleanDigits(inp.value).slice(0, 14);
+                inp.classList.toggle('has-emp', gg.cnpj.length === 14);
+                const card = inp.closest('.bn-cert-card');
+                if (card) {
+                    card.classList.remove('bn-missing');
+                    const hintEl = card.querySelector('.bn-cc-hint');
+                    if (hintEl) {
+                        const h = cardHint(gg);
+                        hintEl.textContent = h.txt;
+                        hintEl.classList.toggle('bn-warn', h.warn);
+                    }
+                }
+                updateStartButton();
+            };
+            inp.addEventListener('input', onChange);
+            inp.addEventListener('change', onChange); // seleção no datalist
+        });
+        certList.querySelectorAll('.bn-cc-pass').forEach((inp) => {
+            const g = gid(inp);
+            if (g) inp.value = g.senha || '';
+            inp.addEventListener('input', () => {
+                const gg = gid(inp);
+                if (gg) gg.senha = inp.value;
+                const card = inp.closest('.bn-cert-card');
+                if (card) card.classList.remove('bn-missing');
+                updateStartButton();
+            });
+        });
+        certList.querySelectorAll('.bn-cc-file input[type=file]').forEach((inp) => {
+            inp.addEventListener('change', () => {
+                const f = inp.files && inp.files[0];
+                const g = gid(inp);
+                if (g && f) { g.pfxFile = f; g.pfxName = f.name; }
+                renderCertGroups(); // reflete nome do arquivo / ícone "verificado"
+            });
+        });
+    }
+
+    // Um relatório está pronto quando tem empresa (14 dígitos), .pfx e senha.
+    const groupReady = (g) => g.keys.size === 0 ||
+        (String(g.cnpj || '').length === 14 && !!g.pfxFile && String(g.senha || '').length > 0);
+
+    // Teto medido da SEFAZ: 20 consultas por hora por CNPJ, e `consChNFe` gasta uma
+    // consulta por nota. Dizer isso ANTES de começar evita o usuário achar que o
+    // download travou quando o job parar na 20ª de um lote de centenas.
+    const MAX_CONSULTAS_HORA = 20;
+    function updateQuotaHint() {
+        const el = document.getElementById('bn-quota-hint');
+        if (!el) return;
+        // Chaves por empresa: o teto é por CNPJ, então relatórios de empresas
+        // diferentes não disputam a mesma quota.
+        const porEmpresa = new Map();
+        certGroups.forEach((g) => {
+            if (!g.cnpj || !g.keys.size) return;
+            porEmpresa.set(g.cnpj, (porEmpresa.get(g.cnpj) || 0) + g.keys.size);
+        });
+        const maior = Math.max(0, ...porEmpresa.values());
+        if (maior <= MAX_CONSULTAS_HORA) { el.innerHTML = ''; return; }
+        const horas = Math.ceil(maior / MAX_CONSULTAS_HORA);
+        el.innerHTML = '<span style="color:var(--color-warning, #f5b301); font-weight:600;">⚠ ' +
+            'A SEFAZ libera ' + MAX_CONSULTAS_HORA + ' consultas por hora por CNPJ, e cada nota gasta uma. ' +
+            'A empresa com mais chaves tem ' + maior + ': virão ' + MAX_CONSULTAS_HORA +
+            ' por rodada — o lote inteiro levaria cerca de ' + horas + ' ' + (horas === 1 ? 'hora' : 'horas') +
+            ', repetindo o download a cada hora.</span>';
+    }
+
+    // Habilita "Iniciar" só quando todo relatório com chaves está pronto.
+    function updateStartButton() {
+        const groups = Array.from(certGroups.values());
+        const totalKeys = groups.reduce((a, g) => a + g.keys.size, 0);
+        updateQuotaHint();
+        if (!totalKeys) { startBtn.disabled = true; return; }
+        startBtn.disabled = !groups.every(groupReady);
+    }
+
+    async function handleSelectStageFiles(files) {
+        const novos = await readFiles(files);
+        if (!novos.length) return;
+        reports.push(...novos);
+        renderReportCards();
+        renderCertGroups();
+    }
+
+    // ---------- empresas + anéis (idêntico ao NFCe) ----------
+    function ringSvg() {
+        return '<svg viewBox="0 0 120 120">' +
+            '<circle class="bn-track" cx="60" cy="60" r="' + RING_R + '"></circle>' +
+            '<circle class="bn-arc-blue" cx="60" cy="60" r="' + RING_R + '" stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '"></circle>' +
+            '<circle class="bn-arc-yellow" cx="60" cy="60" r="' + RING_R + '" stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '"></circle>' +
+            '</svg>';
+    }
+
+    function layoutRings() {
+        const n = companies.size;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : n <= 9 ? 3 : 4;
+        ringsWrap.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+    }
+
+    function createCompany(compKey, id, cnpj, sampleKey, total) {
+        const nomeCad = contributorsByCnpj.get(cnpj) || '';
+        const comp = {
+            compKey, id, cnpj, nome: nomeCad, nomeResolved: !!nomeCad,
+            monthLabel: monthYearFromKey(sampleKey),
+            total: total || 0, downloaded: 0, errors: 0,
+            phase: 'download', zipProgress: 0,
+            zipReady: false, zipDownloaded: false,
+            els: null,
+        };
+        companies.set(compKey, comp);
+        const item = document.createElement('div');
+        item.className = 'bn-ring-item';
+        item.innerHTML =
+            '<div class="bn-ring">' + ringSvg() + '<div class="bn-ring-center"><div class="bn-ring-pct">0%</div></div></div>' +
+            '<div class="bn-ring-label"></div>';
+        ringsWrap.appendChild(item);
+        comp.els = {
+            root: item,
+            blue: item.querySelector('.bn-arc-blue'),
+            yellow: item.querySelector('.bn-arc-yellow'),
+            pct: item.querySelector('.bn-ring-pct'),
+            name: item.querySelector('.bn-ring-label'),
+        };
+        comp.els.name.textContent = comp.nome || cnpjLabel(cnpj);
+        layoutRings();
+        return comp;
+    }
+
+    function updateRing(comp) {
+        const els = comp.els; if (!els) return;
+        const dlFrac = comp.total ? (comp.downloaded + comp.errors) / comp.total : 0;
+        if (comp.phase === 'download') {
+            setArc(els.blue, dlFrac, RING_C);
+            setArc(els.yellow, 0, RING_C);
+            els.pct.textContent = Math.round(dlFrac * 100) + '%';
+            els.root.classList.remove('done');
+        } else {
+            setArc(els.blue, 1, RING_C);
+            setArc(els.yellow, comp.zipProgress, RING_C);
+            els.pct.textContent = Math.round(comp.zipProgress * 100) + '%';
+            if (comp.phase === 'done') { els.root.classList.add('done'); els.pct.textContent = '100%'; }
+        }
+        if (comp.nome) els.name.textContent = comp.nome;
+    }
+
+    function buildMiniRing() {
+        miniRingWrap.innerHTML = '<svg viewBox="0 0 40 40">' +
+            '<circle cx="20" cy="20" r="' + MINI_R + '" style="stroke:rgba(125,141,161,0.20)"></circle>' +
+            '<circle class="mb" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-primary)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:#f5b301" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '</svg>';
+        miniBlue = miniRingWrap.querySelector('.mb');
+        miniYellow = miniRingWrap.querySelector('.my');
+    }
+
+    function updateFooter() {
+        let totErr = 0, totKeys = 0, totDl = 0, zipSum = 0, allDownloaded = true;
+        const n = companies.size;
+        companies.forEach((c) => {
+            totErr += c.errors;
+            totKeys += c.total;
+            totDl += (c.downloaded + c.errors);
+            zipSum += c.zipProgress;
+            if (c.phase === 'download') allDownloaded = false;
+        });
+        const dlFrac = totKeys ? totDl / totKeys : 0;
+        const pct = Math.round(dlFrac * 100);
+        footerText.innerHTML = '<span class="bn-err">' + totErr + ' ' + (totErr === 1 ? 'erro' : 'erros') + '</span> | ' + pct + '%';
+        setArc(miniBlue, dlFrac, MINI_C);
+        setArc(miniYellow, (allDownloaded && n) ? zipSum / n : 0, MINI_C);
+    }
+
+    function updateTooltip() {
+        const rows = [];
+        companies.forEach((c) => {
+            const nm = c.nome || cnpjLabel(c.cnpj);
+            rows.push('<div class="bn-tooltip-row">' + escapeHtml(nm) + ': ' + c.downloaded + ' | ' + c.total + '</div>');
+        });
+        tooltipEl.innerHTML = rows.join('') || '—';
+    }
+
+    // ---------- fila de downloads (idêntico ao NFCe) ----------
+    const downloadQueue = [];
+    let downloadDraining = false;
+    function enqueueDownload(blob, name) {
+        downloadQueue.push({ blob, name });
+        drainDownloads();
+    }
+    async function drainDownloads() {
+        if (downloadDraining) return;
+        downloadDraining = true;
+        while (downloadQueue.length) {
+            const { blob, name } = downloadQueue.shift();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = name; a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            await delay(1200);
+            if (a.parentNode) document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }
+        downloadDraining = false;
+    }
+
+    // ---------- motor: worker local + polling (rotas /nfe/*) ----------
+    const WORKER_BASE = 'http://127.0.0.1:47620';
+    const jobIds = [];
+    let polling = false;
+    let useWorker = null;
+    let lastLaunchError = '';
+
+    // Agrupa por (empresa do relatório + mês da chave). A empresa vem do card, NÃO da
+    // chave — em entradas a chave carrega o CNPJ do fornecedor.
+    // Lê cada .pfx uma única vez. NUNCA loga pfxB64/senha.
+    async function buildCompanies() {
+        const byGroup = new Map();
+        for (const r of reports) {
+            const g = certGroups.get(r.id);
+            if (!g || !g.pfxFile || String(g.cnpj || '').length !== 14) continue;
+            const pfxB64 = await fileToBase64(g.pfxFile);
+            for (const chave of r.keys) {
+                if (!isModelo55(chave)) continue;
+                const id = g.cnpj + '-' + yyyymmFromKey(chave);
+                let c = byGroup.get(id);
+                if (!c) { c = { id, cnpj: g.cnpj, pfxB64, senha: String(g.senha || ''), keys: [], meta: {}, _seen: new Set() }; byGroup.set(id, c); }
+                if (!c._seen.has(chave)) { c._seen.add(chave); c.keys.push(chave); }
+                const m = r.meta && r.meta.get(chave);
+                if (m) c.meta[chave] = m;
+            }
+        }
+        return Array.from(byGroup.values()).filter((c) => c.keys.length).map((c) => {
+            delete c._seen;
+            return c;
+        });
+    }
+
+    // workerHealth trata o pareamento (pede o token quando o worker ainda não está pareado).
+    async function detectWorker() {
+        return !!(await window.workerHealth(WORKER_BASE));
+    }
+
+    async function launchJob(companiesPayload) {
+        if (!companiesPayload || !companiesPayload.length) return false;
+        let resp;
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/nfe/start', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ concurrency: CONCURRENCY, companies: companiesPayload }),
+            });
+            resp = await res.json();
+        } catch (e) { lastLaunchError = 'worker inacessível: ' + ((e && e.message) || 'erro de rede'); return false; }
+        if (!resp || !resp.ok || !resp.jobId) {
+            lastLaunchError = (resp && resp.error) || 'falha ao iniciar o worker';
+            footerText.innerHTML = '<span class="bn-err">' + escapeHtml(lastLaunchError) + '</span>';
+            return false;
+        }
+        lastLaunchError = '';
+        const jobId = resp.jobId;
+        jobIds.push(jobId);
+        for (const c of companiesPayload) {
+            const compKey = jobId + '|' + c.id;
+            if (!companies.has(compKey)) createCompany(compKey, c.id, c.cnpj, c.keys[0], c.keys.length);
+        }
+        updateFooter();
+        updateTooltip();
+        startPolling();
+        return true;
+    }
+
+    function applyStatus(jobId, st) {
+        for (const cs of st.companies) {
+            const comp = companies.get(jobId + '|' + (cs.id || cs.cnpj));
+            if (!comp) continue;
+            comp.total = cs.total;
+            comp.downloaded = cs.downloaded;
+            comp.errors = cs.errors;
+            if (cs.nome && cs.nome.indexOf('CNPJ ') !== 0) comp.nome = cs.nome;
+            if (cs.phase === 'done') { comp.phase = 'done'; comp.zipProgress = 1; }
+            else if (cs.phase === 'zip') { comp.phase = 'zip'; comp.zipProgress = 0.5; }
+            else comp.phase = 'download';
+            updateRing(comp);
+            if (cs.zipReady && !comp.zipDownloaded) {
+                comp.zipDownloaded = true;
+                downloadCompanyZip(jobId, cs.id || cs.cnpj, cs.zipName);
+            }
+        }
+    }
+
+    async function pollOnce() {
+        let allDone = true;
+        for (const jobId of jobIds) {
+            try {
+                const res = await window.workerFetch(WORKER_BASE + '/nfe/status/' + encodeURIComponent(jobId));
+                if (!res.ok) { allDone = false; continue; }
+                const st = await res.json();
+                applyStatus(jobId, st);
+                if (!st.done) allDone = false;
+            } catch { allDone = false; }
+        }
+        updateFooter();
+        updateTooltip();
+        return allDone;
+    }
+
+    async function startPolling() {
+        if (polling) return;
+        polling = true;
+        for (;;) {
+            const done = await pollOnce();
+            if (done) break;
+            await delay(800);
+        }
+        polling = false;
+        await explicarFalhas();
+    }
+
+    /**
+     * Ao fim do job, troca o "N erros" mudo pelo motivo dominante. A causa mais provável
+     * é a SEFAZ cortar por consumo (656) no meio do lote, e sem isto o usuário via só um
+     * número grande sem saber que as notas restantes nem foram tentadas.
+     */
+    async function explicarFalhas() {
+        const comFalha = Array.from(companies.values()).filter((c) => c.errors > 0);
+        if (!comFalha.length) return;
+        const linhas = [];
+        for (const comp of comFalha) {
+            const [jobId, id] = String(comp.compKey).split('|');
+            try {
+                const res = await window.workerFetch(WORKER_BASE + '/nfe/detail/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
+                if (!res.ok) continue;
+                const det = await res.json();
+                const contagem = new Map();
+                for (const f of det.failures || []) {
+                    const motivo = String(f.motivo || 'erro').replace(/^não tentado \([^:]+:\s*/, '').slice(0, 90);
+                    contagem.set(motivo, (contagem.get(motivo) || 0) + 1);
+                }
+                const top = Array.from(contagem.entries()).sort((a, b) => b[1] - a[1])[0];
+                if (top) linhas.push((comp.nome || cnpjLabel(comp.cnpj)) + ': ' + top[1] + '× ' + top[0]);
+            } catch { /* detail é diagnóstico: se falhar, fica só a contagem */ }
+        }
+        if (!linhas.length) return;
+        footerText.innerHTML = '<span class="bn-err">' + escapeHtml(linhas[0]) + '</span>';
+        tooltipEl.innerHTML = linhas.map((l) => '<div class="bn-tooltip-row">' + escapeHtml(l) + '</div>').join('');
+    }
+
+    async function downloadCompanyZip(jobId, id, zipName) {
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/nfe/zip/' + encodeURIComponent(jobId) + '/' + encodeURIComponent(id));
+            if (!res.ok) return;
+            const blob = await res.blob();
+            enqueueDownload(blob, zipName || ('NFe_' + id + '.zip'));
+        } catch (e) {
+            console.warn('Falha ao baixar ZIP de ' + id + ': ' + (e && e.message));
+        }
+    }
+
+    // ---------- segurança: zera senhas do DOM e credenciais do payload ----------
+    function clearSecrets(groups) {
+        document.querySelectorAll('.bn-cc-pass').forEach((i) => { i.value = ''; });
+        certGroups.forEach((g) => { g.senha = ''; });
+        if (groups) groups.forEach((c) => { c.pfxB64 = ''; c.senha = ''; });
+    }
+
+    // ---------- início do download (só worker — sem fallback no browser) ----------
+    async function startDownload() {
+        if (!certGroups.size) return;
+        // Validação: destaca relatórios sem empresa, sem .pfx ou sem senha.
+        let missing = false;
+        certList.querySelectorAll('.bn-cert-card').forEach((card) => {
+            const g = certGroups.get(parseInt(card.getAttribute('data-rid'), 10));
+            const bad = g && !groupReady(g);
+            card.classList.toggle('bn-missing', !!bad);
+            if (bad) missing = true;
+        });
+        if (missing) return;
+
+        startBtn.disabled = true;
+        useWorker = await detectWorker();
+        if (!useWorker) {
+            // mTLS + SOAP não roda no navegador — sem worker não há como processar.
+            const ws = document.getElementById('bn-worker-status');
+            if (ws) ws.innerHTML = workerHintHtml();
+            startBtn.disabled = false;
+            return;
+        }
+
+        let groups;
+        try {
+            groups = await buildCompanies();
+        } catch (e) {
+            showLaunchError('falha ao ler o certificado: ' + ((e && e.message) || 'erro'));
+            startBtn.disabled = false;
+            return;
+        }
+        if (!groups.length) { showLaunchError('nenhuma chave modelo 55 com certificado válido'); startBtn.disabled = false; return; }
+
+        // transição de estágio
+        Array.from(certList.children).forEach((c) => c.classList.add('bn-merge'));
+        Array.from(reportGrid.children).forEach((c) => c.classList.add('bn-merge'));
+        await delay(360);
+        stageSelect.style.display = 'none';
+        stageDownload.style.display = 'block';
+        buildMiniRing();
+
+        const ok = await launchJob(groups);
+        clearSecrets(groups); // limpa senha do DOM + base64 do payload logo após enviar
+
+        if (!ok && !companies.size) {
+            // reverte ao estágio de seleção e MOSTRA o erro (não deixa escondido no footer).
+            stageDownload.style.display = 'none';
+            stageSelect.style.display = 'flex';
+            startBtn.disabled = false;
+            showLaunchError(lastLaunchError || 'falha ao iniciar o download');
+        }
+    }
+
+    // Mostra erro de launch no estágio de seleção (visível), não no footer escondido.
+    function showLaunchError(msg) {
+        const ws = document.getElementById('bn-worker-status');
+        if (ws) ws.innerHTML = '<span style="color:var(--color-danger); font-weight:600;">✕ ' + escapeHtml(String(msg || '')) + '</span>';
+    }
+
+    // ---------- carga de contribuintes (CNPJ → razão social) ----------
+    async function loadContributors() {
+        try {
+            const list = await loadDataSync('contributors', []);
+            (list || []).forEach((c) => {
+                const cnpj = String(c.cnpj || '').replace(/\D/g, '');
+                if (cnpj.length === 14 && c.razaoSocial) contributorsByCnpj.set(cnpj, c.razaoSocial);
+            });
+        } catch (e) {
+            console.warn('Não foi possível carregar contribuintes: ' + (e && e.message));
+        }
+    }
+
+    // ====================== wiring ======================
+    dropzone.addEventListener('click', () => {
+        if (stageDownload.style.display === 'block') return;
+        fileInput.click();
+    });
+    dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('bn-dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('bn-dragover'));
+    dropzone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('bn-dragover');
+        const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+        if (files.length) await handleSelectStageFiles(files);
+    });
+
+    fileInput.addEventListener('change', async () => {
+        const files = Array.from(fileInput.files || []);
+        fileInput.value = '';
+        if (!files.length) return;
+        await handleSelectStageFiles(files);
+    });
+
+    startBtn.addEventListener('click', () => { startDownload(); });
+
+    loadContributors().then(() => { renderReportCards(); renderCertGroups(); });
+    renderReportCards();
+    updateStartButton();
+
+    // Detecta o worker no load. Sem worker, banner de instrução (sem fallback).
+    detectWorker().then((ok) => {
+        const ws = document.getElementById('bn-worker-status');
+        if (!ws) return;
+        ws.innerHTML = ok
+            ? '<span style="color:var(--color-success); font-weight:600;">● Worker Node detectado — pronto p/ baixar NFe via certificado A1.</span>'
+            : workerHintHtml();
+    });
+}
+//---------------------------------- FIM Baixar NFe (XML) ----------------------------------//
 
 // Funções de exportação globais para NFe | NFCe Comparison
 function exportToPDF() {
@@ -11269,18 +12251,13 @@ async function completeUserRegistration(name, username, control, password, profi
         await saveDataSync('registeredUsers', existingUsers);
         console.log('✅ Usuário atualizado e sincronizado:', existingUsers[userIndex]);
 
-        // Propaga metadados para o Supabase (user_profiles), casando por username.
-        // Best-effort: só funciona se houver sessão admin ativa (RLS). Não bloqueia o
-        // fluxo local. LIMITAÇÕES: (1) mudar `control` aqui NÃO altera a permissão
-        // efetiva no Supabase — current_user_is_admin() lê de auth.jwt().user_metadata,
-        // que só muda via admin API; (2) troca de senha de outro usuário não propaga ao
-        // auth.users (também exige admin API). Ambos ficam para a Edge Function admin.
+        // Propaga dados de EXIBIÇÃO para user_profiles (nome, foto). Best-effort: só
+        // funciona com sessão ativa (RLS) e não bloqueia o fluxo local.
         let supabaseAviso = '';
         if (window.supabaseSync?.auth?.updateProfile && window.supabaseSync.isConfigured()) {
             const upd = await window.supabaseSync.auth.updateProfile({
                 username: existingUser.username,
                 fullName: name,
-                control: control,
                 profileImage: profileImage,
             });
             if (!upd.ok && upd.error !== 'sem-sessao') {
@@ -11289,18 +12266,26 @@ async function completeUserRegistration(name, username, control, password, profi
             }
         }
 
-        // Senha (e control) precisam ir ao auth.users via Edge Function admin —
-        // updateProfile só toca user_profiles e não muda a senha de login. Só dispara
-        // quando uma nova senha foi informada na edição.
-        if (password && window.supabaseSync?.auth?.updateUser && window.supabaseSync.isConfigured()) {
-            const updPwd = await window.supabaseSync.auth.updateUser({
+        // Senha e permissão vivem em auth.users e só mudam pela Edge Function admin.
+        //
+        // A condição era `if (password && ...)`: trocar SÓ o control não disparava nada,
+        // então rebaixar um administrador aparecia na UI mas não revogava nada na nuvem —
+        // a pessoa continuava admin de fato. Agora dispara quando qualquer um dos dois muda.
+        const controlMudou = control !== existingUser.control;
+        if ((password || controlMudou) && window.supabaseSync?.auth?.updateUser && window.supabaseSync.isConfigured()) {
+            const updAuth = await window.supabaseSync.auth.updateUser({
                 username: existingUser.username,
-                password,
-                control,
+                password: password || undefined,
+                control: controlMudou ? control : undefined,
             });
-            if (!updPwd.ok && updPwd.error !== 'sem-sessao') {
-                console.warn('⚠️ Falha ao atualizar senha no Supabase:', updPwd.error);
-                supabaseAviso += '\n\n(Atenção: a nova senha foi salva localmente, mas não foi aplicada no login da nuvem: ' + updPwd.error + ')';
+            if (!updAuth.ok && updAuth.error !== 'sem-sessao') {
+                console.warn('⚠️ Falha ao atualizar auth.users no Supabase:', updAuth.error);
+                // Permissão desalinhada é mais grave que senha: a UI passa a mostrar um
+                // nível de acesso que a nuvem não aplica. Por isso o aviso é explícito.
+                supabaseAviso += controlMudou
+                    ? '\n\n⚠️ A PERMISSÃO NÃO FOI ALTERADA NA NUVEM (' + updAuth.error + ').'
+                      + '\nO usuário mantém o acesso anterior no Supabase. Refaça a edição.'
+                    : '\n\n(Atenção: a nova senha foi salva localmente, mas não foi aplicada no login da nuvem: ' + updAuth.error + ')';
             }
         }
 
