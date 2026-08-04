@@ -1,0 +1,6 @@
+# Segredos e artefatos locais do harvester — NUNCA commitar.
+token.txt
+tokens.json
+node_modules/
+pw-sefaz-profile/
+package-lock.json

@@ -1,0 +1,14 @@
+{
+  "name": "softtech-harvester",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sidecar Playwright: login headless SEFAZ-CE + colheita de token NFCe (porta 47621).",
+  "main": "harvest-server.js",
+  "scripts": {
+    "start": "node harvest-server.js",
+    "test": "node harvest-server.test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}
