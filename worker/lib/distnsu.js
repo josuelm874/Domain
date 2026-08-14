@@ -84,4 +84,76 @@ function firstTagLocal(xml, tag) {
     return m ? m[1].trim() : '';
 }
 
-module.exports = { buildDistNsuSoap, fetchDistNsuBatch };
+const cursor = require('./cursor.js');
+
+const UMA_HORA_MS = 3_600_000;
+const DEFAULT_MAX_CHAMADAS = 20;   // mesmo teto por hora do consChNFe; conservador aqui
+const DEFAULT_INTERVAL_MS = 1_500; // folga entre páginas; a NT não exige, mas não custa
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const nsuNum = (s) => parseInt(String(s || '0').replace(/\D/g, ''), 10) || 0;
+
+/**
+ * Varre o acervo de UM CNPJ, paginando pelo ultNSU. Grava o cursor a cada volta.
+ *
+ * `agora` é injetável só para o teste conseguir afirmar sobre o bloqueio sem depender do
+ * relógio de parede; em produção fica undefined e vale Date.now().
+ */
+async function runLoop(opts) {
+    const {
+        cnpj, cufAutor, tpAmb, pfx, passphrase, poster,
+        maxChamadas = DEFAULT_MAX_CHAMADAS,
+        intervalMs = DEFAULT_INTERVAL_MS,
+    } = opts;
+    const agora = () => (opts.agora == null ? Date.now() : opts.agora);
+
+    const saida = {
+        chamadas: 0, completos: [], resumos: [], eventos: [],
+        cStatFinal: '', ultNSU: cursor.read(cnpj).ultNSU, motivoParada: '',
+    };
+
+    if (cursor.bloqueado(cnpj, agora())) {
+        saida.motivoParada = 'cnpj-bloqueado';
+        return saida;
+    }
+
+    for (;;) {
+        if (saida.chamadas >= maxChamadas) { saida.motivoParada = 'teto-de-chamadas'; return saida; }
+
+        // FALHA FECHADO: o bloqueio da hora cheia é gravado ANTES da chamada. Se o processo
+        // morrer entre o POST e a resposta, o próximo run assume que a consulta foi gasta.
+        cursor.write(cnpj, { bloqueadoAte: agora() + UMA_HORA_MS });
+
+        const lote = await fetchDistNsuBatch({
+            cnpj, cufAutor, tpAmb, ultNSU: saida.ultNSU, pfx, passphrase, poster,
+        });
+        saida.chamadas++;
+        saida.cStatFinal = lote.cStat;
+
+        if (lote.cStat === '656' || lote.cStat === '137') {
+            // Hora cheia fica de pé — retomar dentro da janela zera o relógio (NT 2014.002).
+            cursor.write(cnpj, { ultimoCStat: lote.cStat, maxNSU: lote.maxNSU || undefined });
+            saida.motivoParada = lote.cStat === '656' ? 'consumo-indevido' : 'sem-documentos';
+            return saida;
+        }
+
+        saida.completos.push(...lote.completos);
+        saida.resumos.push(...lote.resumos);
+        saida.eventos.push(...lote.eventos);
+        saida.ultNSU = lote.ultNSU || saida.ultNSU;
+
+        // Resposta boa: afrouxa o bloqueio para o intervalo curto e avança o cursor.
+        cursor.write(cnpj, {
+            ultNSU: saida.ultNSU, maxNSU: lote.maxNSU, ultimoCStat: lote.cStat,
+            bloqueadoAte: agora() + intervalMs,
+        });
+
+        if (nsuNum(saida.ultNSU) >= nsuNum(lote.maxNSU)) {
+            saida.motivoParada = 'acervo-esgotado';
+            return saida;
+        }
+        if (intervalMs) await delay(intervalMs);
+    }
+}
+
+module.exports = { buildDistNsuSoap, fetchDistNsuBatch, runLoop, UMA_HORA_MS };
