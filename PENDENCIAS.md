@@ -28,7 +28,36 @@ Itens conhecidos para resolver depois. Ordem não é prioridade.
   de `procNFe` para notas sem manifestação do destinatário. Por `consChNFe` veio
   `procNFe` completo sem manifestação nenhuma — não se pode assumir que vale para os dois.
 
-#### Sondagens de `distNSU` em 2026-08-03 — ambas rejeitadas, pergunta em aberto
+#### `distNSU` FUNCIONA — medido em 2026-08-14 em outro CNPJ
+
+O bloqueio de 2026-08-03 era **do CNPJ da A&R**, não do serviço. Sondagem única
+(`scripts/probe-distnsu.cjs`) num CNPJ diferente, com `ultNSU=0`, **não foi punida**:
+
+```
+cStat 138 | Documento(s) localizado(s)
+ultNSU 000000000022844 | maxNSU 000000000023179 | docZip 50
+21× procNFe_v4.00 · 23× resNFe_v1.01 · 6× resEvento_v1.01
+```
+
+Medido a partir desse lote (`scripts/analyze-distnsu-dump.cjs`, sem gastar consulta):
+
+- **`procNFe` completo vem sem manifestação** — 21 dos 44. Os outros 23 vieram como
+  resumo. Os NSU são **intercalados** (`resNFe` 22795..22844, `procNFe` 22798..22842),
+  e não há evento 2102xx no lote: **o que separa completo de resumo continua desconhecido**.
+  Não bloqueia — a regra operacional é pegar o completo e manifestar o resumo.
+- **`distNSU` não entrega SAÍDAS.** Zero documentos com a empresa como emitente em 50
+  amostras. Mesma regra do cStat 641 do `consChNFe`: a SEFAZ não redistribui ao emitente
+  a nota que ele emitiu. **Não existe rota de API para XML de saída** — tem que vir do
+  sistema emissor.
+- **`ultNSU=0` é seguro em CNPJ sem consumidor externo.** A SEFAZ ignora o que passou dos
+  90 dias e entrega do mais antigo vivo. Foi punido na A&R e não aqui: a variável é o CNPJ.
+- **Volume:** estoque retido inteiro dessa empresa = 385 documentos = **8 chamadas**.
+  O teto de 20/hora deixa de ser gargalo.
+
+#### Sondagens de `distNSU` em 2026-08-03 — rejeitadas, e o diagnóstico estava incompleto
+
+> Superado pela medição de 2026-08-14 acima. O serviço nunca esteve fechado; o CNPJ da
+> A&R é que está. Mantido como registro do caso patológico.
 
 Duas tentativas, com 1 h de intervalo, as duas com a mesma resposta:
 
