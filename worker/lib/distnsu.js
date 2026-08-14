@@ -40,7 +40,7 @@ function buildDistNsuSoap({ tpAmb, cufAutor, cnpj, ultNSU }) {
 }
 
 const {
-    postDistDFeVia, parseRetDistDFe, DISTDFE_URL_PROD,
+    postDistDFe, postDistDFeVia, parseRetDistDFe, DISTDFE_URL_PROD,
 } = require('./nfe.js');
 
 // A chave está no Id do infNFe (procNFe) ou no chNFe (resNFe). Sem ela o documento não
@@ -59,9 +59,11 @@ const ehResumo = (schema) => /resNFe/i.test(schema || '');
  */
 async function fetchDistNsuBatch({ cnpj, cufAutor, tpAmb, ultNSU, pfx, passphrase, poster }) {
     const soap = buildDistNsuSoap({ tpAmb, cufAutor, cnpj, ultNSU });
-    const texto = await postDistDFeVia(poster, {
-        endpoint: DISTDFE_URL_PROD, pfx, passphrase, soap,
-    });
+    const alvo = { endpoint: DISTDFE_URL_PROD, pfx, passphrase, soap };
+    // `poster` é hook de teste; produção não injeta nada e precisa do mTLS real. O irmão
+    // fetchNfeXml faz `poster || httpsPostMtls` (nfe.js:164), mas httpsPostMtls não é
+    // exportado — postDistDFe é exatamente ele amarrado ao postDistDFeVia (nfe.js:150).
+    const texto = poster ? await postDistDFeVia(poster, alvo) : await postDistDFe(alvo);
     const ret = parseRetDistDFe(texto);
     const completos = [];
     const resumos = [];

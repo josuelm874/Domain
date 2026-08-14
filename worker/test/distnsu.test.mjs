@@ -68,6 +68,27 @@ test('fetchDistNsuBatch: 137 volta sem documento e não é erro', async () => {
     assert.strictEqual(r.totalDocs, 0);
 });
 
+test('fetchDistNsuBatch: sem poster usa o transporte mTLS real, não undefined', async () => {
+    // Regressão medida em 2026-08-14 no primeiro run com certificado de verdade:
+    // `postDistDFeVia(undefined, ...)` estourava `httpPostFn is not a function`. Produção
+    // NÃO injeta poster — o hook é só de teste, e por isso os outros 39 testes não pegaram.
+    //
+    // Um pfx que não é PKCS#12 faz o transporte real falhar na montagem do request
+    // (nfe.js:129), antes de abrir socket. Prova que o caminho de produção é alcançado
+    // sem gastar rede nem quota.
+    await assert.rejects(
+        () => fetchDistNsuBatch({
+            cnpj: '12345678000199', cufAutor: '23', tpAmb: '1', ultNSU: '0',
+            pfx: Buffer.from('isto não é um pkcs12'), passphrase: 'x',
+        }),
+        (e) => {
+            assert.doesNotMatch(e.message, /httpPostFn is not a function/,
+                'voltou a passar poster undefined para o postDistDFeVia');
+            return true;
+        },
+    );
+});
+
 test('fetchDistNsuBatch: manda o ultNSU recebido no envelope', async () => {
     let enviado = '';
     const poster = async ({ body }) => { enviado = body; return respostaFake({ docs: [] }); };
