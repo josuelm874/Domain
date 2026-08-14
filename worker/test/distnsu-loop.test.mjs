@@ -144,3 +144,36 @@ test('runLoop: retoma do cursor gravado, não do zero', async () => {
     await runLoop({ ...base(CNPJ), poster });
     assert.match(enviado, /<ultNSU>000000000000777<\/ultNSU>/);
 });
+
+const distnsu = require('../lib/distnsu.js');
+
+test('startJob: duas empresas, um ZIP cada, credenciais descartadas no fim', async () => {
+    const paginaCheia = resposta({ cStat: '138', ultNSU: '000000000000050', maxNSU: '000000000000050', n: 50 });
+    const job = distnsu.startJob({
+        companies: [
+            { cnpj: '77777777000199', pfxB64: Buffer.from('x').toString('base64'), senha: 's',
+              cufAutor: '23', intervalMs: 0, _poster: async () => paginaCheia },
+            { cnpj: '88888888000199', pfxB64: Buffer.from('x').toString('base64'), senha: 's',
+              cufAutor: '23', intervalMs: 0, _poster: async () => paginaCheia },
+        ],
+    });
+    // O job roda em background; espera terminar.
+    for (let i = 0; i < 200 && !distnsu.getStatus(job.id).done; i++) await new Promise((r) => setTimeout(r, 10));
+
+    const st = distnsu.getStatus(job.id);
+    assert.strictEqual(st.done, true);
+    assert.strictEqual(st.companies.length, 2);
+    for (const c of st.companies) {
+        assert.strictEqual(c.completos, 50);
+        assert.strictEqual(c.zipReady, true);
+        assert.match(c.zipName, /\.zip$/);
+    }
+    const z = distnsu.getCompanyZip(job.id, '77777777000199');
+    assert.ok(z && z.buffer && z.buffer.length > 0);
+});
+
+test('startJob: empresa sem certificado é recusada, não trava o job', () => {
+    const job = distnsu.startJob({ companies: [{ cnpj: '99999999000188', pfxB64: '' }] });
+    assert.strictEqual(job.done, true);
+    assert.match(job.error, /nenhuma empresa/);
+});

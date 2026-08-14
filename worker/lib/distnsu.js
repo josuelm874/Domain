@@ -156,4 +156,147 @@ async function runLoop(opts) {
     }
 }
 
-module.exports = { buildDistNsuSoap, fetchDistNsuBatch, runLoop, UMA_HORA_MS };
+const { buildZip } = require('./zip.js');
+const { newJobId } = require('./access.js');
+const { sanitizeFileName, cleanDigits } = require('./nfe.js');
+
+const jobs = new Map();
+
+function startJob(payload) {
+    // ID aleatório, não sequencial — mesmo motivo do nfe.js:294: `distnsu-1` seria
+    // adivinhável e dispensaria o atacante de saber qualquer coisa para baixar o ZIP.
+    const id = newJobId('distnsu');
+    const companies = new Map();
+
+    for (const c of (Array.isArray(payload.companies) ? payload.companies : [])) {
+        const cnpj = cleanDigits(c.cnpj);
+        if (cnpj.length !== 14) continue;
+        const pfxB64 = String(c.pfxB64 || '').trim();
+        if (!pfxB64) continue;
+        let pfx;
+        try { pfx = Buffer.from(pfxB64, 'base64'); } catch { continue; }
+        if (!pfx || !pfx.length) continue;
+        const gid = String(c.id || '').trim() || cnpj;
+        companies.set(gid, {
+            id: gid, cnpj, pfx, senha: String(c.senha || ''),
+            cufAutor: cleanDigits(c.cufAutor) || '23',
+            tpAmb: parseInt(c.tpAmb, 10) || 1,
+            maxChamadas: c.maxChamadas, intervalMs: c.intervalMs,
+            poster: c._poster || null, // hook de teste; produção usa mTLS real
+            phase: 'download', chamadas: 0, completos: 0, resumosPend: [],
+            eventos: 0, motivoParada: '', erro: '',
+            nome: '', xmls: [], zipBuffer: null, zipName: '',
+        });
+    }
+
+    const job = { id, companies, done: false, error: '' };
+    jobs.set(id, job);
+    if (!companies.size) {
+        job.done = true;
+        job.error = 'nenhuma empresa com CNPJ + certificado válidos';
+        return job;
+    }
+    runJob(job).catch((e) => { job.error = (e && e.message) || 'erro interno'; job.done = true; });
+    return job;
+}
+
+async function runJob(job) {
+    // Sequencial de propósito: a quota da SEFAZ é por CNPJ, mas o acervo é grande e não há
+    // ganho real em paralelizar empresas — e serializar mantém o log legível quando dá 656.
+    for (const comp of job.companies.values()) {
+        try {
+            const r = await runLoop({
+                cnpj: comp.cnpj, cufAutor: comp.cufAutor, tpAmb: comp.tpAmb,
+                pfx: comp.pfx, passphrase: comp.senha, poster: comp.poster,
+                maxChamadas: comp.maxChamadas, intervalMs: comp.intervalMs,
+            });
+            comp.chamadas = r.chamadas;
+            comp.completos = r.completos.length;
+            comp.eventos = r.eventos.length;
+            comp.resumosPend = r.resumos;      // insumo da Etapa 2 (manifestação 210210)
+            comp.motivoParada = r.motivoParada;
+            comp.xmls = r.completos.map((d) => ({
+                name: (d.chave || ('nsu-' + d.nsu)) + '.xml', data: d.xml,
+            }));
+            tryResolveNome(comp, r.completos);
+        } catch (e) {
+            comp.erro = (e && e.message) || 'erro';
+        }
+        finalizeCompany(comp);
+    }
+    // Segurança: descarta credenciais da memória ao fim do job (nfe.js:456).
+    job.companies.forEach((c) => { c.pfx = null; c.senha = ''; c.poster = null; });
+    job.done = true;
+}
+
+// Nome da empresa DONA do job, para batizar o ZIP. Tem que casar o CNPJ do certificado:
+// num acervo de entradas o <emit> é o FORNECEDOR (a armadilha registrada em nfe.js:263).
+function tryResolveNome(comp, docs) {
+    for (const d of docs) {
+        for (const tag of ['dest', 'emit']) {
+            const bloco = String(d.xml).match(new RegExp('<' + tag + '>[\\s\\S]*?</' + tag + '>'));
+            if (!bloco) continue;
+            const doc = bloco[0].match(/<CNPJ>(\d{14})<\/CNPJ>/);
+            if (!doc || doc[1] !== comp.cnpj) continue;
+            const nome = bloco[0].match(/<xNome>([^<]+)<\/xNome>/);
+            if (nome && nome[1]) { comp.nome = nome[1].trim(); return; }
+        }
+    }
+}
+
+function finalizeCompany(comp) {
+    if (!comp.xmls.length) { comp.phase = 'done'; return; }
+    comp.phase = 'zip';
+    try {
+        comp.zipBuffer = buildZip(comp.xmls);
+        comp.zipName = 'NFe distNSU_' +
+            sanitizeFileName(comp.nome || ('CNPJ ' + comp.cnpj)) + '.zip';
+        comp.xmls = [];
+    } catch (e) {
+        comp.erro = 'falha ao gerar ZIP: ' + ((e && e.message) || e);
+    }
+    comp.phase = 'done';
+}
+
+function companyStatus(c) {
+    return {
+        id: c.id, cnpj: c.cnpj, nome: c.nome || ('CNPJ ' + c.cnpj),
+        phase: c.phase, chamadas: c.chamadas, completos: c.completos,
+        resumos: c.resumosPend.length, eventos: c.eventos,
+        motivoParada: c.motivoParada, erro: c.erro,
+        zipReady: !!c.zipBuffer, zipName: c.zipName,
+    };
+}
+
+function getStatus(jobId) {
+    const job = jobs.get(jobId);
+    if (!job) return null;
+    const companies = [];
+    job.companies.forEach((c) => companies.push(companyStatus(c)));
+    return { ok: true, jobId: job.id, done: job.done, error: job.error || '', companies };
+}
+
+function acharComp(jobId, groupId) {
+    const job = jobs.get(jobId);
+    if (!job) return null;
+    return job.companies.get(String(groupId || '')) || job.companies.get(cleanDigits(groupId)) || null;
+}
+
+function getCompanyDetail(jobId, groupId) {
+    const c = acharComp(jobId, groupId);
+    if (!c) return null;
+    // As chaves dos resumos são o insumo da Etapa 2 — só chave e NSU, nada de conteúdo.
+    return { ok: true, ...companyStatus(c), resumosChaves: c.resumosPend.map((r) => r.chave) };
+}
+
+function getCompanyZip(jobId, groupId) {
+    const c = acharComp(jobId, groupId);
+    if (!c || !c.zipBuffer) return null;
+    return { buffer: c.zipBuffer, name: c.zipName };
+}
+
+module.exports = {
+    buildDistNsuSoap, fetchDistNsuBatch, runLoop,
+    startJob, getStatus, getCompanyDetail, getCompanyZip, jobs,
+    UMA_HORA_MS,
+};

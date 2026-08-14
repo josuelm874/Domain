@@ -492,4 +492,5 @@ module.exports = {
     unwrapDocZip, buildDistDFeIntSoap, parseRetDistDFe, postDistDFe, postDistDFeVia, fetchNfeXml,
     startJob, getStatus, getCompanyDetail, getCompanyZip, jobs,
     DISTDFE_URL_PROD, DISTDFE_VERSAO,
+    sanitizeFileName, cleanDigits,
 };
