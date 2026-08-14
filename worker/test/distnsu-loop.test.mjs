@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 // O arquivo do cursor precisa ser apontado ANTES do require da lib.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'distnsu-'));
@@ -36,6 +37,22 @@ test('cursor: bloqueado respeita bloqueadoAte', () => {
     cursor.write('99999999000199', { bloqueadoAte: 5_000 });
     assert.strictEqual(cursor.bloqueado('99999999000199', 4_999), true);
     assert.strictEqual(cursor.bloqueado('99999999000199', 5_001), false);
+});
+
+test('cursor: sem env, o arquivo cai em pasta gravável — não ao lado do node.exe', () => {
+    // Subprocesso porque CURSOR_PATH é congelado na carga do módulo, e este processo já
+    // carregou com DISTNSU_CURSOR_FILE setado. Sem isso o default nunca é exercitado.
+    // Regressão real: `path.dirname(process.execPath)` é C:\Program Files\nodejs em dev,
+    // e escrever ali dá EPERM — o harness da Task 7 não rodava.
+    const env = { ...process.env };
+    delete env.DISTNSU_CURSOR_FILE;
+    const destino = execFileSync(
+        process.execPath,
+        ['-e', 'process.stdout.write(require(process.argv[1]).CURSOR_PATH)', require.resolve('../lib/cursor.js')],
+        { env, encoding: 'utf8' },
+    );
+    assert.ok(destino.startsWith(os.homedir()),
+        'cursor tem que ficar em pasta gravável do usuário; veio: ' + destino);
 });
 
 test('cursor: arquivo corrompido não derruba o worker', () => {

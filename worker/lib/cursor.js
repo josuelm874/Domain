@@ -15,12 +15,18 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-// Ao lado do .exe quando empacotado com pkg; worker-local em dev. Mesma lógica do
-// TEMPLATE_PATH do dirbi.js, simplificada — aqui o arquivo é escrito, não só lido.
+// Na home do usuário, ao lado do token de pareamento (server.js:89). Mesmo dono, mesmo
+// ciclo de vida, e o caminho não muda entre `node worker/server.js` e o .exe do pkg.
+//
+// NÃO usar `path.dirname(process.execPath)` como o TEMPLATE_PATH do dirbi.js: lá o
+// arquivo é LIDO (dá para trocar o modelo sem rebuildar), aqui é ESCRITO. Rodando com
+// `node`, execPath é C:\Program Files\nodejs — escrever ali dá EPERM e derruba o loop
+// antes da primeira chamada. Medido em 2026-08-14 no harness `scripts/distnsu-run.cjs`.
 const CURSOR_PATH = process.env.DISTNSU_CURSOR_FILE ||
-    path.join(path.dirname(process.execPath), 'distnsu-cursors.json');
+    path.join(os.homedir(), '.softtech-distnsu-cursors.json');
 
 const VAZIO = { ultNSU: '0', maxNSU: '0', bloqueadoAte: 0, ultimoCStat: '', atualizadoEm: 0 };
 
