@@ -54,6 +54,15 @@ Medido a partir desse lote (`scripts/analyze-distnsu-dump.cjs`, sem gastar consu
 - **Volume:** estoque retido inteiro dessa empresa = 385 documentos = **8 chamadas**.
   O teto de 20/hora deixa de ser gargalo.
 
+**Fronteira do Baixar NFe (confirmada com o usuario em 2026-08-14):** os XMLs de saida
+vem do **sistema emissor do cliente**, por arquivo. Entradas por API, saidas por arquivo —
+isso e fronteira do escopo, nao lacuna. Nenhuma rota de SEFAZ devolve ao emitente a nota
+que ele emitiu.
+
+- **A verificar (1 grep, nao feito):** o sistema ja ingere pasta/zip de XML de saida, ou o
+  contador faz na mao? Se ja ingere, o assunto esta fechado. Se nao, e feature de
+  importacao de arquivo — barata perto do `distNSU` e sem quota envolvida.
+
 #### Sondagens de `distNSU` em 2026-08-03 — rejeitadas, e o diagnóstico estava incompleto
 
 > Superado pela medição de 2026-08-14 acima. O serviço nunca esteve fechado; o CNPJ da
