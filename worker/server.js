@@ -57,6 +57,7 @@ const LEGACY_FLAG = '--openssl-legacy-provider';
 const access = require('./lib/access');
 const nfce = require('./lib/nfce');
 const nfe = require('./lib/nfe');
+const distnsu = require('./lib/distnsu.js');
 const dirbi = require('./lib/dirbi');
 
 const HOST = '127.0.0.1';      // só loopback — nunca expor na rede
@@ -284,6 +285,48 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && path.startsWith('/nfe/zip/')) {
         const rest = path.slice('/nfe/zip/'.length).split('/');
         const z = nfe.getCompanyZip(decodeURIComponent(rest[0] || ''), decodeURIComponent(rest[1] || ''));
+        if (!z) { sendJson(res, 404, { ok: false, error: 'ZIP indisponível (job/empresa não pronto)' }); return; }
+        sendZip(res, z.buffer, z.name);
+        return;
+    }
+
+    // ====================== distNSU (acervo por CNPJ) ======================
+    // Dispara o loop: { companies:[{id,cnpj,pfxB64,senha,cufAutor,tpAmb,maxChamadas}] }.
+    // Não recebe chaves — o distNSU descobre o acervo sozinho, essa é a graça dele.
+    if (method === 'POST' && path === '/distnsu/start') {
+        try {
+            const raw = await readBody(req, 128_000_000); // .pfx em base64 por empresa
+            const payload = raw ? JSON.parse(raw) : {};
+            const job = distnsu.startJob(payload);
+            sendJson(res, 200, { ok: !job.error, jobId: job.id, error: job.error || '' });
+        } catch (e) {
+            sendJson(res, 400, { ok: false, error: (e && e.message) || 'payload inválido' });
+        }
+        return;
+    }
+
+    // Progresso (polling): GET /distnsu/status/{jobId}
+    if (method === 'GET' && path.startsWith('/distnsu/status/')) {
+        const jobId = decodeURIComponent(path.slice('/distnsu/status/'.length));
+        const st = distnsu.getStatus(jobId);
+        if (!st) { sendJson(res, 404, { ok: false, error: 'job não encontrado' }); return; }
+        sendJson(res, 200, st);
+        return;
+    }
+
+    // Detalhe (chaves em resumo, motivo da parada): GET /distnsu/detail/{jobId}/{cnpj}
+    if (method === 'GET' && path.startsWith('/distnsu/detail/')) {
+        const rest = path.slice('/distnsu/detail/'.length).split('/');
+        const detail = distnsu.getCompanyDetail(decodeURIComponent(rest[0] || ''), decodeURIComponent(rest[1] || ''));
+        if (!detail) { sendJson(res, 404, { ok: false, error: 'job/empresa não encontrado' }); return; }
+        sendJson(res, 200, detail);
+        return;
+    }
+
+    // Download do ZIP de uma empresa: GET /distnsu/zip/{jobId}/{cnpj}
+    if (method === 'GET' && path.startsWith('/distnsu/zip/')) {
+        const rest = path.slice('/distnsu/zip/'.length).split('/');
+        const z = distnsu.getCompanyZip(decodeURIComponent(rest[0] || ''), decodeURIComponent(rest[1] || ''));
         if (!z) { sendJson(res, 404, { ok: false, error: 'ZIP indisponível (job/empresa não pronto)' }); return; }
         sendZip(res, z.buffer, z.name);
         return;
