@@ -59,9 +59,34 @@ vem do **sistema emissor do cliente**, por arquivo. Entradas por API, saidas por
 isso e fronteira do escopo, nao lacuna. Nenhuma rota de SEFAZ devolve ao emitente a nota
 que ele emitiu.
 
-- **A verificar (1 grep, nao feito):** o sistema ja ingere pasta/zip de XML de saida, ou o
-  contador faz na mao? Se ja ingere, o assunto esta fechado. Se nao, e feature de
-  importacao de arquivo — barata perto do `distNSU` e sem quota envolvida.
+- **Verificado em 2026-08-14 — o sistema JÁ ingere XML de saída por arquivo.** O grep
+  fechou o assunto: existe caminho de saída, não só de entrada.
+  - **Saída (empresa é a emitente): tela DIRBI.** `createDirbiPage`
+    ([app.js:4204](assets/js/app.js#L4204)) → `processDirbiXmls`
+    ([app.js:4318](assets/js/app.js#L4318)) agrupa por `emit>CNPJ`. Aceita `.xml` avulso
+    e `.zip` (drop ou seleção múltipla) via `expandXmlInputs`
+    ([app.js:3956](assets/js/app.js#L3956)). Com o worker Node ligado, aceita **caminho de
+    pasta com subpastas** — `listFilesRec` em [worker/lib/dirbi.js:182](worker/lib/dirbi.js#L182),
+    preso sob `INBOX_ROOT` contra travessia de diretório. Sem filtro de modelo: qualquer
+    XML com `emit>CNPJ` entra (NF-e 55 e NFC-e 65).
+  - **Entrada (empresa é a destinatária): tela ICMS Withholding.**
+    `createIcmsWithholdingPage` ([app.js:2789](assets/js/app.js#L2789)) → `processIcmsXmls`
+    ([app.js:3057](assets/js/app.js#L3057)), mesmo `expandXmlInputs`. Filtra
+    `CFOP_VALIDOS` 5101/5102/5103/5105/5910 e `UF_VALIDO 23`
+    ([app.js:2749](assets/js/app.js#L2749)) — CFOP de saída **do fornecedor**, que é
+    entrada da empresa.
+  - **`tpNF` não é lido em lugar nenhum do código.** A separação entrada/saída é feita por
+    qual CNPJ agrupa (emitente vs destinatário), não pelo campo da NF-e.
+
+- **Lacunas que sobram (não bloqueiam o Baixar NFe; nenhuma foi aprovada):**
+  1. Ingestão de saída existe **só dentro da DIRBI** e só desemboca na planilha DIRBI. Não
+     há importação de saída genérica que alimente outra apuração.
+  2. **Pasta só pelo worker Node, e só na DIRBI.** No browser nenhuma tela tem
+     `webkitdirectory` — pasta vira multi-seleção de arquivos ou `.zip`. Se valer a pena,
+     é `webkitdirectory` no input de [app.js:4219](assets/js/app.js#L4219) (~1 linha, mais
+     o filtro de extensão no handler de drop).
+  3. **Nenhum XML é persistido.** Toda tela é upload → planilha → descarta (`indexedDB` só
+     guarda file handles do SPED). Cada apuração reimporta os mesmos arquivos.
 
 #### Sondagens de `distNSU` em 2026-08-03 — rejeitadas, e o diagnóstico estava incompleto
 
