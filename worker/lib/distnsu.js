@@ -39,4 +39,49 @@ function buildDistNsuSoap({ tpAmb, cufAutor, cnpj, ultNSU }) {
         `</nfeDistDFeInteresse></soap12:Body></soap12:Envelope>`;
 }
 
-module.exports = { buildDistNsuSoap };
+const {
+    postDistDFeVia, parseRetDistDFe, DISTDFE_URL_PROD,
+} = require('./nfe.js');
+
+// A chave está no Id do infNFe (procNFe) ou no chNFe (resNFe). Sem ela o documento não
+// vira arquivo com nome útil no ZIP.
+function chaveDoXml(xml) {
+    const m = String(xml).match(/Id="NFe(\d{44})"/) || String(xml).match(/<chNFe>(\d{44})<\/chNFe>/);
+    return m ? m[1] : '';
+}
+
+const ehCompleto = (schema) => /procNFe/i.test(schema || '');
+const ehResumo = (schema) => /resNFe/i.test(schema || '');
+
+/**
+ * UMA chamada distNSU. Não repete, não faz backoff, não decide nada sobre quota —
+ * quem decide é o loop da Task 4, que é o dono do cursor.
+ */
+async function fetchDistNsuBatch({ cnpj, cufAutor, tpAmb, ultNSU, pfx, passphrase, poster }) {
+    const soap = buildDistNsuSoap({ tpAmb, cufAutor, cnpj, ultNSU });
+    const texto = await postDistDFeVia(poster, {
+        endpoint: DISTDFE_URL_PROD, pfx, passphrase, soap,
+    });
+    const ret = parseRetDistDFe(texto);
+    const completos = [];
+    const resumos = [];
+    const eventos = [];
+    for (const d of ret.docs) {
+        if (ehCompleto(d.schema)) completos.push({ nsu: d.nsu, chave: chaveDoXml(d.xml), xml: d.xml });
+        else if (ehResumo(d.schema)) resumos.push({ nsu: d.nsu, chave: chaveDoXml(d.xml) });
+        else eventos.push({ nsu: d.nsu, schema: d.schema });
+    }
+    return {
+        cStat: ret.cStat, xMotivo: ret.xMotivo,
+        ultNSU: firstTagLocal(texto, 'ultNSU'), maxNSU: firstTagLocal(texto, 'maxNSU'),
+        completos, resumos, eventos, totalDocs: ret.docs.length,
+    };
+}
+
+// Mesmo firstTag de nfe.js:69 — não exportado de lá, e são 3 linhas.
+function firstTagLocal(xml, tag) {
+    const m = String(xml).match(new RegExp('<' + tag + '>([\\s\\S]*?)<\\/' + tag + '>'));
+    return m ? m[1].trim() : '';
+}
+
+module.exports = { buildDistNsuSoap, fetchDistNsuBatch };
