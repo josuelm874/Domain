@@ -28,10 +28,8 @@
  * cifra que o OpenSSL 3 tirou do provider padrão (ver nfe.js:102).
  */
 const fs = require('fs');
-const { postDistDFe, parseRetDistDFe, DISTDFE_URL_PROD, DISTDFE_VERSAO } = require('../worker/lib/nfe.js');
-
-const NFE_NS = 'http://www.portalfiscal.inf.br/nfe';
-const WSDL_NS = 'http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe';
+const { postDistDFe, parseRetDistDFe, DISTDFE_URL_PROD } = require('../worker/lib/nfe.js');
+const { buildDistNsuSoap } = require('../worker/lib/distnsu.js');
 
 function arg(name, fallback) {
     const i = process.argv.indexOf('--' + name);
@@ -42,22 +40,6 @@ const tag = (xml, t) => {
     const m = String(xml).match(new RegExp('<' + t + '>([\\s\\S]*?)<\\/' + t + '>'));
     return m ? m[1].trim() : '';
 };
-
-// distNSU — o irmão do consChNFe de nfe.js:49. Mesma casca, outro miolo.
-function buildDistNsuSoap({ tpAmb, cufAutor, cnpj, ultNSU }) {
-    const distDFeInt =
-        `<distDFeInt xmlns="${NFE_NS}" versao="${DISTDFE_VERSAO}">` +
-        `<tpAmb>${tpAmb}</tpAmb>` +
-        `<cUFAutor>${cufAutor}</cUFAutor>` +
-        `<CNPJ>${cnpj}</CNPJ>` +
-        `<distNSU><ultNSU>${String(ultNSU).padStart(15, '0')}</ultNSU></distNSU>` +
-        `</distDFeInt>`;
-    return `<?xml version="1.0" encoding="utf-8"?>` +
-        `<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">` +
-        `<soap12:Body><nfeDistDFeInteresse xmlns="${WSDL_NS}">` +
-        `<nfeDadosMsg>${distDFeInt}</nfeDadosMsg>` +
-        `</nfeDistDFeInteresse></soap12:Body></soap12:Envelope>`;
-}
 
 // Envelope malformado custa 1 hora de janela (a SEFAZ devolve 215 e a consulta já
 // foi gasta). Este check roda offline e é o portão antes de qualquer chamada real.
