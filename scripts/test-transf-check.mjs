@@ -109,4 +109,10 @@ const rCstDivergente = core.compararTransferencias(
 assert.deepEqual(rCstDivergente.divergentes[0].campos.map((c) => c.campo), ['CST']);
 assert.equal(rCstDivergente.cstComparado, true);
 
+// --- temCst: a UI so mostra CST quando ele existe em algum dos lados ---
+assert.equal(rSemCst.temCst, false, 'nenhum lado trouxe CST');
+assert.equal(rAssimetrico.temCst, true, 'um lado trouxe CST, a coluna existe');
+assert.equal(rCstDivergente.temCst, true);
+assert.equal(r.temCst, true);
+
 console.log('✅ test-transf-check: todas as asserções passaram');

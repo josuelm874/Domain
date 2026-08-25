@@ -115,16 +115,6 @@ ultNSU retornado: 000000000103111 | maxNSU: 000000000000000
 - **Próximo passo sugerido (não é mais sondagem cega):** descobrir quem consome o fluxo
   da A&R antes de gastar outra hora. Sondar de novo só depois disso.
 
-### P4 — Transferências: 43 notas de saída com chave mas sem CFOP
-- **Medido em 2026-08-25** sobre os 10 relatórios de `Downloads/TRANSFERENCIAS`: 43 linhas
-  trazem chave eletrônica de 44 dígitos válida, mas as células de CFOP e Valor Total vêm
-  em branco — 21 na FILIAL 002, 12 na MATRIZ, 8 na 004, 2 na 005. Nenhuma na ENTRADA.
-- Sem CFOP a nota não é classificável como transferência, então fica fora da checagem.
-  Hoje isso vira aviso visível no modal (`assets/js/transf-check.js`), não mais silêncio.
-- **A decidir:** o que essas linhas são no ERP — nota cancelada/denegada, célula mesclada
-  perdida na exportação, ou nota sem itens. Se alguma puder ser transferência, a checagem
-  está cega para até 43 notas e o tratamento precisa mudar.
-
 ### P5 — Transferências: 30 notas com CFOP 5152 na saída escrituradas como 1409 na entrada
 - Das 148 transferências conferidas, 118 batem e **30 divergem, todas só no CFOP**.
   Valor idêntico nos dois lados em **30/30**; nenhuma nota ausente.
@@ -160,6 +150,22 @@ acompanhado. Logo não é artefato de exibição — a entrada está registrada 
 - **Ação:** rodar `node scripts/bundle-worker.js` e republicar. Ver também P1b.
 
 ## Resolvido
+
+### ✓ Transferências — notas canceladas e ausência de CST (2026-08-25)
+- **Notas canceladas.** As 43 linhas de saída com chave válida mas CFOP e valor em branco
+  são **notas canceladas** (confirmado pelo Josué). Medição: sem CFOP = 43, sem valor = 43,
+  sem os dois = 43, e **zero** linhas com um e não o outro — o critério conjuntivo identifica
+  exatamente esse conjunto. `lerPlanilha` passou a excluí-las de `rows` e a contá-las à
+  parte, o que corrigiu a contagem de notas lidas na saída (539 → 496 + 43 canceladas).
+  Aparecem na linha de resumo do modal, não no banner de avisos. Uma linha sem CFOP **mas
+  com valor** continua gerando aviso — caso desconhecido não vira rótulo errado.
+- **CST.** Esta conferência não tem informação de CST para comparar (confirmado pelo Josué).
+  O suporte condicional no código fica — se um relatório futuro trouxer a coluna, ela é
+  comparada. Mas a UI parou de anunciar a ausência: sem aviso, sem sufixo na contagem, e a
+  coluna CST some das tabelas e dos exports quando `temCst` é falso. Estado permanente e
+  esperado não ocupa o banner — senão o aviso que pede ação se perde no ruído.
+- Resultado com os 10 relatórios reais: 148 transferências, 118 sem divergência, 30
+  divergentes (ver P5, fechado), 0 ausentes, **0 avisos**.
 
 ### ✓ Zip NFCe — separação por mês + nome com mês 2 dígitos (2026-06-29)
 - Agrupamento passou de só-CNPJ para `CNPJ + mês`: meses diferentes da mesma empresa geram ZIPs separados.

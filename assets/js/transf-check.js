@@ -132,6 +132,9 @@
         const divergentes = [];
         let ok = 0;
         let cstComparado = false;
+        // Este relatorio nao traz CST. `temCst` diz se ALGUMA linha trouxe, para a UI nao
+        // exibir coluna e mensagem de um campo que nunca existiu nesta conferencia.
+        const temCst = saidaRows.some((x) => x.csts.length) || entradaRows.some((x) => x.csts.length);
 
         for (const s of transferencias) {
             const e = porChave.get(s.chave);
@@ -165,7 +168,7 @@
             else ok++;
         }
 
-        return { totalTransferencias: transferencias.length, faltantes, divergentes, ok, cstComparado };
+        return { totalTransferencias: transferencias.length, faltantes, divergentes, ok, cstComparado, temCst };
     }
 
     const core = {
@@ -199,11 +202,12 @@
             reader.onload = (e) => {
                 const rows = [];
                 const avisos = [];
-                let semCst = false;
+                let totalCanceladas = 0;
                 try {
                     const isCsv = /\.csv$/i.test(file.name);
                     const workbook = XLSX.read(e.target.result, { type: isCsv ? 'string' : 'array', raw: true });
-                    let semCfop = 0;
+                    let canceladas = 0;
+                    let semCfopComValor = 0;
                     for (const nome of workbook.SheetNames) {
                         const sheet = workbook.Sheets[nome];
                         if (!sheet['!ref']) continue;
@@ -213,34 +217,41 @@
                             avisos.push(`${file.name} / ${nome}: cabeçalho com Chave, CFOP e Valor não encontrado — aba ignorada.`);
                             continue;
                         }
-                        if (cab.iCst === -1) semCst = true;
                         for (let r = cab.linha + 1; r < matriz.length; r++) {
                             const linha = matriz[r] || [];
                             const chave = onlyDigits(linha[cab.iChave]);
                             if (chave.length !== 44) continue;
                             const cfops = normCfops(linha[cab.iCfop]);
-                            if (!cfops.length) semCfop++;
+                            const valor = parseValor(linha[cab.iValor]);
+                            // Nota cancelada: o relatorio mantem a chave e esvazia CFOP e valor.
+                            // Fora da checagem por natureza -- e fora de `rows`, senao inflaria a
+                            // contagem de notas lidas. Se a entrada de uma transferencia for
+                            // cancelada, a saida corretamente aparece como ausente na entrada.
+                            if (!cfops.length && isNaN(valor)) { canceladas++; continue; }
+                            // Sem CFOP mas COM valor nao e cancelamento -- caso desconhecido, avisa.
+                            if (!cfops.length) semCfopComValor++;
                             rows.push({
                                 chave,
                                 cfops,
                                 csts: cab.iCst === -1 ? [] : normCsts(linha[cab.iCst]),
-                                valor: parseValor(linha[cab.iValor]),
+                                valor,
                                 origem: file.name,
                             });
                         }
                     }
-                    if (semCfop) avisos.push(`${file.name}: ${semCfop} nota(s) com chave mas sem CFOP — fora da checagem.`);
+                    totalCanceladas += canceladas;
+                    if (semCfopComValor) avisos.push(`${file.name}: ${semCfopComValor} nota(s) sem CFOP mas com valor — fora da checagem, verificar no ERP.`);
                     if (!rows.length) avisos.push(`${file.name}: nenhuma nota lida.`);
-                    console.log(`✅ ${file.name}: ${rows.length} notas lidas`);
+                    console.log(`✅ ${file.name}: ${rows.length} notas lidas${totalCanceladas ? ` (+${totalCanceladas} cancelada[s])` : ''}`);
                 } catch (err) {
                     console.error(`❌ Erro ao ler ${file.name}:`, err);
                     avisos.push(`${file.name}: erro ao ler o arquivo (${err && err.message ? err.message : err}).`);
                 }
-                resolve({ nome: file.name, rows, avisos, semCst });
+                resolve({ nome: file.name, rows, avisos, canceladas: totalCanceladas });
             };
             reader.onerror = () => {
                 console.error(`❌ Falha de leitura: ${file.name}`);
-                resolve({ nome: file.name, rows: [], avisos: [`${file.name}: falha de leitura do arquivo.`], semCst: false });
+                resolve({ nome: file.name, rows: [], avisos: [`${file.name}: falha de leitura do arquivo.`], canceladas: 0 });
             };
             if (/\.csv$/i.test(file.name)) reader.readAsText(file, 'utf-8');
             else reader.readAsArrayBuffer(file);
@@ -280,13 +291,11 @@
     // Linhas planas usadas pelos dois exportadores (uma linha por campo divergente,
     // para que a planilha fique filtrável por campo).
     function linhasDoResultado(r) {
-        const ausentes = r.faltantes.map((f) => ({
-            Chave: f.chave,
-            CFOP: f.cfops.join(' / '),
-            CST: f.csts.join(' / '),
-            Valor: f.valor,
-            Arquivo: f.origem,
-        }));
+        const ausentes = r.faltantes.map((f) => Object.assign(
+            { Chave: f.chave, CFOP: f.cfops.join(' / ') },
+            r.temCst ? { CST: f.csts.join(' / ') } : null,
+            { Valor: f.valor, Arquivo: f.origem }
+        ));
         const divergencias = r.divergentes.flatMap((d) =>
             d.campos.map((c) => ({
                 Chave: d.saida.chave,
@@ -352,12 +361,12 @@
         escrever(`Ausentes na Entrada (${r.faltantes.length})`, 12);
         if (!ausentes.length) escrever('Nenhuma nota de saída ausente na entrada.', 9);
         for (const a of ausentes) {
-            escrever(`${a.Chave}  CFOP ${a.CFOP}  CST ${a.CST}  R$ ${fmtBRL(a.Valor)}  [${a.Arquivo}]`, 8);
+            escrever(`${a.Chave}  CFOP ${a.CFOP}${r.temCst ? `  CST ${a.CST}` : ''}  R$ ${fmtBRL(a.Valor)}  [${a.Arquivo}]`, 8);
         }
 
         y += 4;
         escrever(`Divergências (${r.divergentes.length})`, 12);
-        if (!divergencias.length) escrever('Nenhuma divergência de CFOP, CST ou valor.', 9);
+        if (!divergencias.length) escrever(`Nenhuma divergência de CFOP${r.temCst ? ', CST' : ''} ou valor.`, 9);
         for (const d of divergencias) {
             escrever(`${d.Chave}  ${d.Campo}: saída ${d['Saída']} | entrada ${d.Entrada}`, 8);
         }
@@ -378,7 +387,7 @@
         const saidaRows = [];
         const entradaRows = [];
         const avisos = [];
-        const arquivosSemCst = [];
+        let canceladas = 0;
         let saidaPronto = false;
         let entradaPronto = false;
 
@@ -395,7 +404,7 @@
                 for (const lista of listas) {
                     destino.push(...lista.rows);
                     avisos.push(...lista.avisos);
-                    if (lista.semCst) arquivosSemCst.push(lista.nome);
+                    canceladas += lista.canceladas;
                 }
                 animarCheck(label, check);
                 aoTerminar();
@@ -463,13 +472,13 @@
                 <div id="transf-faltantes-tab" class="tab-content" style="display:block;">
                     ${r.faltantes.length ? `
                     <table>
-                        <thead><tr><th>Chave</th><th>CFOP</th><th>CST</th><th>Valor</th><th>Arquivo</th></tr></thead>
+                        <thead><tr><th>Chave</th><th>CFOP</th>${r.temCst ? '<th>CST</th>' : ''}<th>Valor</th><th>Arquivo</th></tr></thead>
                         <tbody>
                             ${r.faltantes.map((f) => `
                                 <tr>
                                     <td>${f.chave}</td>
                                     <td>${f.cfops.join(' / ')}</td>
-                                    <td>${f.csts.join(' / ')}</td>
+                                    ${r.temCst ? `<td>${f.csts.join(' / ')}</td>` : ' + Q + Q + '}
                                     <td>R$ ${fmtBRL(f.valor)}</td>
                                     <td>${escapeHtml(f.origem)}</td>
                                 </tr>`).join('')}
@@ -489,22 +498,19 @@
                                     <td class="dif">${c.entrada}</td>
                                 </tr>`).join('')).join('')}
                         </tbody>
-                    </table>` : '<p class="success-message">Nenhuma divergência de CFOP, CST ou valor</p>'}
+                    </table>` : `<p class="success-message">Nenhuma divergência de CFOP${r.temCst ? ', CST' : ''} ou valor</p>`}
                 </div>`;
 
             // A barra de abas é absoluta no topo do modal; o conteúdo começa abaixo dela.
-            // Nome de arquivo é a única string arbitrária que entra aqui — daí o escapeHtml.
-            // Um relatório sem CST gera a MESMA frase para cada arquivo. Consolidar em uma
-            // linha evita que o aviso útil (nota sem CFOP, aba recusada) se perca na repetição.
-            const todosAvisos = (arquivosSemCst.length
-                ? [`${arquivosSemCst.length} arquivo(s) sem coluna CST — conferência de CST não realizada.`]
-                : []).concat(avisos);
-
-            const bannerAvisos = todosAvisos.length
+            // O banner so carrega o que pede acao. Estado normal e esperado -- ausencia de CST
+            // neste relatorio, notas canceladas -- vai para a linha de resumo: repetido a cada
+            // execucao, treinaria o usuario a ignorar o banner junto com o aviso que importa.
+            // Nome de arquivo e a unica string arbitraria que entra aqui -- dai o escapeHtml.
+            const bannerAvisos = avisos.length
                 ? `<div style="max-width: 900px; margin: 0 auto 1.2rem; padding: 0.9rem 1.1rem; border-left: 4px solid #e0a800; background: rgba(224,168,0,0.10); border-radius: 6px; text-align: left;">
-                       <strong style="display:block; margin-bottom: 0.4rem;">Avisos de leitura (${todosAvisos.length})</strong>
+                       <strong style="display:block; margin-bottom: 0.4rem;">Avisos de leitura (${avisos.length})</strong>
                        <ul style="margin: 0; padding-left: 1.2rem;">
-                           ${todosAvisos.map((a) => `<li>${escapeHtml(a)}</li>`).join('')}
+                           ${avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join('')}
                        </ul>
                    </div>`
                 : '';
@@ -512,7 +518,7 @@
             modal.innerHTML = `<div class="modal-content">
                 ${barra}
                 <p style="text-align:center; margin: 4rem 0 1rem;">
-                    ${r.totalTransferencias} transferência(s) na saída · ${r.ok} conferida(s) sem divergência${r.cstComparado ? '' : ' · CST não conferido'}
+                    ${r.totalTransferencias} transferência(s) na saída · ${r.ok} conferida(s) sem divergência${canceladas ? ` · ${canceladas} nota(s) cancelada(s) ignorada(s)` : ''}
                 </p>
                 ${bannerAvisos}
                 ${corpo}
