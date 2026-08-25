@@ -63,4 +63,50 @@ assert.deepEqual(parcial.divergentes[0].campos.map((c) => c.campo), ['CFOP']);
 const limpo = core.compararTransferencias([saida[0]], [entrada[0]]);
 assert.equal(limpo.faltantes.length + limpo.divergentes.length, 0);
 
+// --- localização do cabeçalho ---
+// Cabeçalho REAL do relatório do ERP (linha 3): CFOPs / Valor Total / Chave Eletrônica.
+// Não existe coluna CST — exigi-la descartava o arquivo inteiro e a tela abria vazia.
+const CAB_REAL = [
+    ['Entradas - Notas Fiscais Eletrônicas - MATRIZ', '', '', '', '', 'Pag.: 1 de 4', ''],
+    ['Empresa:', 'J & T BARBOSA', '', '', '', '', ''],
+    ['Destinatário', '', '', 'CFOPs', 'Valor Total', 'Chave Eletrônica', ''],
+];
+assert.deepEqual(core.acharCabecalho(CAB_REAL), { linha: 2, iChave: 5, iCfop: 3, iCst: -1, iValor: 4 });
+
+// Relatório que traga CST continua sendo aproveitado, com o índice da coluna.
+assert.deepEqual(
+    core.acharCabecalho([['Chave', 'CFOP', 'CST', 'Valor Total']]),
+    { linha: 0, iChave: 0, iCfop: 1, iCst: 2, iValor: 3 }
+);
+
+// Chave, CFOP e Valor seguem obrigatórios — sem eles não há o que conferir.
+assert.equal(core.acharCabecalho([['Chave', 'CST', 'Valor']]), null);
+assert.equal(core.acharCabecalho([['Nada', 'aqui']]), null);
+
+// --- CST ausente não pode virar divergência ---
+const semCst = (chave, cfops, valor) => ({ chave, cfops, csts: [], valor, origem: 'sem-cst.xls' });
+
+const rSemCst = core.compararTransferencias(
+    [semCst(CHAVE_A, ['5409'], 153.0)],
+    [semCst(CHAVE_A, ['1409'], 153.0)]
+);
+assert.equal(rSemCst.ok, 1, 'planilha sem coluna CST ainda confere CFOP e valor');
+assert.equal(rSemCst.cstComparado, false);
+
+// Um lado com CST e o outro sem: coluna ausente é ausência de evidência, não divergência.
+const rAssimetrico = core.compararTransferencias(
+    [linha(CHAVE_A, ['5409'], ['060'], 153.0)],
+    [semCst(CHAVE_A, ['1409'], 153.0)]
+);
+assert.equal(rAssimetrico.divergentes.length, 0, 'CST faltando de um lado não acusa divergência');
+assert.equal(rAssimetrico.cstComparado, false);
+
+// Com CST dos dois lados, a comparação segue valendo integralmente.
+const rCstDivergente = core.compararTransferencias(
+    [linha(CHAVE_A, ['5409'], ['060'], 153.0)],
+    [linha(CHAVE_A, ['1409'], ['040'], 153.0)]
+);
+assert.deepEqual(rCstDivergente.divergentes[0].campos.map((c) => c.campo), ['CST']);
+assert.equal(rCstDivergente.cstComparado, true);
+
 console.log('✅ test-transf-check: todas as asserções passaram');

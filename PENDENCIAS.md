@@ -115,6 +115,44 @@ ultNSU retornado: 000000000103111 | maxNSU: 000000000000000
 - **Próximo passo sugerido (não é mais sondagem cega):** descobrir quem consome o fluxo
   da A&R antes de gastar outra hora. Sondar de novo só depois disso.
 
+### P4 — Transferências: 43 notas de saída com chave mas sem CFOP
+- **Medido em 2026-08-25** sobre os 10 relatórios de `Downloads/TRANSFERENCIAS`: 43 linhas
+  trazem chave eletrônica de 44 dígitos válida, mas as células de CFOP e Valor Total vêm
+  em branco — 21 na FILIAL 002, 12 na MATRIZ, 8 na 004, 2 na 005. Nenhuma na ENTRADA.
+- Sem CFOP a nota não é classificável como transferência, então fica fora da checagem.
+  Hoje isso vira aviso visível no modal (`assets/js/transf-check.js`), não mais silêncio.
+- **A decidir:** o que essas linhas são no ERP — nota cancelada/denegada, célula mesclada
+  perdida na exportação, ou nota sem itens. Se alguma puder ser transferência, a checagem
+  está cega para até 43 notas e o tratamento precisa mudar.
+
+### P5 — Transferências: 30 notas com CFOP 5152 na saída escrituradas como 1409 na entrada
+- Das 148 transferências conferidas, 118 batem e **30 divergem, todas só no CFOP**.
+  Valor idêntico nos dois lados em **30/30**; nenhuma nota ausente.
+- Padrão: 28× saída `5152 / 5409` → entrada `1409`; 2× saída `5152` → entrada `1409`.
+- Concentração: 26 das 30 saem da **FILIAL 002** (25 para a FILIAL 003).
+
+**Hipótese descartada (2026-08-25).** A primeira leitura foi "o ERP consolida os CFOPs no
+lado da entrada". Os dados contradizem:
+
+| Medição na ENTRADA (2.296 notas) | |
+|---|---|
+| Notas com mais de um CFOP na mesma célula | 290 (12,6%) — `1102/1403` aparece 267× |
+| Notas com CFOP 1409 | 133 |
+| …com 1409 **sozinho** | 133 |
+| …com 1409 acompanhado de outro CFOP | **0** |
+| Notas com 1152 em qualquer posição | 6 |
+
+O relatório de entrada exibe dois CFOPs quando eles existem (267 vezes). `1409` nunca vem
+acompanhado. Logo não é artefato de exibição — a entrada está registrada só como 1409.
+
+- **Leitura provisória:** a filial destinatária escritura a nota inteira como ST (1409),
+  inclusive a parcela que a origem emitiu como 5152 (fora do ST). Confirmação é do contador.
+- **Decidido (2026-08-25, Josué):** conferência validada — as 30 são divergência real de
+  escrituração, não falso positivo. `compararTransferencias` (`assets/js/transf-check.js`)
+  **fica como está**: igualdade de conjunto de CFOPs é a regra correta. O achado é fiscal,
+  não de software — tratar na escrituração da filial destinatária.
+- Planilha de conferência com as 30 notas (chave de acesso completa) gerada em 2026-08-25.
+
 ### P3 — Rebundle do worker (`download/softtech-worker.zip`) desatualizado
 - `scripts/bundle-worker.js` passou a incluir `lib/access.js` (token/allowlist) e
   `lib/nfe.js`. O zip publicado em `download/` ainda é o antigo: quem baixar hoje pega um

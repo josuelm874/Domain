@@ -96,6 +96,28 @@
         return isNaN(n) ? '—' : n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
+    // Localiza o cabeçalho pelas colunas "Chave", "CFOP" e "Valor". O relatório tem linhas
+    // de título/empresa antes do cabeçalho, então varremos as primeiras linhas.
+    //
+    // CST é OPCIONAL: o relatório de Notas Fiscais Eletrônicas do ERP traz apenas
+    // Destinatário/Remetente, CFOPs, Valor Total e Chave Eletrônica. Exigir CST aqui
+    // descartava o arquivo inteiro e a tela abria vazia sem explicação. Quando a coluna
+    // não existe, `iCst` volta -1 e a conferência de CST simplesmente não acontece.
+    function acharCabecalho(matriz) {
+        const limite = Math.min(matriz.length, 25);
+        for (let r = 0; r < limite; r++) {
+            const linha = (matriz[r] || []).map((c) => String(c == null ? '' : c).toLowerCase());
+            const iChave = linha.findIndex((c) => c.includes('chave'));
+            const iCfop = linha.findIndex((c) => c.includes('cfop'));
+            const iCst = linha.findIndex((c) => c.includes('cst'));
+            const iValor = linha.findIndex((c) => c.includes('valor'));
+            if (iChave !== -1 && iCfop !== -1 && iValor !== -1) {
+                return { linha: r, iChave, iCfop, iCst, iValor };
+            }
+        }
+        return null;
+    }
+
     /**
      * @param {Array<{chave,cfops,csts,valor,origem}>} saidaRows
      * @param {Array<{chave,cfops,csts,valor,origem}>} entradaRows
@@ -109,6 +131,7 @@
         const faltantes = [];
         const divergentes = [];
         let ok = 0;
+        let cstComparado = false;
 
         for (const s of transferencias) {
             const e = porChave.get(s.chave);
@@ -125,8 +148,15 @@
             // ("060;060" quando a nota tem 5152+5409), então a cardinalidade só espelha a
             // do CFOP. Deduplicando, o CST só acusa quando o código em si difere — e a
             // consolidação de CFOP na entrada aparece uma vez, na linha de CFOP.
-            if (!mesmoConjunto(unicos(e.csts), unicos(s.csts))) {
-                campos.push({ campo: 'CST', saida: s.csts.join(' / '), entrada: e.csts.join(' / ') });
+            //
+            // Só compara quando os DOIS lados trouxerem CST. Coluna ausente é ausência de
+            // evidência, não prova de divergência: acusar CST contra um relatório que não
+            // tem a coluna encheria a tela de falso positivo.
+            if (s.csts.length && e.csts.length) {
+                cstComparado = true;
+                if (!mesmoConjunto(unicos(e.csts), unicos(s.csts))) {
+                    campos.push({ campo: 'CST', saida: s.csts.join(' / '), entrada: e.csts.join(' / ') });
+                }
             }
             if (!(Math.abs(s.valor - e.valor) <= TOLERANCIA_VALOR)) {
                 campos.push({ campo: 'Valor', saida: fmtBRL(s.valor), entrada: fmtBRL(e.valor) });
@@ -135,7 +165,7 @@
             else ok++;
         }
 
-        return { totalTransferencias: transferencias.length, faltantes, divergentes, ok };
+        return { totalTransferencias: transferencias.length, faltantes, divergentes, ok, cstComparado };
     }
 
     const core = {
@@ -145,6 +175,7 @@
         normCsts,
         parseValor,
         cfopEntradaParaSaida,
+        acharCabecalho,
         ehTransferencia,
         compararTransferencias,
         fmtBRL,
@@ -159,62 +190,57 @@
 
     // ------------------------------- leitura das planilhas -------------------------------
 
-    // Localiza o cabeçalho pelas colunas "Chave", "CFOP", "CST" e "Valor". O relatório tem
-    // linhas de título/empresa antes do cabeçalho, então varremos as primeiras linhas.
-    function acharCabecalho(matriz) {
-        const limite = Math.min(matriz.length, 25);
-        for (let r = 0; r < limite; r++) {
-            const linha = (matriz[r] || []).map((c) => String(c == null ? '' : c).toLowerCase());
-            const iChave = linha.findIndex((c) => c.includes('chave'));
-            const iCfop = linha.findIndex((c) => c.includes('cfop'));
-            const iCst = linha.findIndex((c) => c.includes('cst'));
-            const iValor = linha.findIndex((c) => c.includes('valor'));
-            if (iChave !== -1 && iCfop !== -1 && iCst !== -1 && iValor !== -1) {
-                return { linha: r, iChave, iCfop, iCst, iValor };
-            }
-        }
-        return null;
-    }
-
+    // Devolve { rows, avisos }. Todo motivo para uma nota NÃO entrar na checagem vira um
+    // aviso visível no modal — arquivo rejeitado, coluna faltando, linha sem CFOP. Antes
+    // isso morria num console.warn e a tela abria vazia como se estivesse tudo certo.
     function lerPlanilha(file) {
         return new Promise((resolve) => {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const rows = [];
+                const avisos = [];
+                let semCst = false;
                 try {
                     const isCsv = /\.csv$/i.test(file.name);
                     const workbook = XLSX.read(e.target.result, { type: isCsv ? 'string' : 'array', raw: true });
+                    let semCfop = 0;
                     for (const nome of workbook.SheetNames) {
                         const sheet = workbook.Sheets[nome];
                         if (!sheet['!ref']) continue;
                         const matriz = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
                         const cab = acharCabecalho(matriz);
                         if (!cab) {
-                            console.warn(`⚠️ Cabeçalho (Chave/CFOP/CST/Valor) não encontrado em ${file.name} / ${nome}`);
+                            avisos.push(`${file.name} / ${nome}: cabeçalho com Chave, CFOP e Valor não encontrado — aba ignorada.`);
                             continue;
                         }
+                        if (cab.iCst === -1) semCst = true;
                         for (let r = cab.linha + 1; r < matriz.length; r++) {
                             const linha = matriz[r] || [];
                             const chave = onlyDigits(linha[cab.iChave]);
                             if (chave.length !== 44) continue;
+                            const cfops = normCfops(linha[cab.iCfop]);
+                            if (!cfops.length) semCfop++;
                             rows.push({
                                 chave,
-                                cfops: normCfops(linha[cab.iCfop]),
-                                csts: normCsts(linha[cab.iCst]),
+                                cfops,
+                                csts: cab.iCst === -1 ? [] : normCsts(linha[cab.iCst]),
                                 valor: parseValor(linha[cab.iValor]),
                                 origem: file.name,
                             });
                         }
                     }
+                    if (semCfop) avisos.push(`${file.name}: ${semCfop} nota(s) com chave mas sem CFOP — fora da checagem.`);
+                    if (!rows.length) avisos.push(`${file.name}: nenhuma nota lida.`);
                     console.log(`✅ ${file.name}: ${rows.length} notas lidas`);
                 } catch (err) {
                     console.error(`❌ Erro ao ler ${file.name}:`, err);
+                    avisos.push(`${file.name}: erro ao ler o arquivo (${err && err.message ? err.message : err}).`);
                 }
-                resolve(rows);
+                resolve({ nome: file.name, rows, avisos, semCst });
             };
             reader.onerror = () => {
                 console.error(`❌ Falha de leitura: ${file.name}`);
-                resolve([]);
+                resolve({ nome: file.name, rows: [], avisos: [`${file.name}: falha de leitura do arquivo.`], semCst: false });
             };
             if (/\.csv$/i.test(file.name)) reader.readAsText(file, 'utf-8');
             else reader.readAsArrayBuffer(file);
@@ -351,6 +377,8 @@
 
         const saidaRows = [];
         const entradaRows = [];
+        const avisos = [];
+        const arquivosSemCst = [];
         let saidaPronto = false;
         let entradaPronto = false;
 
@@ -364,7 +392,11 @@
                 if (!files || !files.length) return;
                 label.textContent = 'Lendo...';
                 const listas = await Promise.all(Array.from(files).map((f) => lerPlanilha(f)));
-                for (const lista of listas) destino.push(...lista);
+                for (const lista of listas) {
+                    destino.push(...lista.rows);
+                    avisos.push(...lista.avisos);
+                    if (lista.semCst) arquivosSemCst.push(lista.nome);
+                }
                 animarCheck(label, check);
                 aoTerminar();
             };
@@ -394,12 +426,17 @@
             const modal = document.createElement('div');
             modal.classList.add('modal-overlay');
 
-            const tudoOk = r.faltantes.length === 0 && r.divergentes.length === 0;
+            // Três estados distintos, antes confundidos em um: nada lido (planilha rejeitada),
+            // tudo compatível, e com achados. Sem `nadaLido`, um arquivo recusado abria o
+            // modal com "Transferências Compatíveis" — verde em cima de zero conferência.
+            const nadaLido = !saidaRows.length || !entradaRows.length;
+            const tudoOk = !nadaLido && r.faltantes.length === 0 && r.divergentes.length === 0;
+            const semAbas = nadaLido || tudoOk;
             // `.tabs` é position:absolute no main.css — só pode haver UMA barra por modal,
             // e ela também hospeda os botões de exportar (mesmo layout da aba NFe|NFCe).
             const barra = `
                 <div class="tabs">
-                    ${tudoOk ? '<span></span>' : `<div class="tab active" data-tab="transf-faltantes">
+                    ${semAbas ? '<span></span>' : `<div class="tab active" data-tab="transf-faltantes">
                         Ausentes na Entrada <span class="column-count">(${r.faltantes.length})</span>
                     </div>`}
                     <div class="export-buttons">
@@ -410,12 +447,16 @@
                             <img width="24" height="24" src="https://img.icons8.com/color/48/microsoft-excel-2019--v1.png" alt="XLSX"/>
                         </button>
                     </div>
-                    ${tudoOk ? '<span></span>' : `<div class="tab" data-tab="transf-divergentes">
+                    ${semAbas ? '<span></span>' : `<div class="tab" data-tab="transf-divergentes">
                         Divergências <span class="column-count">(${r.divergentes.length})</span>
                     </div>`}
                 </div>`;
 
-            const corpo = tudoOk
+            const faltaLado = [!saidaRows.length && 'SAÍDA', !entradaRows.length && 'ENTRADA'].filter(Boolean).join(' e ');
+            const corpo = nadaLido
+                ? `<p class="success-message" style="color:#c0392b;">Nenhuma nota lida da ${faltaLado}</p>
+                   <p style="text-align:center;">A checagem não foi executada. Veja os avisos acima para saber qual arquivo foi recusado e por quê.</p>`
+                : tudoOk
                 ? `<p class="success-message">Transferências Compatíveis</p>
                    <p style="text-align:center;">${r.totalTransferencias} nota(s) de transferência conferida(s).</p>`
                 : `
@@ -452,11 +493,28 @@
                 </div>`;
 
             // A barra de abas é absoluta no topo do modal; o conteúdo começa abaixo dela.
+            // Nome de arquivo é a única string arbitrária que entra aqui — daí o escapeHtml.
+            // Um relatório sem CST gera a MESMA frase para cada arquivo. Consolidar em uma
+            // linha evita que o aviso útil (nota sem CFOP, aba recusada) se perca na repetição.
+            const todosAvisos = (arquivosSemCst.length
+                ? [`${arquivosSemCst.length} arquivo(s) sem coluna CST — conferência de CST não realizada.`]
+                : []).concat(avisos);
+
+            const bannerAvisos = todosAvisos.length
+                ? `<div style="max-width: 900px; margin: 0 auto 1.2rem; padding: 0.9rem 1.1rem; border-left: 4px solid #e0a800; background: rgba(224,168,0,0.10); border-radius: 6px; text-align: left;">
+                       <strong style="display:block; margin-bottom: 0.4rem;">Avisos de leitura (${todosAvisos.length})</strong>
+                       <ul style="margin: 0; padding-left: 1.2rem;">
+                           ${todosAvisos.map((a) => `<li>${escapeHtml(a)}</li>`).join('')}
+                       </ul>
+                   </div>`
+                : '';
+
             modal.innerHTML = `<div class="modal-content">
                 ${barra}
                 <p style="text-align:center; margin: 4rem 0 1rem;">
-                    ${r.totalTransferencias} transferência(s) na saída · ${r.ok} conferida(s) sem divergência
+                    ${r.totalTransferencias} transferência(s) na saída · ${r.ok} conferida(s) sem divergência${r.cstComparado ? '' : ' · CST não conferido'}
                 </p>
+                ${bannerAvisos}
                 ${corpo}
             </div>`;
             document.body.appendChild(modal);
@@ -481,6 +539,8 @@
         }
     }
 
-    global.TransfCheck = { core, createChecagemTransferenciasPage };
+    // `lerPlanilha` fica exposto para o harness poder exercer o caminho de leitura real
+    // (cabeçalho + avisos) contra planilhas de verdade, fora do browser.
+    global.TransfCheck = { core, lerPlanilha, createChecagemTransferenciasPage };
     global.createChecagemTransferenciasPage = createChecagemTransferenciasPage;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
