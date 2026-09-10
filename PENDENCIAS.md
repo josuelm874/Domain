@@ -209,6 +209,16 @@ bloqueava justamente a feature que o Josué precisava.
 - `LEIA-ME.txt`: documenta o **pareamento por token**, que não estava em lugar nenhum —
   worker no ar e não pareado parece "não funcionou".
 
+**Segunda causa, achada no teste do Josué na empresa (mesmo dia).** Passado o `require`,
+o worker morria no auto-restart: `server.js` se re-executava com `--openssl-legacy-provider`
+**via `NODE_OPTIONS`**, e a allowlist do `NODE_OPTIONS` não aceita essa flag em toda versão
+(`Program Files (x86)
+odejs` — Node 32-bit mais antigo). O filho morria no arranque e o pai
+propagava o status com `process.exit`. A flag serve ao **certificado A1 do NFe**; o NFCe usa
+token JWT e nem toca nela. Consertado: flag na **linha de comando** em vez de `NODE_OPTIONS`,
+e se o runtime recusar, o worker **segue sem ela** avisando que só o NFe com A1 vai falhar.
+Atalho para destravar sem atualizar: `SOFTTECH_LEGACY_RETRY=1 node server.js` (validado).
+
 **Provado** com o zip novo extraído em pasta limpa, sem `node_modules`: `/health` respondeu
 HTTP 200. Contrafactual na mesma pasta: `require('./lib/dirbi')` com o require eager falha
 com MODULE_NOT_FOUND. **Falta confirmar na máquina da empresa.**

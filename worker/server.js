@@ -44,15 +44,26 @@ const LEGACY_FLAG = '--openssl-legacy-provider';
     // Empacotado (pkg): argv[1] aponta para o snapshot virtual — repassar só os args.
     const args = process.pkg ? process.argv.slice(2) : process.argv.slice(1);
     console.log(`  reiniciando com ${LEGACY_FLAG} (necessário para ler certificados A1)…`);
-    const r = spawnSync(process.execPath, args, {
+    // A flag vai na LINHA DE COMANDO, não em NODE_OPTIONS: a allowlist do NODE_OPTIONS
+    // não a aceita em toda versão. Em Node x86 mais antigo o filho morria no arranque com
+    // "--openssl-legacy-provider is not allowed in NODE_OPTIONS", e o pai propagava o
+    // status — o worker nunca subia. Na linha de comando a flag é sempre aceita.
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [LEGACY_FLAG].concat(args), {
         stdio: 'inherit',
-        env: {
-            ...process.env,
-            SOFTTECH_LEGACY_RETRY: '1',
-            NODE_OPTIONS: (String(process.env.NODE_OPTIONS || '') + ' ' + LEGACY_FLAG).trim(),
-        },
+        env: { ...process.env, SOFTTECH_LEGACY_RETRY: '1' },
     });
-    process.exit(r.status == null ? 1 : r.status);
+    const durouMs = Date.now() - t0;
+    // Filho que viveu mais que alguns segundos foi uma execução de verdade (inclusive
+    // Ctrl+C do usuário): propaga e sai. Morte imediata = runtime recusou a flag.
+    // ponytail: heurística de tempo; o certo seria o filho sinalizar que ligou.
+    if (r.status === 0 || durouMs > 3000) process.exit(r.status == null ? 1 : r.status);
+    // Seguir SEM a flag em vez de morrer: só o NFe com certificado A1 depende dela. O
+    // Baixar NFCe usa token JWT, e a DIRBI nem toca em cripto — os dois ficariam
+    // inacessíveis por causa de uma feature que o usuário pode nem usar.
+    console.warn(`  [AVISO] este Node recusou ${LEGACY_FLAG} — seguindo sem ela.`);
+    console.warn('  Baixar NFCe e DIRBI funcionam normalmente.');
+    console.warn('  Apenas o Baixar NFe com certificado A1 vai falhar (Unsupported PKCS12 PFX data).');
 })();
 const access = require('./lib/access');
 const nfce = require('./lib/nfce');
