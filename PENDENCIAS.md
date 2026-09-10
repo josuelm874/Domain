@@ -143,6 +143,23 @@ acompanhado. Logo não é artefato de exibição — a entrada está registrada 
   não de software — tratar na escrituração da filial destinatária.
 - Planilha de conferência com as 30 notas (chave de acesso completa) gerada em 2026-08-25.
 
+### P6 — Baixar NFCe: planilha de 35 mil chaves esbarra em token e memória
+- O travamento do pool foi corrigido (2026-09-10). Estes dois **ainda não**, e só aparecem
+  agora que a corrida consegue ir longe.
+- **Token JWT expira no meio.** 34.922 chaves = ~70 mil requisições (2 por chave). A 10
+  simultâneas isso passa de 1h. Hoje o 401 drena o `pending` inteiro contando erro e gera
+  um ZIP **parcial** — parece "quebrado" de novo. Existe a branch não mergeada
+  `claude/pensive-leavitt-2e90a8` (auto-token NFCe); ler "Armadilha do merge" no handoff antes
+  de tocar nela.
+- **Memória do browser.** `comp.zip.file()` acumula os 35 mil XMLs em RAM antes do
+  `generateAsync`. Estimativa (não medida): ~4-6 KB por XML = 150-200 MB de string, mais o
+  blob final sem compressão. Se estourar, a aba morre. Saída seria fatiar em ZIPs por lote.
+- **Sem throttle.** 70 mil chamadas a 10 simultâneas contra a SEFAZ, sem espaçamento. O
+  `fetchWithRetry` retenta HTTP 3× (500/1000/2000ms) e desiste — sob 429 sustentado vira
+  massa de erro contabilizado.
+- **Antes da corrida cheia:** testar com uma fatia (~2.000 chaves) para isolar o conserto do
+  pool destes três.
+
 ### P3 — Rebundle do worker (`download/softtech-worker.zip`) desatualizado
 - `scripts/bundle-worker.js` passou a incluir `lib/access.js` (token/allowlist) e
   `lib/nfe.js`. O zip publicado em `download/` ainda é o antigo: quem baixar hoje pega um

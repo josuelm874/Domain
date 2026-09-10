@@ -10005,7 +10005,13 @@ function createBaixarNfcePage(mainContent) {
             const job = nextBrowserJob();
             if (!job) break;
             browserPool.active++;
-            processBrowserJob(job).then(() => { browserPool.active--; pumpBrowser(); });
+            // NAO REMOVER o .catch(): `.then()` sozinho deixa o slot ocupado para sempre se
+            // processBrowserJob rejeitar. Com 10 slots, 10 rejeições ao longo da corrida
+            // param o download por completo, sem erro na tela e sem ZIP. Era o bug de
+            // "para depois de um tempo" em planilhas grandes (35 mil chaves = certeza).
+            processBrowserJob(job)
+                .catch((e) => console.error('NFCe: job rejeitou fora do try', e))
+                .then(() => { browserPool.active--; pumpBrowser(); });
         }
     }
 
@@ -10031,11 +10037,19 @@ function createBaixarNfcePage(mainContent) {
                 // token morto desta empresa: o resto vira erro "não tentado"
                 while (comp.pending.length) { comp.pending.shift(); comp.errors++; }
             }
+        } finally {
+            // O rodapé roda em `finally` E dentro de try: se qualquer coisa aqui lançar
+            // (um nó do anel removido do DOM, JSZip sem memória), a função rejeitaria e o
+            // slot do pool vazaria — e o download para em silêncio, sem erro e sem ZIP.
+            try {
+                updateRing(comp);
+                updateFooter();
+                updateTooltip();
+                finalizeBrowser(comp);
+            } catch (e) {
+                console.error('NFCe: falha ao atualizar a UI após a chave ' + chave, e);
+            }
         }
-        updateRing(comp);
-        updateFooter();
-        updateTooltip();
-        finalizeBrowser(comp);
     }
 
     function finalizeBrowser(comp) {

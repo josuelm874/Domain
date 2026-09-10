@@ -242,7 +242,10 @@ async function processChave(comp, chave) {
             }
         }
     }
-    maybeFinalizeCompany(comp);
+    // Fora do try acima de propos... e por isso protegido aqui: se maybeFinalizeCompany
+    // lançar, o runner morre, o Promise.all de runJob rejeita e o job inteiro cai.
+    try { maybeFinalizeCompany(comp); }
+    catch (e) { comp.failures.push({ chave, motivo: 'falha ao finalizar: ' + ((e && e.message) || e) }); }
 }
 
 function maybeFinalizeCompany(comp) {
@@ -272,7 +275,9 @@ async function runJob(job) {
             for (;;) {
                 const j = nextJob(job);
                 if (!j) return;
-                await processChave(j.comp, j.chave);
+                // Um runner que morre reduz a concorrência em silêncio até o job travar.
+                try { await processChave(j.comp, j.chave); }
+                catch (e) { job.error = job.error || ('runner: ' + ((e && e.message) || e)); }
             }
         })());
     }
