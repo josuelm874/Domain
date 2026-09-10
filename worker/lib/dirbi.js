@@ -20,7 +20,24 @@
 
 const fs = require('fs');
 const path = require('path');
-const ExcelJS = require('exceljs');
+// `exceljs` e a UNICA dependencia externa do worker, e SO a DIRBI a usa. Carregada sob
+// demanda de proposito: com o require no topo, `server.js` (que faz require('./lib/dirbi')
+// na carga) nem chegava a escutar a porta 47620 quando o `npm install` falhava -- e em
+// maquina corporativa ele falha por proxy/registry bloqueado. O download de NFCe nao toca
+// em exceljs (usa `fetch` nativo e o `lib/zip.js` artesanal sobre zlib), entao nao havia
+// motivo para a DIRBI derrubar o worker inteiro. Era a causa da P1.
+let _ExcelJS = null;
+function getExcelJS() {
+    if (_ExcelJS) return _ExcelJS;
+    try {
+        _ExcelJS = require('exceljs');
+    } catch (e) {
+        throw new Error('A DIRBI precisa do pacote exceljs, que nao esta instalado nesta ' +
+            'maquina. Rode `npm install --omit=dev` na pasta do worker. O download de NFCe ' +
+            'funciona sem ele.');
+    }
+    return _ExcelJS;
+}
 const access = require('./access');
 const { buildZip, readZip } = require('./zip');
 
@@ -214,7 +231,7 @@ function loadTemplateBuffer() {
 }
 
 async function makeCompanyXlsx(modelBuffer, emp, rules) {
-    const wb = new ExcelJS.Workbook();
+    const wb = new (getExcelJS()).Workbook();
     await wb.xlsx.load(modelBuffer);
     const ws = wb.getWorksheet('DIRBI') || wb.worksheets[0];
     ws.autoFilter = null; // remove o filtro da linha 3 que vem do modelo
@@ -256,7 +273,7 @@ async function runJob(job) {
     catch (e) { job.error = 'modelo DIRBI não encontrado (' + TEMPLATE_PATH + ')'; job.done = true; return; }
 
     // Regras do modelo (uma vez).
-    const wbProbe = new ExcelJS.Workbook();
+    const wbProbe = new (getExcelJS()).Workbook();
     await wbProbe.xlsx.load(modelBuffer);
     const wsProbe = wbProbe.getWorksheet('DIRBI') || wbProbe.worksheets[0];
     const rules = parseDirbiNcmRules(wsProbe);

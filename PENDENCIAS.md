@@ -4,12 +4,6 @@ Itens conhecidos para resolver depois. Ordem não é prioridade.
 
 ## Aberto
 
-### P1 — Worker Node NFCe não roda na máquina empresarial
-- **Sintoma:** o download NFCe pelo worker Node (`worker/`) funciona na máquina pessoal, mas não na empresarial.
-- **Impacto:** na empresa cai no fallback do browser (funciona, mas sem a escala/sem-CORS do worker).
-- **Hipóteses a investigar:** firewall/antivírus bloqueando a porta `47620`; SmartScreen barrando o `.exe`; permissão de rede de saída p/ a SEFAZ-CE; Node ausente quando rodado como script (vs `.exe` empacotado).
-- **Status:** adiado a pedido do usuário (2026-06-29).
-
 ### P1b — Rebuild do worker após mudança de identidade por grupo
 - A UI agora endereça empresas por `id = <cnpj>-<YYYYMM>` (separação por mês). O worker (`worker/lib/nfce.js`) foi atualizado para casar.
 - **Ação:** rebuildar/redistribuir o `.exe` do worker (na máquina pessoal) para a versão nova. Worker antigo + UI nova = anéis não atualizam (a UI tem fallback `id || cnpj`, mas o worker antigo não devolve `id`).
@@ -192,6 +186,32 @@ ocupados desde o primeiro segundo.
 - **Ação:** rodar `node scripts/bundle-worker.js` e republicar. Ver também P1b.
 
 ## Resolvido
+
+### ✓ P1 — Worker não subia fora da máquina pessoal: era o `require` do exceljs (2026-09-10)
+**Causa raiz.** `worker/server.js` faz `require('./lib/dirbi')` na carga, e `lib/dirbi.js`
+fazia `require('exceljs')` no topo. O bundle **nunca incluiu** `node_modules` — por desenho,
+o launcher rodava `npm install` na 1ª vez. Em máquina corporativa esse install falha
+(proxy/registry bloqueado), e aí o `server.js` **morria no require antes de escutar a porta**.
+Browser recebia `ERR_CONNECTION_REFUSED` e nenhuma pista. Nada a ver com firewall na 47620 nem
+com SmartScreen — as duas hipóteses que estavam registradas aqui desde junho.
+
+A ironia: o download de NFCe **não usa exceljs**. Usa `fetch` nativo e o `lib/zip.js`
+artesanal sobre `zlib`. A única dependência externa do worker, usada só pela DIRBI,
+bloqueava justamente a feature que o Josué precisava.
+
+**Consertado:**
+- `lib/dirbi.js`: `exceljs` carregado sob demanda via `getExcelJS()`, com mensagem clara se
+  faltar. O worker sobe sem `node_modules`; só a DIRBI exige o pacote.
+- `bundle-worker.js`: `lib/distnsu.js` e `lib/cursor.js` entraram no FILES (o `server.js` os
+  requer e eles faltavam — era a P3, mesma classe de falha).
+- Launchers: `npm install` deixou de ser bloqueante. O `start.sh` tinha `set -e` e **morria**
+  quando o install falhava.
+- `LEIA-ME.txt`: documenta o **pareamento por token**, que não estava em lugar nenhum —
+  worker no ar e não pareado parece "não funcionou".
+
+**Provado** com o zip novo extraído em pasta limpa, sem `node_modules`: `/health` respondeu
+HTTP 200. Contrafactual na mesma pasta: `require('./lib/dirbi')` com o require eager falha
+com MODULE_NOT_FOUND. **Falta confirmar na máquina da empresa.**
 
 ### ✓ Transferências — notas canceladas e ausência de CST (2026-08-25)
 - **Notas canceladas.** As 43 linhas de saída com chave válida mas CFOP e valor em branco
