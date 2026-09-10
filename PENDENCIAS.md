@@ -154,6 +154,9 @@ acompanhado. Logo não é artefato de exibição — a entrada está registrada 
 - **Memória do browser.** `comp.zip.file()` acumula os 35 mil XMLs em RAM antes do
   `generateAsync`. Estimativa (não medida): ~4-6 KB por XML = 150-200 MB de string, mais o
   blob final sem compressão. Se estourar, a aba morre. Saída seria fatiar em ZIPs por lote.
+- **Worker sem timeout também.** `worker/lib/nfce.js` usa o `fetch` do Node, que igualmente
+  não tem timeout padrão. Não corrigido porque o worker não roda na máquina da empresa (P1),
+  mas o defeito é o mesmo do browser.
 - **Sem throttle.** 70 mil chamadas a 10 simultâneas contra a SEFAZ, sem espaçamento. O
   `fetchWithRetry` retenta HTTP 3× (500/1000/2000ms) e desiste — sob 429 sustentado vira
   massa de erro contabilizado.

@@ -9890,9 +9890,45 @@ function createBaixarNfcePage(mainContent) {
     const API_BASE = 'https://cfe.sefaz.ce.gov.br:8443/portalcfews/nfce';
     const MAX_RETRIES = 3;
     const backoff = (attempt) => 500 * Math.pow(2, attempt);
+    // `fetch` do browser NAO tem timeout padrao: conexao que abre e nunca responde
+    // (servidor sob throttle) pendura a promise para sempre e o slot do pool nunca volta.
+    // Mesmo sintoma do pool vazado -- anel congelado, sem erro, sem ZIP.
+    const REQ_TIMEOUT_MS = 45000;
     const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
     const browserPool = { active: 0, concurrency: CONCURRENCY };
     let brRr = 0;
+
+    // Vigia de diagnostico. Dois mecanismos diferentes (slot vazado / requisicao
+    // pendurada) produzem o MESMO sintoma na tela. Sem isto, so da para distinguir
+    // adivinhando. Loga a cada 15s e grita quando 60s passam sem nenhum progresso.
+    const diag = { timeouts: 0, rejeicoes: 0, ultimoProgresso: Date.now(), ultimoFeito: -1, timer: null };
+    function estadoPool() {
+        let pend = 0, feito = 0, tot = 0;
+        companies.forEach((c) => {
+            pend += (c.pending && c.pending.length) || 0;
+            feito += (c.downloaded || 0) + (c.errors || 0);
+            tot += c.total || 0;
+        });
+        return { pend: pend, feito: feito, tot: tot, ativos: browserPool.active };
+    }
+    function iniciarVigia() {
+        if (diag.timer) return;
+        diag.timer = setInterval(() => {
+            const e = estadoPool();
+            if (e.feito !== diag.ultimoFeito) { diag.ultimoFeito = e.feito; diag.ultimoProgresso = Date.now(); }
+            const parado = Math.round((Date.now() - diag.ultimoProgresso) / 1000);
+            console.log('[NFCe] ' + e.feito + '/' + e.tot + ' | fila ' + e.pend +
+                ' | slots ' + e.ativos + '/' + browserPool.concurrency +
+                ' | timeouts ' + diag.timeouts + ' | rejeicoes ' + diag.rejeicoes +
+                ' | parado ha ' + parado + 's');
+            if (!e.pend && !e.ativos) { clearInterval(diag.timer); diag.timer = null; return; }
+            if (parado >= 60) {
+                console.error('[NFCe] TRAVOU ha ' + parado + 's. slots ' + e.ativos + '/' + browserPool.concurrency +
+                    ', fila ' + e.pend + ', timeouts ' + diag.timeouts + ', rejeicoes ' + diag.rejeicoes +
+                    '. slots cheios + fila > 0 = requisicao pendurada ou slot vazado.');
+            }
+        }, 15000);
+    }
 
     function jsonHeaders(token, taxid) {
         return { 'x-authentication-token': token, 'x-authentication-taxid': taxid, 'accept': 'application/json' };
@@ -9902,8 +9938,10 @@ function createBaixarNfcePage(mainContent) {
     }
     async function fetchWithRetry(url, options, attempt) {
         attempt = attempt || 0;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
         try {
-            const res = await fetch(url, options);
+            const res = await fetch(url, Object.assign({}, options, { signal: ctrl.signal }));
             if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
             if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
             if (!res.ok) {
@@ -9916,8 +9954,14 @@ function createBaixarNfcePage(mainContent) {
                 if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
                 throw err;
             }
+            const estourou = err && err.name === 'AbortError';
+            if (estourou) diag.timeouts++;
             if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
-            throw makeErr('network', (err && err.message) ? err.message : 'Falha de rede');
+            throw makeErr('network', estourou
+                ? ('sem resposta em ' + (REQ_TIMEOUT_MS / 1000) + 's')
+                : ((err && err.message) ? err.message : 'Falha de rede'));
+        } finally {
+            clearTimeout(timer);
         }
     }
     async function resolveIdNfe(chave, token, taxid) {
@@ -9987,6 +10031,7 @@ function createBaixarNfcePage(mainContent) {
         }
         updateFooter();
         updateTooltip();
+        iniciarVigia();
         pumpBrowser();
         return true;
     }
@@ -10010,7 +10055,7 @@ function createBaixarNfcePage(mainContent) {
             // param o download por completo, sem erro na tela e sem ZIP. Era o bug de
             // "para depois de um tempo" em planilhas grandes (35 mil chaves = certeza).
             processBrowserJob(job)
-                .catch((e) => console.error('NFCe: job rejeitou fora do try', e))
+                .catch((e) => { diag.rejeicoes++; console.error('NFCe: job rejeitou fora do try', e); })
                 .then(() => { browserPool.active--; pumpBrowser(); });
         }
     }
