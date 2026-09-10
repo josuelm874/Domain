@@ -9901,7 +9901,26 @@ function createBaixarNfcePage(mainContent) {
     // Vigia de diagnostico. Dois mecanismos diferentes (slot vazado / requisicao
     // pendurada) produzem o MESMO sintoma na tela. Sem isto, so da para distinguir
     // adivinhando. Loga a cada 15s e grita quando 60s passam sem nenhum progresso.
-    const diag = { timeouts: 0, rejeicoes: 0, ultimoProgresso: Date.now(), ultimoFeito: -1, timer: null };
+    const diag = { timeouts: 0, rejeicoes: 0, sucessos: 0, abortado: false, ultimoProgresso: Date.now(), ultimoFeito: -1, timer: null };
+
+    // A API da SEFAZ-CE nao suporta CORS: o preflight OPTIONS com
+    // `Access-Control-Request-Headers` nunca e respondido (medido: pendura >50s), e o GET
+    // nao devolve `Access-Control-Allow-Origin`. Como `x-authentication-token` nao e um
+    // simple header, o browser SEMPRE manda preflight -- entao toda requisicao morre
+    // pendurada antes de sair. Sem este curto-circuito a tela finge trabalhar para sempre.
+    function abortarPorCors() {
+        if (diag.abortado) return;
+        diag.abortado = true;
+        companies.forEach((c) => {
+            if (!c.pending) return;
+            while (c.pending.length) { c.pending.shift(); c.errors++; }
+            updateRing(c);
+        });
+        footerText.innerHTML = '<span class="bn-err">A SEFAZ nao aceita download pelo navegador ' +
+            '(a API nao responde ao preflight CORS). E preciso rodar o worker local para baixar NFCe.</span>';
+        console.error('[NFCe] Abortado: ' + diag.timeouts + ' requisicoes sem resposta e nenhum sucesso. ' +
+            'A API da SEFAZ-CE nao suporta CORS -- use o worker.');
+    }
     function estadoPool() {
         let pend = 0, feito = 0, tot = 0;
         companies.forEach((c) => {
@@ -10076,12 +10095,15 @@ function createBaixarNfcePage(mainContent) {
                 if (m && m[1]) { comp.nome = m[1].trim(); comp.nomeResolved = true; if (comp.els) comp.els.name.textContent = comp.nome; }
             }
             if (comp.meta.has(chave)) conferirXmlBrowser(xml, comp.meta.get(chave));
+            diag.sucessos++;
         } catch (err) {
             comp.errors++;
             if (err && err.kind === 'auth') {
                 // token morto desta empresa: o resto vira erro "não tentado"
                 while (comp.pending.length) { comp.pending.shift(); comp.errors++; }
             }
+            // Nenhum sucesso e a primeira leva inteira sem resposta = CORS, nao rede instavel.
+            if (!diag.sucessos && diag.timeouts >= browserPool.concurrency) abortarPorCors();
         } finally {
             // O rodapé roda em `finally` E dentro de try: se qualquer coisa aqui lançar
             // (um nó do anel removido do DOM, JSZip sem memória), a função rejeitaria e o

@@ -163,6 +163,28 @@ acompanhado. Logo não é artefato de exibição — a entrada está registrada 
 - **Antes da corrida cheia:** testar com uma fatia (~2.000 chaves) para isolar o conserto do
   pool destes três.
 
+### P7 — A API da SEFAZ-CE não suporta CORS: NFCe pelo navegador é impossível
+**Medido em 2026-09-10** contra `cfe.sefaz.ce.gov.br:8443`:
+
+| Sonda | Resultado |
+|---|---|
+| `OPTIONS` simples | HTTP 200 em 0,08s |
+| `OPTIONS` com `Access-Control-Request-Headers` | **pendura — HTTP 000, >50s** |
+| `GET` com `Origin:` | 401 em 0,076s, **sem `Access-Control-Allow-Origin`** |
+
+Dois bloqueios independentes, cada um fatal sozinho. Como `x-authentication-token` não é
+simple header, o browser **sempre** manda preflight — e ele nunca volta. Toda requisição
+morre pendurada antes de sair. Confirmado no console do Josué: `0/21831` com os 10 slots
+ocupados desde o primeiro segundo.
+
+- **Não é bug do código.** O fallback do browser em `createBaixarNfcePage` não tem conserto
+  possível no cliente. Já estava dito no topo de `worker/lib/nfce.js`: "no lado Node NÃO há CORS".
+- **Isso promove a P1 a bloqueador.** Sem worker, não há download de NFCe — em nenhuma máquina.
+- **Paliativo aplicado:** curto-circuito que aborta e explica na tela em vez de fingir que
+  trabalha. Não faz baixar; só para de mentir.
+- **A decidir:** proxy server-side (Vercel Function) contra consertar a P1 do worker. Ver
+  trade-offs discutidos na sessão de 2026-09-10.
+
 ### P3 — Rebundle do worker (`download/softtech-worker.zip`) desatualizado
 - `scripts/bundle-worker.js` passou a incluir `lib/access.js` (token/allowlist) e
   `lib/nfe.js`. O zip publicado em `download/` ainda é o antigo: quem baixar hoje pega um
