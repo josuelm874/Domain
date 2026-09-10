@@ -9983,13 +9983,45 @@ function createBaixarNfcePage(mainContent) {
             clearTimeout(timer);
         }
     }
+    // A API devolveu HTTP 200 mas sem o campo esperado -- "Resposta sem idNfe" em 100%
+    // das chaves (medido 2026-09-10: auth, rede e taxid todos OK). O parser antigo fixava
+    // dois caminhos (`data.idNfe` e `data.coupon.idNfe`); qualquer renomeacao ou nivel novo
+    // quebrava tudo. Procura em profundidade rasa e, se nao achar, o erro DIZ quais campos
+    // vieram -- a mensagem antiga nao dava nada para diagnosticar.
+    // ponytail: heuristica por nome de campo; o certo seria a API ter contrato versionado.
+    function extrairIdNfe(data) {
+        const NOMES = ['idnfe', 'id', 'nfeid', 'idnf', 'idnotafiscal'];
+        const busca = (o, prof) => {
+            if (!o || typeof o !== 'object' || prof > 3) return '';
+            for (const k of Object.keys(o)) {
+                const v = o[k];
+                if (NOMES.indexOf(k.toLowerCase()) !== -1 &&
+                    (typeof v === 'string' || typeof v === 'number') && String(v).trim()) {
+                    return String(v).trim();
+                }
+            }
+            for (const k of Object.keys(o)) {
+                const r = busca(o[k], prof + 1);
+                if (r) return r;
+            }
+            return '';
+        };
+        return busca(data, 0);
+    }
+    
+    function camposDe(data) {
+        if (!data || typeof data !== 'object') return typeof data;
+        const ks = Object.keys(data);
+        return ks.length ? ks.join(', ') : '(objeto vazio)';
+    }
+
     async function resolveIdNfe(chave, token, taxid) {
         const url = API_BASE + '/coupons/extract/' + encodeURIComponent(chave);
         const res = await fetchWithRetry(url, { headers: jsonHeaders(token, taxid) });
         const data = await res.json();
-        const idNfe = data && (data.idNfe || (data.coupon && data.coupon.idNfe));
-        if (!idNfe) throw makeErr('parse', 'Resposta sem idNfe');
-        return String(idNfe);
+        const idNfe = extrairIdNfe(data);
+        if (!idNfe) throw makeErr('parse', 'Resposta sem idNfe. Campos recebidos: ' + camposDe(data));
+        return idNfe;
     }
     function xmlUrl(idNfe, chave, token) {
         return API_BASE + '/fiscal-coupons/xml/' + encodeURIComponent(idNfe) +
