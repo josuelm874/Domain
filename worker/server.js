@@ -65,6 +65,7 @@ const LEGACY_FLAG = '--openssl-legacy-provider';
     console.warn('  Baixar NFCe e DIRBI funcionam normalmente.');
     console.warn('  Apenas o Baixar NFe com certificado A1 vai falhar (Unsupported PKCS12 PFX data).');
 })();
+const ambiente = require('./lib/ambiente');
 const access = require('./lib/access');
 const nfce = require('./lib/nfce');
 const nfe = require('./lib/nfe');
@@ -182,9 +183,15 @@ const server = http.createServer(async (req, res) => {
     // Health-check: única rota sem token — a UI precisa detectar o worker ANTES de
     // estar pareada. Por isso não devolve caminho de disco nem nada sensível.
     if (method === 'GET' && path === '/health') {
+        // `ambiente` entra aqui de propósito: é a única rota que a UI alcança sem
+        // pareamento, e a pergunta "que Node é esse?" precisa ser respondível À DISTÂNCIA.
+        // Diagnosticar a máquina da empresa custou rodadas porque essa resposta só existia
+        // digitando `node --version` lá. Não é dado sensível: versão, arquitetura e a
+        // lista de globais em falta — nenhum caminho de disco.
         sendJson(res, 200, {
             ok: true, name: NAME, version: VERSION, time: new Date().toISOString(),
             paired: checkToken(req),
+            ambiente: ambiente.diagnostico(),
         });
         return;
     }
@@ -395,6 +402,10 @@ server.on('error', (err) => {
 server.listen(PORT, HOST, () => {
     console.log(`\n  ${NAME} v${VERSION}`);
     console.log(`  ouvindo em http://${HOST}:${PORT}`);
+    // Antes de qualquer job: dizer em que interpretador isto está rodando e o que falta
+    // nele. A mesma build funcionava numa máquina e falhava na outra, e a tela não trazia
+    // uma palavra sobre a causa — este log é a resposta que custou rodadas de hipótese.
+    ambiente.imprimir(console);
     console.log('');
     console.log('  ┌──────────────────── PAREAMENTO ────────────────────');
     console.log('  │ Cole este token no sistema quando ele pedir:');

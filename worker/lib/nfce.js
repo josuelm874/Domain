@@ -18,6 +18,9 @@
 'use strict';
 
 const { buildZip } = require('./zip');
+// Explícito em vez do global: `URL` só virou global no Node 10, e este módulo tem que
+// sobreviver em Node antigo (ver o bloco "SEFAZ fetch" e lib/ambiente.js).
+const { URL } = require('url');
 
 // URL da SEFAZ-CE. Override por env (SEFAZ_BASE) só p/ teste local com mock —
 // em produção o default real é usado.
@@ -70,36 +73,70 @@ function cnpjFromToken(token) {
 }
 
 // ------------------------------------------------------------ SEFAZ fetch ----
-// O `fetch` do Node NÃO tem timeout padrão. Requisição que abre e nunca responde
-// pendura a promise para sempre, o slot do pool nunca volta e `maybeFinalizeCompany`
-// nunca satisfaz `downloaded + errors === total` — o job fica eterno e o ZIP nunca sai.
-// Medido em 2026-09-10: 3332 de 3339 baixadas, 7 penduradas, worker rodando sem fim.
-const REQ_TIMEOUT_MS = 45000;
+// Transporte: `lib/http.js` (https.request nativo), NÃO o `fetch` global.
+//
+// Duas razões, ambas medidas:
+//
+// 1. TIMEOUT. O `fetch` do Node não tem timeout padrão. Requisição que abre e nunca
+//    responde pendura a promise para sempre, o slot do pool nunca volta e
+//    `maybeFinalizeCompany` nunca satisfaz `downloaded + errors === total` — job eterno,
+//    ZIP nunca sai. Medido em 2026-09-10: 3332 de 3339 baixadas, 7 penduradas.
+//
+// 2. PORTABILIDADE. Na máquina da EMPRESA (Node 32-bit pré-instalado, sem npm install,
+//    sem admin) este download pulava de 0% para 100% com TODAS as notas em erro,
+//    instantaneamente. A causa do *instantâneo* não era o `fetch` ausente — esse lançava
+//    dentro do try e caía no retry, ~3,5 s por chave (≈19 min para 3339). Era o
+//    `new AbortController()`, que ficava FORA do try: sem retry, sem backoff, sem tocar
+//    a rede. Node < 15 não o tem. `req.setTimeout` faz o mesmo trabalho desde sempre.
+//
+// Nada aqui pode depender de global introduzido depois do Node 12 — ver lib/ambiente.js,
+// que afere isso no boot em vez de supor.
+const { pedir } = require('./http');
 
-async function fetchWithRetry(url, options, attempt = 0) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
+const REQ_TIMEOUT_MS = 45000;
+const MAX_REDIRECTS = 3;
+
+async function fetchWithRetry(url, options, attempt = 0, saltos = 0) {
     try {
-        const res = await fetch(url, { ...options, signal: ctrl.signal });
+        const res = await pedir(url, {
+            method: (options && options.method) || 'GET',
+            headers: (options && options.headers) || {},
+            body: (options && options.body) || null,
+            timeoutMs: REQ_TIMEOUT_MS,
+        });
+
         if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
         if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
+
+        // `fetch` seguia redirect sozinho; `https.request` não. Seguir SÓ na mesma origem:
+        // os headers carregam o JWT, e repeti-los num host que o servidor escolheu é
+        // entregar o token a terceiro. Redirect para fora vira erro que DIZ o destino —
+        // em ASP/Java de fisco, um 302 costuma ser sessão morta disfarçada de sucesso.
+        if (res.status >= 300 && res.status < 400) {
+            const destino = res.header('location');
+            if (!destino) throw makeErr('http', 'HTTP ' + res.status + ' sem Location');
+            if (saltos >= MAX_REDIRECTS) throw makeErr('http', 'redirect em excesso (' + MAX_REDIRECTS + ') a partir de ' + url);
+            const abs = new URL(destino, url);
+            if (abs.origin !== new URL(url).origin) {
+                throw makeErr('http', 'redirect para outra origem, recusado (token não é reenviado): ' + abs.origin);
+            }
+            return fetchWithRetry(abs.toString(), options, attempt, saltos + 1);
+        }
+
         if (!res.ok) {
-            if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+            if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1, saltos); }
             throw makeErr('http', 'HTTP ' + res.status);
         }
         return res;
     } catch (err) {
         if (err && err.kind) {
-            if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
+            if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1, saltos); }
             throw err;
         }
-        const estourou = err && err.name === 'AbortError';
-        if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
-        throw makeErr('network', estourou
-            ? ('sem resposta em ' + (REQ_TIMEOUT_MS / 1000) + 's')
-            : ((err && err.message) || 'Falha de rede'));
-    } finally {
-        clearTimeout(timer);
+        if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1, saltos); }
+        // A mensagem de `lib/http.js` já traz code/cause/host. Repassar inteira: motivo que
+        // não diz o que houve custou quatro rodadas neste projeto.
+        throw makeErr('network', (err && err.message) || 'Falha de rede');
     }
 }
 

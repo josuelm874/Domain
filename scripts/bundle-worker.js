@@ -34,6 +34,10 @@ const OUT_ZIP = path.join(OUT_DIR, 'softtech-worker.zip');
 // require antes de escutar a porta, com ERR_CONNECTION_REFUSED no browser e nenhuma pista.
 const FILES = [
     ['server.js', 'server.js'],
+    // ambiente.js e http.js sao requeridos na carga do server.js e do nfce.js. Esquece-los
+    // reproduz exatamente a P3: zip publicado que morre no require. Foi a P8 que os trouxe.
+    ['lib/ambiente.js', 'lib/ambiente.js'],
+    ['lib/http.js', 'lib/http.js'],
     ['lib/access.js', 'lib/access.js'],
     ['lib/nfce.js', 'lib/nfce.js'],
     ['lib/nfe.js', 'lib/nfe.js'],
