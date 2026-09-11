@@ -330,8 +330,26 @@ um devolveria "sem token" com o token na mão.
 Nunca são logadas nem entram em mensagem de erro (só os nomes dos campos). Dump que as
 contenha é material sensível: `C:\temp\mfe3` tem um.
 
-**Falta:** rodar de ponta a ponta e ver o JWT sair. O passo 6 é o único ainda não executado
-contra a API real — a rota e o corpo saíram do código do SPA, não de tentativa.
+**FUNCIONA de ponta a ponta — medido 2026-09-11 14:07.** Login → menu → Acessar MFe →
+seleção da empresa (CGF 67114776) → fragmento → troca. `TOKEN OBTIDO | CNPJ 19154453000109`,
+validade ~24 h. Os seis passos rodaram sem intervenção, e o passo 6 (o único que ainda era
+leitura de código do SPA, não medição) respondeu na primeira tentativa.
+
+**Falta INTEGRAR — e isso é o que resta do objetivo.** `worker/lib/token-mfe.js` ainda não é
+chamado por ninguém: `grep` em `server.js`, `lib/nfce.js` e `assets/js/app.js` não acha uma
+referência. Hoje o token continua vindo colado na UI. Para fechar "o usuário fornece só a
+planilha" falta:
+
+1. rota no `server.js` (ex.: `POST /mfe/token`) chamando `obterToken({ cnpj })`;
+2. `lib/nfce.js` pedindo o token por CNPJ quando a empresa vier sem ele — com o cache de
+   `obterToken` (reaproveita até 5 min antes do `exp`) evitando um login por chave;
+3. a tela deixando de exigir o token colado;
+4. `token-mfe.js` + `ca-icp-brasil.pem` no `FILES` de `scripts/bundle-worker.js` — hoje
+   estão de fora, e sem eles o zip publicado sobe sem essa capacidade (mesma classe da P3).
+
+Decisão pendente antes do item 2: **um JWT serve N CNPJs?** O token traz `sub` = um CNPJ e o
+passo 4 seleciona UMA empresa, o que sugere um token por empresa — logo um login por empresa
+do lote. Com 195 empresas no CPF isso é muita ida ao portal; medir antes de desenhar.
 
 ```
 node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2
