@@ -394,7 +394,7 @@ function parSistema(u) {
  * Faz o POST do formulário `frmASeguro`. Login que falha NÃO é retentado: portal do fisco
  * bloqueia conta após N tentativas erradas, e um worker em laço travaria a conta do Josué.
  */
-async function login(jar) {
+async function login(jar, { dump = '' } = {}) {
     const cred = lerCredenciais();
 
     // GET ANTES do POST: o ASP classico cria a sessao ao servir `login.asp`, e o POST sem
@@ -437,16 +437,31 @@ async function login(jar) {
 
     // Sucesso costuma vir como 302 para a pagina de servicos: seguir uma vez fecha o fluxo
     // de autenticacao antes do andador comecar.
-    // `paginaFinal` vira o Referer do primeiro passo do andador. O portal recusa acesso a
+    // `paginaFinal` vira o Referer do primeiro passo seguinte. O portal recusa acesso a
     // sistema com "Pagina de origem desconhecida" quando o HTTP_REFERER nao bate, entao o
-    // andador precisa saber de onde ele veio -- e isso e aqui que se sabe, sem chutar.
+    // proximo passo precisa saber de onde veio -- e isso e aqui que se sabe, sem chutar.
     let paginaFinal = BASE_SEGURO + '/login.asp';
+    let mensagem = '';
     if (r.loc) {
         const destino = absolutizar(URL_LOGIN, r.loc);
-        try { await req(jar, destino, { referer: BASE_SEGURO + '/login.asp' }); paginaFinal = destino; }
-        catch (e) { /* nao fatal: segue com o login.asp como origem */ }
+        try {
+            const pag = await req(jar, destino, { referer: BASE_SEGURO + '/login.asp' });
+            paginaFinal = destino;
+            if (dump) gravarDump(dump, 0, pag, 'login-');
+
+            // O login pode "dar certo" e ainda assim parar numa PAGINA DE RECADO. Medido em
+            // 2026-09-11: o 302 foi para `cwebmsg.asp` em vez do `cweb2002.asp` habitual, e
+            // dali o menu do MFe voltou HTTP 200 com 3761 bytes e nenhum `<body>` -- casca.
+            // O teste antigo era so `/erro/i.test(r.loc)`, e `cwebmsg` nao tem "erro" no
+            // nome: passava batido e o defeito reaparecia tres passos depois como "o portal
+            // mudou". Guardar o texto LITERAL e devolve-lo faz a mensagem do portal chegar
+            // em quem le o erro.
+            if (/cwebmsg|aviso|mensagem|termo/i.test(destino)) {
+                mensagem = textoVisivel(pag.corpo).slice(0, 400);
+            }
+        } catch (e) { /* nao fatal: segue com o login.asp como origem */ }
     }
-    return { status: r.status, loc: r.loc, cookies: jar.cookies.size, paginaFinal };
+    return { status: r.status, loc: r.loc, cookies: jar.cookies.size, paginaFinal, mensagem };
 }
 
 // --------------------------------- caminho fixo (passos 3 a 5) ---------------------------------
@@ -465,7 +480,7 @@ async function login(jar) {
  * Falha com mensagem que diz em QUAL passo parou e o que veio. O andador (`descobrirToken`)
  * continua existindo para quando o portal mudar — mas ele é o plano B, não o caminho.
  */
-async function obterTokenPorCaminho(jar, { cnpj = '', origem = '', dump = '' } = {}) {
+async function obterTokenPorCaminho(jar, { cnpj = '', origem = '', dump = '', mensagemLogin = '' } = {}) {
     const trilha = [];
     const registrar = (r, rotulo) => {
         const p = { passo: rotulo, url: r.url, status: r.status, bytes: r.corpo.length };
@@ -480,9 +495,24 @@ async function obterTokenPorCaminho(jar, { cnpj = '', origem = '', dump = '' } =
     const menu = await req(jar, URL_MENU_MFE, { referer: origem || (BASE_SEGURO + '/cweb2002.asp') });
     registrar(menu, '2-menu-mfe');
     if (menu.status !== 200) falhar('menu MFe (sm=104) respondeu HTTP ' + menu.status + ' — sessão caiu?');
+
+    // Duas causas distintas para "não achei o link", e consertos OPOSTOS. Separar aqui
+    // porque em 2026-09-11 o menu voltou HTTP 200 com 3761 bytes, nenhum `<body>` e zero
+    // texto, e a mensagem dizia "o portal mudou" — diagnóstico errado que mandaria alguém
+    // remapear rotas que estão certas. A página cheia tem ~17 KB.
+    if (pareceCasca(menu.corpo)) {
+        falhar('o menu MFe voltou HTTP 200 mas VAZIO (' + menu.corpo.length + ' bytes, sem <body>). ' +
+            'Isso é sessão não estabelecida, não mudança de rota. ' +
+            'Login terminou em: ' + (origem || '(desconhecido)') +
+            (mensagemLogin ? ' | o portal disse: "' + mensagemLogin + '"' : '') +
+            ' | Causas conhecidas: sessão já aberta noutro browser (o Ambiente Seguro é ' +
+            'sessão única), senha expirada, ou termo/aviso pendente de aceite. ' +
+            'Entre no portal pelo browser, resolva o que ele pedir, encerre a sessão lá e rode de novo.');
+    }
     if (menu.corpo.indexOf('cweb1010.asp?sse=104&sts=448') === -1) {
-        falhar('o menu sm=104 não contém mais o link "Acessar MFe" (cweb1010.asp?sse=104&sts=448). ' +
-            'O portal mudou: rode --descobrir --dump=<pasta> e me mande o HTML.');
+        falhar('o menu sm=104 carregou (' + menu.corpo.length + ' bytes, com conteúdo) mas não ' +
+            'contém o link "Acessar MFe" (cweb1010.asp?sse=104&sts=448). Aí sim o portal mudou, ' +
+            'ou este CPF perdeu o acesso ao MFe. Rode --descobrir --dump=<pasta> e me mande o HTML.');
     }
 
     const acesso = await req(jar, URL_ACESSAR_MFE, { referer: URL_MENU_MFE });
@@ -647,10 +677,41 @@ async function descobrirToken(jar, { cnpj = '', verboso = false, dump = '', orig
  * Grava em latin1->utf8: ASP clássico serve ISO-8859-1 e sem a conversão o arquivo abre
  * com acento quebrado, justo nos rótulos ("Acessar MFe") que são a pista.
  */
-function gravarDump(dir, indice, r) {
+/**
+ * Texto visível de uma página ASP, sem script/style/tags. Serve para pôr a mensagem
+ * LITERAL do portal dentro do erro. O portal responde HTTP 200 a coisas que não são
+ * sucesso (aviso, termo, sessão morta) — sem ler o texto, tudo isso vira "não achei",
+ * que é a mensagem que já custou quatro rodadas neste projeto.
+ */
+function textoVisivel(html) {
+    return String(html || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;?/gi, ' ')
+        .replace(/&aacute;/gi, 'á').replace(/&eacute;/gi, 'é').replace(/&iacute;/gi, 'í')
+        .replace(/&oacute;/gi, 'ó').replace(/&uacute;/gi, 'ú').replace(/&ccedil;/gi, 'ç')
+        .replace(/&atilde;/gi, 'ã').replace(/&otilde;/gi, 'õ').replace(/&ecirc;/gi, 'ê')
+        .replace(/&[a-z]+;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Uma resposta HTTP 200 que na verdade é uma casca. O menu do MFe tem ~17 KB e um `<body>`
+ * com o link; sessão não estabelecida devolve 200 com só o `<head>` (medido 2026-09-11:
+ * 3761 bytes, zero texto visível, nenhuma tag body). Distinguir isso de "o portal mudou"
+ * importa: são consertos opostos.
+ */
+function pareceCasca(html) {
+    return !/<body[\s>]/i.test(String(html || '')) || textoVisivel(html).length < 200;
+}
+
+function gravarDump(dir, indice, r, prefixo) {
     try {
         fs.mkdirSync(dir, { recursive: true });
-        const nome = String(indice).padStart(2, '0') + '-' +
+        const nome = (prefixo || '') + String(indice).padStart(2, '0') + '-' +
             (r.url.split('/').pop() || 'resposta').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 60) +
             (/html/i.test(r.tipo) ? '.html' : '.txt');
         const alvo = path.join(dir, nome);
@@ -677,7 +738,7 @@ async function obterToken({ cnpj = '', forcar = false } = {}) {
     // portal de fisco, disparado por job de usuário, bate em dezenas de páginas por
     // tentativa. O andador é ferramenta de diagnóstico (`--descobrir`), não plano B
     // automático — se o caminho quebrar, o erro diz onde e alguém roda --descobrir.
-    const t = await obterTokenPorCaminho(jar, { cnpj, origem: l.paginaFinal });
+    const t = await obterTokenPorCaminho(jar, { cnpj, origem: l.paginaFinal, mensagemLogin: l.mensagem });
     cache = { jwt: t.jwt, cnpj: t.cnpj, exp: t.exp };
     return cache;
 }
@@ -689,6 +750,8 @@ module.exports = {
     extrairAlvos, parSistema,
     // Passo 4: escolher a empresa errada baixa cupom de outro contribuinte. Testado.
     obterTokenPorCaminho, lerEmpresas, escolherEmpresa, valorHidden,
+    // Separar "sessao nao estabelecida" de "portal mudou": consertos opostos.
+    textoVisivel, pareceCasca,
     URL_ACESSAR_MFE,
 };
 
@@ -710,15 +773,18 @@ if (require.main === module) {
             lista.forEach((s) => console.error('    sis=' + s.sis + ' sse=' + s.sse + '   (em ' + s.visto_em + ')'));
         };
         try {
-            const l = await login(jar);
+            const l = await login(jar, { dump });
             console.log('  login: HTTP ' + l.status + (l.loc ? ' -> ' + l.loc : '') + ' | cookies: ' + jar.cookies.size);
+            // A pagina de recado do portal e informacao de primeira classe, nao ruido: foi
+            // ela que explicou o menu vazio de 2026-09-11.
+            if (l.mensagem) console.log('  portal disse: "' + l.mensagem + '"');
             // Padrao: caminho fixo. `--descobrir` so para quando o portal mudar e for
             // preciso remapear -- e um crawler, nao o modo de operacao.
             const andar = process.argv.indexOf('--descobrir') !== -1;
             console.log('  modo: ' + (andar ? 'andador (--descobrir)' : 'caminho fixo (passos 2-5)'));
             const t = andar
                 ? await descobrirToken(jar, { cnpj, verboso: true, dump, origem: l.paginaFinal })
-                : await obterTokenPorCaminho(jar, { cnpj, dump, origem: l.paginaFinal });
+                : await obterTokenPorCaminho(jar, { cnpj, dump, origem: l.paginaFinal, mensagemLogin: l.mensagem });
             if (t.trilha && !andar) t.trilha.forEach((p) => console.log('  ' + JSON.stringify(p)));
             console.log('  TOKEN OBTIDO | CNPJ ' + t.cnpj + ' | expira ' +
                 (t.exp ? new Date(t.exp * 1000).toLocaleString('pt-BR') : '(sem exp)'));

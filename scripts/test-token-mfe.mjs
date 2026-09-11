@@ -3,7 +3,7 @@
 import assert from 'node:assert';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { extrairJwt, CookieJar, extrairAlvos, parSistema, lerEmpresas, escolherEmpresa, valorHidden, URL_ACESSAR_MFE } = require('../worker/lib/token-mfe.js');
+const { extrairJwt, CookieJar, extrairAlvos, parSistema, lerEmpresas, escolherEmpresa, valorHidden, URL_ACESSAR_MFE, textoVisivel, pareceCasca } = require('../worker/lib/token-mfe.js');
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const jwt = (payload) => 'eyJhbGciOiJIUzI1NiJ9.' + b64(payload) + '.' + 'x'.repeat(20);
@@ -143,5 +143,27 @@ assert.throws(() => escolherEmpresa(emp, '0'), /casa com 2 empresas/, 'alvo ambi
 assert.equal(valorHidden(PAGINA, 'hidControle'), '../MFe/RedirJavaMFe.asp', 'le o hidControle da pagina');
 assert.equal(valorHidden(PAGINA, 'destino'), '', 'campo presente e vazio devolve string vazia');
 assert.equal(valorHidden(PAGINA, 'naoExiste'), null, 'campo ausente devolve null');
+
+// --- casca vs pagina de verdade ---
+// Em 2026-09-11 o menu do MFe voltou HTTP 200 com 3761 bytes, nenhum <body> e zero texto
+// visivel. O codigo chamou isso de "o portal mudou" -- diagnostico errado, que mandaria
+// remapear rotas que estavam certas. Era sessao nao estabelecida. Consertos opostos.
+const CASCA = '<html><head><title>SEFAZ - Secretaria da Fazenda</title>' +
+    '<script src="/x/jquery.js"></script><link href="/x/a.css" rel="stylesheet"></head>';
+assert.equal(pareceCasca(CASCA), true, 'resposta 200 sem <body> e casca');
+assert.equal(pareceCasca(''), true, 'corpo vazio e casca');
+
+const CHEIA = '<html><head><title>t</title></head><body>' +
+    '<a href="cweb1010.asp?sse=104&sts=448">Acessar MFe</a> ' + 'conteudo real '.repeat(40) +
+    '</body></html>';
+assert.equal(pareceCasca(CHEIA), false, 'pagina com body e texto nao e casca');
+// so ter <body> nao basta: o portal serve body vazio tambem
+assert.equal(pareceCasca('<html><body></body></html>'), true, 'body vazio ainda e casca');
+
+// --- textoVisivel: a mensagem do portal tem que chegar legivel no erro ---
+assert.equal(textoVisivel('<p>Sess&atilde;o j&aacute; ativa</p>'), 'Sessão já ativa', 'decodifica acento');
+assert.equal(textoVisivel('<script>var x="oculto";</script><p>visivel</p>'), 'visivel', 'ignora script');
+assert.equal(textoVisivel('<style>p{color:red}</style><p>ok</p>'), 'ok', 'ignora style');
+assert.equal(textoVisivel('<!-- comentario --><p>ok</p>'), 'ok', 'ignora comentario');
 
 console.log('OK test-token-mfe: todas as assercoes passaram');
