@@ -369,10 +369,23 @@ token vivo). Três achados, dois deles não previstos:
    **um login serve o lote inteiro** — basta mandar sempre o taxid do próprio token. Isso
    derruba o medo dos 195 logins.
 
-   ⚠️ **Medido uma vez e é surpreendente.** A sonda passou a imprimir se o `chaveNfe`
-   devolvido confere com o pedido — rodar de novo fecha. Enquanto não fechar, o desenho
-   seguro continua um token por empresa. A salvaguarda de `processChave` (chave interna do
-   XML × chave pedida) é o que separa as duas leituras na prática.
+   **CONFIRMADO na segunda execução (2026-09-11 15:12):** `chaveNfe devolvida CONFERE com
+   a pedida`. Não foi outro documento — foi exatamente o cupom da empresa B, obtido com
+   token e taxid de A.
+
+**Conclusão para o desenho: UM LOGIN SERVE O LOTE INTEIRO.** Basta mandar sempre
+`x-authentication-taxid` = CNPJ do próprio token. 195 empresas = 1 login, não 195. O medo
+que motivou esta medição não se realizou.
+
+⚠️ **Isso depende de a SEFAZ não checar o vínculo chave↔taxid.** É comportamento do lado
+deles, não contrato: pode ser fechado sem aviso, e aí volta a ser um token por empresa. O
+desenho tem que manter o caminho "token por empresa" como fallback — que é, aliás, o que
+`lib/nfce.js` já suporta hoje (cada empresa traz o seu token; a UI é que replica um só).
+
+Nota de leitura que quase passou: o **409 sozinho não decide nada**. Ele diz apenas que o
+*header* `taxid` é amarrado ao token. A pergunta que decide o desenho é sobre a *chave*, e
+quem responde é a sonda de controle — a primeira versão do veredito olhou só o 409 e
+concluiu "195 logins", o oposto do que os dados diziam. Corrigido.
 
 ```
 node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2

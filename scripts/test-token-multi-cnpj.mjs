@@ -151,9 +151,31 @@ const linha = (x) => console.log(
         console.log('  => o token de A foi ACEITO para o CNPJ de B: um login serve várias empresas.');
         console.log('     `lib/nfce.js` pode replicar um token por todo o lote, como a UI já faz hoje.');
     } else if (r2.status === 401 || r2.status === 403 || r2.status === 409) {
-        console.log('  => o token é POR EMPRESA: um login no portal por CNPJ do lote.');
-        console.log('     A integração precisa de cache por CNPJ e de aceitar que lote grande');
-        console.log('     gasta minutos só autenticando. 195 empresas = 195 logins.');
+        // O 409 sozinho NAO significa "um login por empresa" -- essa foi a leitura errada da
+        // primeira versao. Ele diz apenas que o HEADER taxid tem que bater com o sub do
+        // token. A pergunta que decide o desenho e outra: a CHAVE pedida e restrita ao
+        // taxid? r1 responde, porque a chave sondada e da empresa B e r1 usou token+taxid
+        // de A. Se r1 devolveu esse mesmo cupom, um login basta para o lote inteiro.
+        const chaveEhDeB = chave.slice(6, 20) === B;
+        const r1TrouxeCupomDeB = chaveEhDeB && r1.status === 200 && r1.chaveDevolvida === chave;
+        console.log('  => o HEADER taxid é amarrado ao token (409 quando diverge).');
+        if (r1TrouxeCupomDeB) {
+            console.log('  => MAS a CHAVE não é: r1 usou token+taxid de A e trouxe o cupom da');
+            console.log('     empresa B, com chaveNfe conferindo. UM LOGIN SERVE O LOTE INTEIRO,');
+            console.log('     desde que o taxid enviado seja sempre o CNPJ do próprio token.');
+            console.log('     195 empresas = 1 login, não 195.');
+            console.log('');
+            console.log('     RESSALVA: isso depende de a SEFAZ não checar o vínculo chave↔taxid.');
+            console.log('     É comportamento do lado deles e pode ser fechado sem aviso. O');
+            console.log('     desenho tem que aceitar token por empresa como fallback.');
+        } else if (chaveEhDeB && r1.status === 200) {
+            console.log('  => r1 deu 200 mas a chaveNfe devolvida NÃO confere com a pedida:');
+            console.log('     a API devolveu outro documento. NÃO tratar como autorizado.');
+        } else {
+            console.log('  => e a chave sondada não permite decidir se a CHAVE é restrita ao taxid');
+            console.log('     (ela precisa ser de B: posições 6..20 = CNPJ do emitente).');
+            console.log('     Sem isso, o desenho seguro é um login por empresa: 195 logins.');
+        }
     } else {
         console.log('  => INDEFINIDO. O controle r3 diz se a sonda em si presta:');
         console.log('     se r3 também não deu 200/404, a chave ou o endpoint é que estão errados.');
