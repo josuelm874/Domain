@@ -9288,21 +9288,12 @@ function createBaixarNfcePage(mainContent) {
     // resolve na largada do job). Com ele no ar, colar token deixa de ser obrigatório — que
     // era o objetivo: o usuário fornece só a planilha.
     //
-    // A detecção é ANTECIPADA, não na hora de iniciar: `updateStartButton` precisa saber
-    // disso para liberar o botão, e descobrir só no clique deixaria o botão travado com uma
-    // exigência que já não existe.
+    // Só a DECLARAÇÃO fica aqui. A detecção vive lá embaixo, junto da que já pinta o badge
+    // de status: a primeira versão chamava `detectWorker()` neste ponto e morria em TDZ,
+    // porque `WORKER_BASE` só é declarado ~500 linhas adiante. O `.catch` engolia o
+    // ReferenceError e o botão continuava travado por uma exigência que já não existia --
+    // falha silenciosa, achada só no teste de tela.
     let workerPronto = false;
-    detectWorker().then((ok) => {
-        workerPronto = !!ok;
-        if (workerPronto) {
-            const dica = document.getElementById('bn-percompany-hint');
-            if (dica) {
-                dica.textContent = 'Worker no ar: o token é obtido automaticamente. ' +
-                    'Cole um JWT só se quiser usar o seu.';
-            }
-        }
-        updateStartButton();
-    }).catch(() => { /* sem worker o fluxo antigo continua valendo */ });
     const stageSelect = document.getElementById('bn-stage-select');
     const stageDownload = document.getElementById('bn-stage-download');
     const unifiedBox = document.getElementById('bn-unified');
@@ -10302,6 +10293,16 @@ function createBaixarNfcePage(mainContent) {
     // Detecta o worker no load: presente → badge; ausente → banner de download
     // (o fluxo segue funcionando pelo navegador de qualquer forma).
     detectWorker().then((ok) => {
+        // Uma fonte de verdade: a mesma detecção que pinta o badge libera o botão e troca a
+        // dica. Duas detecções independentes divergiriam, e foi assim que a versão anterior
+        // mostrou "Worker detectado" com o botão travado.
+        workerPronto = !!ok;
+        updateStartButton();
+        const dica = document.getElementById('bn-percompany-hint');
+        if (dica && ok) {
+            dica.textContent = 'Worker no ar: o token é obtido automaticamente. ' +
+                'Cole um JWT só se quiser usar o seu.';
+        }
         const ws = document.getElementById('bn-worker-status');
         if (!ws) return;
         ws.innerHTML = ok

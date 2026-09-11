@@ -845,19 +845,32 @@ function gravarDump(dir, indice, r, prefixo) {
 let cache = null;   // { jwt, cnpj, exp }
 
 /** Reaproveita o token até 5 min antes de expirar — evita um login por chamada. */
-async function obterToken({ cnpj = '', forcar = false, encerrar = false } = {}) {
+async function obterToken({ cnpj = '', forcar = false, encerrar = true } = {}) {
     const agora = Math.floor(Date.now() / 1000);
     if (!forcar && cache && cache.exp - 300 > agora && (!cnpj || cache.cnpj === cnpj)) return cache;
     const jar = new CookieJar();
-    const l = await login(jar);
-    // Produção usa o caminho FIXO. Não cai no andador se falhar: um crawler cego contra
-    // portal de fisco, disparado por job de usuário, bate em dezenas de páginas por
-    // tentativa. O andador é ferramenta de diagnóstico (`--descobrir`), não plano B
-    // automático — se o caminho quebrar, o erro diz onde e alguém roda --descobrir.
-    const t = await obterTokenPorCaminho(jar, { cnpj, origem: l.paginaFinal, mensagemLogin: l.mensagem });
-    cache = { jwt: t.jwt, cnpj: t.cnpj, exp: t.exp };
-    if (encerrar) await encerrarSessao(jar);
-    return cache;
+    try {
+        const l = await login(jar);
+        // Produção usa o caminho FIXO. Não cai no andador se falhar: um crawler cego contra
+        // portal de fisco, disparado por job de usuário, bate em dezenas de páginas por
+        // tentativa. O andador é ferramenta de diagnóstico (`--descobrir`), não plano B
+        // automático — se o caminho quebrar, o erro diz onde e alguém roda --descobrir.
+        const t = await obterTokenPorCaminho(jar, { cnpj, origem: l.paginaFinal, mensagemLogin: l.mensagem });
+        cache = { jwt: t.jwt, cnpj: t.cnpj, exp: t.exp };
+        return cache;
+    } finally {
+        // FINALLY, não no caminho feliz. A versão anterior só encerrava quando dava certo, e
+        // por isso CADA FALHA deixava uma sessão pendurada: a tentativa seguinte batia em
+        // "O usuário já está logado no sistema... aguarde alguns minutos". Medido no teste
+        // de tela de 2026-09-11 — a primeira tentativa falhou por outro motivo e trancou a
+        // segunda, transformando um defeito em dois.
+        //
+        // `encerrar` agora é `true` por PADRÃO. A assimetria manda: sessão encerrada à toa
+        // custa um login a mais; sessão deixada aberta tranca o usuário fora do próprio
+        // portal por minutos. `encerrarSessao` falha em silêncio, então isto nunca mascara
+        // o erro real que está subindo.
+        if (encerrar) await encerrarSessao(jar);
+    }
 }
 
 /**

@@ -204,6 +204,11 @@ const jobAuto = nfce.startJob({
         // O worker TEM que encerrar a sessão: o Ambiente Seguro é de sessão única e deixá-la
         // aberta tranca o usuário fora do próprio portal.
         ok(opc && opc.encerrar === true, 'obterToken é chamado com encerrar:true');
+        // Sem cnpj o token-mfe recusa: o passo 4 escolhe UMA empresa entre as 195 do CPF e
+        // não chuta. A primeira versão chamava sem cnpj e o lote inteiro morria em
+        // "a seleção de empresa exige CNPJ" -- achado só no teste de tela.
+        ok(opc && opc.cnpj === CNPJ, 'obterToken recebe o CNPJ da 1ª empresa do lote',
+            'cnpj=' + (opc && opc.cnpj));
         return { jwt: tokenAuto, cnpj: CNPJ_TOKEN, exp: Math.floor(Date.now() / 1000) + 3600 };
     },
 });
