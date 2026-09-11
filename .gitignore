@@ -55,3 +55,7 @@ graphify-out/
 # Credenciais do Supabase — não commitar, use config.example.js como referência
 assets/js/config.js
 .vercel
+
+# credenciais do Ambiente Seguro — NUNCA versionar
+.softtech-ambiente-seguro.json
+*ambiente-seguro*.json
