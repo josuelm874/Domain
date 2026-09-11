@@ -40,6 +40,13 @@ const FILES = [
     ['lib/http.js', 'lib/http.js'],
     ['lib/access.js', 'lib/access.js'],
     ['lib/nfce.js', 'lib/nfce.js'],
+    // token-mfe.js NAO e requerido por server.js hoje -- entra porque sem ele o zip
+    // publicado nao leva a capacidade de obter o JWT sozinho, e a falha apareceria so
+    // quando alguem ligasse a rota. O .pem VEM JUNTO ou nao adianta: e a cadeia ICP-Brasil
+    // pinada, e sem ela o handshake com o Ambiente Seguro morre em
+    // SELF_SIGNED_CERT_IN_CHAIN nos Node que nao tem a raiz brasileira na store.
+    ['lib/token-mfe.js', 'lib/token-mfe.js'],
+    ['lib/ca-icp-brasil.pem', 'lib/ca-icp-brasil.pem'],
     ['lib/nfe.js', 'lib/nfe.js'],
     ['lib/distnsu.js', 'lib/distnsu.js'],
     ['lib/cursor.js', 'lib/cursor.js'],
