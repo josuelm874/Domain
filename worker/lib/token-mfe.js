@@ -36,7 +36,13 @@ const BASE_SEGURO = HOST_SEGURO + '/internet/acessoSeguro/ServicoSenha/LogarUsua
 const URL_LOGIN = BASE_SEGURO + '/cweb20011.asp';
 const URL_MENU_MFE = BASE_SEGURO + '/cweb2003.asp?sm=104';
 const REQ_TIMEOUT_MS = 30000;
-const MAX_PASSOS = 25;          // ponytail: teto de saltos; sem ele um redirect ciclico roda para sempre
+// Teto de saltos; sem ele um redirect ciclico roda para sempre. Subiu de 25 para 40 com
+// evidencia: na execucao de 2026-09-10, 18 dos 25 passos foram gastos em paginas de menu
+// `cweb2003.asp?sm=NNN` que nao levavam a lugar nenhum -- o orcamento acabou antes de o
+// andador chegar a qualquer sistema. Com o Referer corrigido, os acessos a sistema param
+// de ser recusados de cara e o orcamento passa a ser gasto em pagina util.
+// ponytail: teto arbitrario continua sendo teto arbitrario.
+const MAX_PASSOS = 40;
 
 // Links que DESTROEM a sessao ou saem do fluxo. O andador clicou em EncerrarSessao no
 // terceiro passo da primeira execucao e matou a propria sessao -- todo o resto da trilha
@@ -100,10 +106,18 @@ function lerCredenciais() {
  */
 class CookieJar {
     constructor() { this.cookies = new Map(); }
+    // Aceita as tres formas que ja apareceram: Headers.getSetCookie() (Node 19.7+),
+    // Headers.get() e o objeto cru do `http` nativo, onde `set-cookie` ja e array. A
+    // ultima e a que a producao usa desde a troca de `fetch` por `https.request`; as duas
+    // primeiras so sobrevivem para nao quebrar chamador antigo -- e `getSetCookie` nem
+    // existe no Node da maquina da empresa, entao depender so dela seria a mesma armadilha
+    // de novo.
     absorver(res) {
-        const raw = typeof res.headers.getSetCookie === 'function'
-            ? res.headers.getSetCookie()
-            : [res.headers.get('set-cookie')].filter(Boolean);
+        const h = (res && res.headers) || {};
+        let raw;
+        if (typeof h.getSetCookie === 'function') raw = h.getSetCookie();
+        else if (typeof h.get === 'function') raw = [h.get('set-cookie')].filter(Boolean);
+        else raw = [].concat(h['set-cookie'] || []);
         this.absorverLista(raw);
     }
     absorverLista(raw) {
@@ -234,6 +248,64 @@ function absolutizar(base, href) {
     try { return new URL(href, base).toString(); } catch (e) { return ''; }
 }
 
+// --------------------------------- extração de alvos ---------------------------------
+
+// O extrator antigo só lia `href=` e `action=`. A trilha de 2026-09-10 mostrou o custo:
+// as 18 páginas `cweb2003.asp?sm=NNN` visitadas devolveram bytes DIFERENTES (16873,
+// 19922, 17647, ...) e a MESMA lista de 6 candidatos, sempre. Conteúdo que muda com
+// candidatos que não mudam significa uma coisa só: o que foi colhido era a navegação
+// estática da página, e os links de verdade — os que dependem do `sm` — estão em
+// JavaScript. ASP clássico dessa geração abre sistema por `window.open(...)` /
+// `location.href=...` num `onclick`, não por âncora.
+const PADROES_ALVO = [
+    /(?:href|action)\s*=\s*["']([^"'#]+)["']/gi,        // âncoras e forms
+    /window\.open\s*\(\s*["']([^"']+)["']/gi,           // abre em nova janela
+    /(?:window\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/gi,
+    /(?:\.replace|\.assign)\s*\(\s*["']([^"']+)["']/gi,
+    // Rede de segurança: a URL de acesso a sistema em QUALQUER lugar do texto, inclusive
+    // concatenada dentro de função JS que os padrões acima não desmontam.
+    /(cweb1010java\.asp\?[A-Za-z0-9_=&%.\-]+)/gi,
+];
+
+/**
+ * Todos os alvos navegáveis de uma página, absolutos, únicos e já filtrados.
+ * Devolve na ordem de prioridade: acesso a sistema que parece MFe, outros acessos a
+ * sistema, resto. Sem isso o andador gasta o orçamento de passos em página institucional.
+ */
+function extrairAlvos(base, corpo) {
+    const brutos = new Set();
+    for (const re of PADROES_ALVO) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(corpo)) !== null) {
+            const v = String(m[1] || '').trim();
+            if (v && !/^(javascript:|mailto:|tel:|#)/i.test(v)) brutos.add(v);
+        }
+    }
+    const alvos = Array.from(brutos)
+        .map((h) => absolutizar(base, h))
+        .filter((u) => /^https:\/\/(servicos|cfe)\.sefaz\.ce\.gov\.br/.test(u))
+        .filter((u) => !/\.(css|js|png|jpe?g|gif|svg|ico|woff2?)(\?|$)/i.test(u))
+        .filter((u) => !RE_PROIBIDO.test(u));
+
+    const peso = (u) => (RE_ACESSO_SISTEMA.test(u)
+        ? (RE_PARECE_MFE.test(u) ? 0 : 1)
+        : (RE_PARECE_MFE.test(u) ? 2 : 3));
+    return Array.from(new Set(alvos)).sort((a, b) => peso(a) - peso(b));
+}
+
+/** Pares sis/sse de uma URL de acesso a sistema — o que falta descobrir é exatamente isso. */
+function parSistema(u) {
+    const m = /cweb1010java\.asp\?(.*)$/i.exec(u);
+    if (!m) return null;
+    try {
+        const q = new URLSearchParams(m[1]);
+        const sis = q.get('sis') || '';
+        const sse = q.get('sse') || '';
+        return sis || sse ? { sis, sse, url: u } : null;
+    } catch (e) { return null; }
+}
+
 // --------------------------------- login ---------------------------------
 
 /**
@@ -283,10 +355,16 @@ async function login(jar) {
 
     // Sucesso costuma vir como 302 para a pagina de servicos: seguir uma vez fecha o fluxo
     // de autenticacao antes do andador comecar.
+    // `paginaFinal` vira o Referer do primeiro passo do andador. O portal recusa acesso a
+    // sistema com "Pagina de origem desconhecida" quando o HTTP_REFERER nao bate, entao o
+    // andador precisa saber de onde ele veio -- e isso e aqui que se sabe, sem chutar.
+    let paginaFinal = BASE_SEGURO + '/login.asp';
     if (r.loc) {
-        try { await req(jar, absolutizar(URL_LOGIN, r.loc)); } catch (e) { /* nao fatal */ }
+        const destino = absolutizar(URL_LOGIN, r.loc);
+        try { await req(jar, destino, { referer: BASE_SEGURO + '/login.asp' }); paginaFinal = destino; }
+        catch (e) { /* nao fatal: segue com o login.asp como origem */ }
     }
-    return { status: r.status, loc: r.loc, cookies: jar.cookies.size };
+    return { status: r.status, loc: r.loc, cookies: jar.cookies.size, paginaFinal };
 }
 
 // --------------------------------- descoberta do caminho ---------------------------------
@@ -298,22 +376,36 @@ async function login(jar) {
  * ponytail: busca em largura ingênua com teto de MAX_PASSOS. Quando as rotas dos passos 3
  * e 4 forem confirmadas, isto vira três requisições fixas e este andador sai.
  */
-async function descobrirToken(jar, { cnpj = '', verboso = false } = {}) {
+async function descobrirToken(jar, { cnpj = '', verboso = false, dump = '', origem = '' } = {}) {
     const trilha = [];
-    const fila = [URL_MENU_MFE];
+    // A fila carrega a PÁGINA DE ORIGEM junto da URL. Não é detalhe: na trilha de
+    // 2026-09-10 todo `cweb1010java.asp?sis=...&sse=...` devolveu
+    //   302 -> cwebErro.asp?de=Não é possível continuar a operação. Página de origem
+    //          desconhecida00.
+    // "Página de origem desconhecida" é a tradução literal de um teste de
+    // `Request.ServerVariables("HTTP_REFERER")` — padrão de anti-deep-link em ASP clássico.
+    // `login()` já mandava Referer no POST; o andador não mandava em lugar nenhum, e por
+    // isso TODO acesso a sistema era recusado antes de executar.
+    const fila = [{ url: URL_MENU_MFE, referer: origem || (BASE_SEGURO + '/cweb2002.asp') }];
     const visitados = new Set();
+    // Inventário de sis/sse visto em qualquer página. É o objeto da investigação: falta
+    // saber o par do MFe. Sai no relatório inteiro, não truncado em 6 como antes.
+    const sistemas = new Map();
 
     while (fila.length && trilha.length < MAX_PASSOS) {
-        const url = fila.shift();
-        if (!url || visitados.has(url)) continue;
-        visitados.add(url);
+        const atual = fila.shift();
+        if (!atual || !atual.url || visitados.has(atual.url)) continue;
+        visitados.add(atual.url);
+        const url = atual.url;
 
         let r;
-        try { r = await req(jar, url); }
+        try { r = await req(jar, url, { referer: atual.referer || '' }); }
         catch (e) { trilha.push({ url, erro: (e && e.message) || String(e) }); continue; }
 
         const passo = { url, status: r.status, tipo: r.tipo.split(';')[0], bytes: r.corpo.length };
+        if (atual.referer) passo.referer = atual.referer;
         if (r.loc) passo.loc = r.loc;
+        if (dump) passo.arquivo = gravarDump(dump, trilha.length, r);
 
         // o token pode estar no Location do salto, ou no corpo
         const achado = extrairJwt(r.loc, cnpj) || extrairJwt(r.corpo, cnpj);
@@ -321,34 +413,56 @@ async function descobrirToken(jar, { cnpj = '', verboso = false } = {}) {
             passo.token = 'ACHADO (CNPJ ' + achado.cnpj + ')';
             trilha.push(passo);
             if (verboso) trilha.forEach((p) => console.log('  ' + JSON.stringify(p)));
-            return { ...achado, trilha };
+            return { ...achado, trilha, sistemas: Array.from(sistemas.values()) };
         }
         trilha.push(passo);
 
-        if (r.loc) { fila.push(absolutizar(url, r.loc)); continue; }
+        // Redirect: a origem do próximo salto é esta página, não a anterior.
+        if (r.loc) { fila.push({ url: absolutizar(url, r.loc), referer: url }); continue; }
 
-        // enfileira links e actions que continuem dentro da SEFAZ
-        const alvos = [
-            ...String(r.corpo).matchAll(/(?:href|action)\s*=\s*["']([^"'#]+)["']/gi),
-        ].map((m) => absolutizar(url, m[1]))
-            .filter((u) => /^https:\/\/(servicos|cfe)\.sefaz\.ce\.gov\.br/.test(u))
-            .filter((u) => !/\.(css|js|png|jpe?g|gif|svg|ico|woff2?)(\?|$)/i.test(u))
-            .filter((u) => !RE_PROIBIDO.test(u));
-
-        // Ordem importa: acesso a sistema que parece MFe primeiro, depois os outros
-        // acessos a sistema, e so no fim a navegacao generica. Sem isso o andador gasta
-        // o orcamento de passos em paginas institucionais.
-        const peso = (u) => (RE_ACESSO_SISTEMA.test(u) ? (RE_PARECE_MFE.test(u) ? 0 : 1) : (RE_PARECE_MFE.test(u) ? 2 : 3));
-        alvos.sort((a, b) => peso(a) - peso(b));
-        passo.candidatos = alvos.slice(0, 6);   // na trilha, para diagnosticar quando falhar
-        for (const u of alvos) if (!visitados.has(u)) fila.push(u);
+        const alvos = extrairAlvos(url, String(r.corpo));
+        for (const u of alvos) {
+            const par = parSistema(u);
+            if (par && !sistemas.has(u)) sistemas.set(u, { ...par, visto_em: url });
+        }
+        passo.candidatos = alvos.slice(0, 8);   // na trilha, para diagnosticar quando falhar
+        for (const u of alvos) if (!visitados.has(u)) fila.push({ url: u, referer: url });
     }
 
+    const lista = Array.from(sistemas.values());
     const e = new Error('token não encontrado em ' + trilha.length + ' passo(s). ' +
-        'As rotas de "Acessar MFe" e de seleção de empresa provavelmente exigem POST com ' +
-        'parâmetros que este andador não adivinha. Rode com --descobrir e me mande a trilha.');
+        (lista.length
+            ? ('Sistemas vistos: ' + lista.map((s) => s.sis + '/' + s.sse).join(', ') +
+               ' — nenhum devolveu JWT. Se o MFe não está nessa lista, ele não aparece nas ' +
+               'páginas percorridas: rode com --dump=<pasta> e procure no HTML salvo.')
+            : 'Nenhum cweb1010java.asp?sis=&sse= foi visto — rode com --dump=<pasta>.'));
     e.trilha = trilha;
+    e.sistemas = lista;
     throw e;
+}
+
+/**
+ * Salva a resposta crua em disco. Existe porque `--descobrir` já rodou três vezes sem
+ * fixar as rotas: a trilha diz o que foi pedido, não o que a página CONTÉM. Um HTML no
+ * disco resolve em uma execução o que três rodadas de hipótese não resolveram.
+ *
+ * Grava em latin1->utf8: ASP clássico serve ISO-8859-1 e sem a conversão o arquivo abre
+ * com acento quebrado, justo nos rótulos ("Acessar MFe") que são a pista.
+ */
+function gravarDump(dir, indice, r) {
+    try {
+        fs.mkdirSync(dir, { recursive: true });
+        const nome = String(indice).padStart(2, '0') + '-' +
+            (r.url.split('/').pop() || 'resposta').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 60) +
+            (/html/i.test(r.tipo) ? '.html' : '.txt');
+        const alvo = path.join(dir, nome);
+        fs.writeFileSync(alvo,
+            '<!-- ' + r.url + ' | HTTP ' + r.status + (r.loc ? ' -> ' + r.loc : '') + ' -->\n' +
+            Buffer.from(r.corpo, 'latin1').toString('utf8'));
+        return alvo;
+    } catch (e) {
+        return '(falha ao gravar dump: ' + ((e && e.message) || e) + ')';
+    }
 }
 
 // --------------------------------- cache ---------------------------------
@@ -360,33 +474,54 @@ async function obterToken({ cnpj = '', forcar = false } = {}) {
     const agora = Math.floor(Date.now() / 1000);
     if (!forcar && cache && cache.exp - 300 > agora && (!cnpj || cache.cnpj === cnpj)) return cache;
     const jar = new CookieJar();
-    await login(jar);
-    const t = await descobrirToken(jar, { cnpj });
+    const l = await login(jar);
+    const t = await descobrirToken(jar, { cnpj, origem: l.paginaFinal });
     cache = { jwt: t.jwt, cnpj: t.cnpj, exp: t.exp };
     return cache;
 }
 
-module.exports = { obterToken, login, descobrirToken, extrairJwt, CookieJar, lerCredenciais, ARQUIVO_CRED };
+module.exports = {
+    obterToken, login, descobrirToken, extrairJwt, CookieJar, lerCredenciais, ARQUIVO_CRED,
+    // Exportados para teste: a colheita de links é onde o andador falhou em silêncio por
+    // três execuções, e falha silenciosa que não é testável volta.
+    extrairAlvos, parSistema,
+};
 
 // --------------------------------- CLI ---------------------------------
 
 if (require.main === module) {
     (async () => {
-        const cnpj = (process.argv.find((a) => /^--cnpj=/.test(a)) || '').split('=')[1] || '';
+        const arg = (nome) => (process.argv.find((a) => a.indexOf('--' + nome + '=') === 0) || '').split('=').slice(1).join('=');
+        const cnpj = arg('cnpj');
+        // --dump=<pasta> grava o HTML de cada passo. Três execuções de --descobrir não
+        // fixaram as rotas porque a trilha diz o que foi PEDIDO, não o que a página TEM.
+        const dump = arg('dump');
         console.log('  arquivo de credenciais: ' + ARQUIVO_CRED);
+        if (dump) console.log('  dump das páginas: ' + path.resolve(dump));
         const jar = new CookieJar();
+        const relatarSistemas = (lista) => {
+            if (!lista || !lista.length) return;
+            console.error('  sistemas encontrados (sis/sse) — o do MFe tem que estar aqui:');
+            lista.forEach((s) => console.error('    sis=' + s.sis + ' sse=' + s.sse + '   (em ' + s.visto_em + ')'));
+        };
         try {
             const l = await login(jar);
             console.log('  login: HTTP ' + l.status + (l.loc ? ' -> ' + l.loc : '') + ' | cookies: ' + jar.cookies.size);
-            const t = await descobrirToken(jar, { cnpj, verboso: true });
+            const t = await descobrirToken(jar, { cnpj, verboso: true, dump, origem: l.paginaFinal });
             console.log('  TOKEN OBTIDO | CNPJ ' + t.cnpj + ' | expira ' +
                 (t.exp ? new Date(t.exp * 1000).toLocaleString('pt-BR') : '(sem exp)'));
             console.log('  (o valor do token não é impresso de propósito)');
+            relatarSistemas(t.sistemas);
         } catch (e) {
             console.error('  FALHOU: ' + ((e && e.message) || e));
             if (e && e.trilha) {
                 console.error('  trilha percorrida:');
                 e.trilha.forEach((p) => console.error('    ' + JSON.stringify(p)));
+            }
+            relatarSistemas(e && e.sistemas);
+            if (!dump) {
+                console.error('  PRÓXIMO PASSO: rode de novo com --dump=<pasta> e me mande os .html.');
+                console.error('  A trilha diz o que foi pedido; o dump diz o que a página contém.');
             }
             process.exitCode = 1;
         }

@@ -185,6 +185,81 @@ ocupados desde o primeiro segundo.
   worker que quebra no `require('./lib/access')`.
 - **Ação:** rodar `node scripts/bundle-worker.js` e republicar. Ver também P1b.
 
+### P8 — NFCe na máquina da EMPRESA: 0% → 100% instantâneo, tudo em erro — corrigido, **falta confirmar**
+Sintoma: o worker sobe, o download começa e termina no mesmo instante com **todas** as notas
+em erro. Mesma build funciona na máquina pessoal. É a continuação direta de P1: lá o
+`require('exceljs')` impedia o worker de subir; aqui ele sobe e o NFCe falha sozinho.
+
+**Causa raiz — e a leitura óbvia estava errada.** A hipótese natural era `fetch` ausente
+(global só a partir do Node 18). Ela não explica o *instantâneo*: em `lib/nfce.js` o `fetch`
+ficava **dentro** do `try` de `fetchWithRetry`, então o `ReferenceError` caía no ramo de
+retry — 500 + 1000 + 2000 ms por chave. Com 3339 chaves e concorrência 10 isso daria
+**≈19 minutos** de barra andando, não segundos.
+
+O que dá salto instantâneo é a linha logo acima: `new AbortController()` estava **fora** do
+`try`. Global ausente ali rejeita a função antes de qualquer retry, backoff ou pacote na
+rede. `AbortController` só existe a partir do **Node 15** — ou seja, o sintoma aponta para
+Node **< 15**, não para a faixa 15–17.
+
+Duas evidências independentes apontam para o mesmo lugar:
+- Naquela máquina o Node recusou `--openssl-legacy-provider` em `NODE_OPTIONS` (registrado
+  em P1). Essa flag só existe a partir do Node 17.
+- O NFCe era **o único** fluxo do worker sobre `fetch`. NFe, distNSU e DIRBI já usavam
+  `https.request` (`lib/nfe.js`) e nunca apresentaram esse sintoma. O worker tinha dois
+  padrões de rede e só o moderno quebrava.
+
+**Consertado** (sem adicionar dependência — dependência instalável foi o que quebrou o
+worker na empresa em primeiro lugar):
+- `worker/lib/http.js` **novo**: cliente sobre `https.request` nativo, com timeout por
+  `req.setTimeout` (o que o `AbortController` fazia), erro carregando `code`/`cause`/`host`,
+  e `json()` que mostra o início do corpo quando a resposta não é JSON.
+- `worker/lib/nfce.js`: `fetch` + `AbortController` fora. Redirect passa a ser seguido
+  **só na mesma origem** — os headers levam o JWT, e repeti-los num host escolhido pelo
+  servidor seria entregar o token a terceiro.
+- `worker/lib/ambiente.js` **novo**: no boot o worker **afere** o próprio interpretador
+  (versão, arquitetura, binário, globais em falta) e imprime. O mesmo diagnóstico sai em
+  `GET /health`, que é a única rota sem pareamento — dá para responder "que Node é esse?"
+  à distância. Sem execPath no JSON; caminho de disco fica só no console local.
+- `worker/test/nfce-http.test.mjs` **novo**, 17 asserções: job completo contra mock HTTP
+  local (ZIP relido, headers de auth conferidos, 404 com motivo legível) mais guarda de
+  regressão que lê o fonte e recusa a volta de `fetch(`/`AbortController` em `nfce.js`.
+
+**Piso de portabilidade declarado: Node 12.** `package.json` ainda diz `engines: >=18`;
+é declaração, não é verificado por nada.
+
+**Falta confirmar na máquina da empresa.** O que fecha isto é uma linha, não uma hipótese:
+`node --version` lá, ou o motivo literal de uma nota no card da empresa
+(`/nfce/detail/{job}/{cnpj}`). Se o motivo NÃO mencionar `fetch`/`AbortController`, a causa
+é outra — 401/403 da SEFAZ (`processChave` marca `comp.aborted` e **drena a fila inteira**
+contando erro, o que também dá salto instantâneo) ou proxy corporativo interceptando TLS
+para `cfe.sefaz.ce.gov.br:8443`.
+
+### P9 — Token automático do MFe: faltam as rotas dos passos 3 e 4
+`worker/lib/token-mfe.js` faz login e anda pelo Ambiente Seguro, mas não chega ao JWT.
+Três execuções de `--descobrir` não fixaram as rotas. A trilha de 2026-09-10 trouxe duas
+pistas que estavam sendo ignoradas:
+
+1. **Referer.** Todo `cweb1010java.asp?sis=…&sse=…` devolveu
+   `302 → cwebErro.asp?de=…Página de origem desconhecida00.` Esse texto é a tradução literal
+   de um teste de `HTTP_REFERER` — anti-deep-link padrão em ASP clássico. O `login()` já
+   mandava Referer; o andador não mandava em lugar nenhum, então **todo** acesso a sistema
+   era recusado antes de executar. Corrigido: a fila carrega a página de origem, e `login()`
+   devolve `paginaFinal` para o primeiro salto não precisar chutar.
+2. **Links em JavaScript.** As 18 páginas `cweb2003.asp?sm=NNN` visitadas tinham **bytes
+   diferentes** (16873, 19922, 17647, …) e devolveram a **mesma** lista de 6 candidatos.
+   Conteúdo que muda com candidatos que não mudam = o extrator só lia `href=`/`action=` e
+   colhia a navegação estática. Corrigido: `extrairAlvos` também lê `window.open(…)`,
+   `location.href=…`, `.replace(…)`/`.assign(…)` e qualquer `cweb1010java.asp?…` solto no
+   texto. 15 asserções novas em `scripts/test-token-mfe.mjs` (32 no total).
+
+Também novo: `--dump=<pasta>` grava o HTML de cada passo (latin1→utf8, senão o acento de
+"Acessar MFe" quebra justo no rótulo que é a pista), e a falha passa a listar **todos** os
+pares `sis/sse` vistos em vez de truncar em 6.
+
+**Próximo passo:** `node <worktree>/worker/lib/token-mfe.js --descobrir --dump=C:\temp\mfe`.
+A trilha diz o que foi *pedido*; o dump diz o que a página *contém* — é a diferença entre
+mais uma rodada de hipótese e o par `sis/sse` do MFe na mão.
+
 ## Resolvido
 
 ### ✓ Baixar NFCe pelo worker — FUNCIONANDO de ponta a ponta (2026-09-10)
