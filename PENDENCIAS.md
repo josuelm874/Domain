@@ -328,7 +328,7 @@ um devolveria "sem token" com o token na mão.
 
 ⚠️ **`key`/`auth` são credenciais de sessão vivas** — quem as tiver entra como o usuário.
 Nunca são logadas nem entram em mensagem de erro (só os nomes dos campos). Dump que as
-contenha é material sensível: `C:	emp\mfe3` tem um.
+contenha é material sensível: `C:\temp\mfe3` tem um.
 
 **Falta:** rodar de ponta a ponta e ver o JWT sair. O passo 6 é o único ainda não executado
 contra a API real — a rota e o corpo saíram do código do SPA, não de tentativa.
