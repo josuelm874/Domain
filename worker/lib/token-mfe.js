@@ -6,22 +6,38 @@
  * empresa por meses (ver P1). Chromium headless resolveria de forma mais direta e custaria
  * ~300 MB de `npm install` — o mesmo defeito, ampliado.
  *
- * Caminho mapeado com o Josué (2026-09-10):
- *   1. POST  /internet/acessoSeguro/ServicoSenha/LogarUsuario/cweb20011.asp  (txtUsuario, txtSenha)
- *   2. GET   /internet/acessoSeguro/ServicoSenha/LogarUsuario/cweb2003.asp?sm=104   (menu MFe)
- *   3. "Acessar MFe"      -> rota ainda não identificada
- *   4. selecionar empresa -> salto para cfe.sefaz.ce.gov.br; é AQUI que o JWT aparece
- *   5. o SPA passa a mandar o JWT em `x-authentication-token` (avisos, content, home, ...)
+ * Caminho COMPLETO, fixado com os dumps de 2026-09-10/11 (nenhum passo é dedução):
+ *   1. GET   .../LogarUsuario/login.asp        (cria a sessão ASP; sem isso o POST cai em erro)
+ *      POST  .../LogarUsuario/cweb20011.asp    (txtUsuario, txtSenha, cboTipoUsuario)
+ *   2. GET   .../LogarUsuario/cweb2003.asp?sm=104            (menu do MFe)
+ *   3. GET   .../LogarUsuario/cweb1010.asp?sse=104&sts=448   ("Acessar MFe")
+ *         -> 302 EmpresasDoCPF/cweb2010.asp?SSE=104&Destino=MFe/RedirJavaMFe.asp
+ *   4. GET   essa lista (195 empresas) e POST cweb2010.asp com lstEmpresa/num/hidControle
+ *         -> 302 MFe/RedirJavaMFe.asp
+ *   5. essa página NÃO redireciona: termina com
+ *         window.open('http://cfe.sefaz.ce.gov.br/mfe/portal#/login?key=..&auth=..&cgf=..&cnpj=..')
+ *      Os parâmetros vão no FRAGMENTO, que nunca chega ao servidor. Quem lê é o SPA.
+ *   6. POST  https://cfe.sefaz.ce.gov.br:8443/portalcfews/mfe/authentication/login
+ *      com esses parâmetros em JSON  ->  o JWT.
  *
- * Os passos 3 e 4 não foram capturados no DevTools em três tentativas, então este módulo
- * DESCOBRE em vez de assumir: segue links e forms a partir do passo 2 e varre cada resposta
- * procurando um JWT válido. `--descobrir` imprime o mapa do caminho para fixar as rotas
- * depois. Sem isso, eu estaria chutando URLs.
+ * O passo 6 é XHR, não navegação: por isso seguir redirects nunca achava o token, por mais
+ * saltos que se desse. A rota saiu do próprio SPA (asset público, sem credencial):
+ * `authentication/services/AuthenticationRepository.js` (route 'mfe/authentication',
+ * loginAmbienteSeguro posta o `$location.search()` inteiro) e o `<meta name="endpoint">`
+ * do index do portal.
+ *
+ * `--descobrir` mantém o andador que mapeou isto. É ferramenta de diagnóstico para quando o
+ * portal mudar, NÃO plano B automático: crawler cego contra portal de fisco, disparado por
+ * job de usuário, bate em dezenas de páginas por tentativa.
+ *
+ * `key`/`auth` do passo 5 são CREDENCIAIS DE SESSÃO vivas. Nunca são logadas, nunca entram
+ * em mensagem de erro — só os nomes dos campos. Um dump com elas é material sensível.
  *
  * Credenciais: `~/.softtech-ambiente-seguro.json` ou env. NUNCA são logadas, nem em erro.
  * HTTPS obrigatório — o portal também serve em HTTP, sem redirect, e ali a senha vai em claro.
  *
- * Rodar:  node worker/lib/token-mfe.js --descobrir
+ * Rodar:  node worker/lib/token-mfe.js --cnpj=<14 dígitos> [--dump=<pasta>]
+ *         node worker/lib/token-mfe.js --descobrir --dump=<pasta>   (remapear)
  * ------------------------------------------------------------------------------------------- */
 'use strict';
 
@@ -207,7 +223,7 @@ const CA_PINADA = (() => {
     }
 })();
 
-function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
+function req(jar, url, { method = 'GET', body = null, referer = '', contentType = '' } = {}) {
     if (!/^https:/i.test(url)) return Promise.reject(new Error('HTTPS obrigatorio -- recusado: ' + url));
     return new Promise((resolve, reject) => {
         let u;
@@ -219,7 +235,7 @@ function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
         if (!jar.vazio) headers.cookie = jar.header();
         if (referer) headers.referer = referer;
         if (body) {
-            headers['content-type'] = 'application/x-www-form-urlencoded';
+            headers['content-type'] = contentType || 'application/x-www-form-urlencoded';
             headers['content-length'] = Buffer.byteLength(body);
         }
         const r = https.request({
@@ -239,6 +255,9 @@ function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
                 status: res.statusCode,
                 loc: res.headers.location || '',
                 tipo: res.headers['content-type'] || '',
+                // headers inteiros: a API do MFe devolve o JWT em `x-authentication-token`,
+                // que e o mesmo header que lib/nfce.js manda de volta a cada chave.
+                headers: res.headers,
                 // latin1: ASP classico serve ISO-8859-1; JWT e ASCII, entao a regex nao sofre
                 corpo: Buffer.concat(pedacos).toString('latin1'),
                 url,
@@ -464,6 +483,88 @@ async function login(jar, { dump = '' } = {}) {
     return { status: r.status, loc: r.loc, cookies: jar.cookies.size, paginaFinal, mensagem };
 }
 
+// --------------------------------- passo 5: a troca key+auth -> JWT ---------------------------------
+
+// O passo 5 NAO e mais um redirect -- por isso seguir saltos nunca ia achar nada.
+// `RedirJavaMFe.asp` termina com (medido 2026-09-11, 04-RedirJavaMFe.asp.html):
+//
+//   <script>window.open('http://cfe.sefaz.ce.gov.br/mfe/portal#/login?key=<hex>&auth=<...>
+//            &vinculo=3&cgf=<cgf>&cnpj=<cnpj>&siglaSistema=portal-mfe');history.back();</script>
+//
+// Os parametros vao no FRAGMENTO (`#`), que por definicao nunca chega ao servidor: quem le
+// e o SPA, no browser. Ele nao navega para lugar nenhum com isso -- troca por JWT numa
+// chamada XHR. Nenhum numero de saltos acharia o token.
+//
+// A troca, lida do proprio SPA (asset publico, sem credencial):
+//   /mfe/assets/javascripts/authentication/services/AuthenticationRepository.js
+//       AbstractRepository.call(this, restangular, 'mfe/authentication');
+//       this.loginAmbienteSeguro = function (credentials) {
+//           return this.restangular.all(this.route + "/login").post(credentials); };
+//   AuthenticationController.js -> loginAmbienteSeguro($location.search())
+//       ou seja: o objeto inteiro do fragmento vira o corpo JSON.
+//   index do SPA: <meta name="endpoint" content="https://cfe.sefaz.ce.gov.br:8443/portalcfews">
+const URL_API_MFE = process.env.MFE_API_BASE || 'https://cfe.sefaz.ce.gov.br:8443/portalcfews';
+const ROTA_LOGIN_MFE = '/mfe/authentication/login';
+
+// `history.back()` na mesma linha nao e ruido: confirma que a pagina so serve de mensageiro.
+const RE_REDIR_MFE = /window\.open\(\s*['"]([^'"]*\/mfe\/portal#[^'"]*)['"]/i;
+
+/**
+ * Extrai os parâmetros do fragmento `#/login?...` que o RedirJavaMFe.asp entrega ao SPA.
+ *
+ * Devolve um objeto com TODOS os parâmetros, sem filtrar por nome: o SPA manda
+ * `$location.search()` inteiro, e adivinhar quais campos importam seria reinventar o
+ * contrato. Se a SEFAZ acrescentar um campo, ele passa junto.
+ */
+function extrairCredenciaisMfe(html) {
+    const m = RE_REDIR_MFE.exec(String(html || ''));
+    if (!m) return null;
+    const bruto = m[1];
+    const i = bruto.indexOf('#');
+    const frag = i === -1 ? '' : bruto.slice(i + 1);
+    const q = frag.indexOf('?');
+    if (q === -1) return null;
+    const params = {};
+    for (const [k, v] of new URLSearchParams(frag.slice(q + 1))) params[k] = v;
+    return Object.keys(params).length ? params : null;
+}
+
+/**
+ * Troca key+auth pelo JWT, como o SPA faz.
+ *
+ * O token pode voltar no corpo ou no header `x-authentication-token` — é o header que o
+ * worker já manda de volta em `lib/nfce.js`. Varre os dois em vez de escolher um: escolher
+ * errado aqui devolveria "sem token" com o token na mão.
+ *
+ * As credenciais NUNCA são logadas nem entram em mensagem de erro. `key`/`auth` são
+ * credenciais de sessão vivas — quem tiver isso entra como o usuário.
+ */
+async function trocarPorJwt(jar, credenciais, cnpjEsperado) {
+    const url = URL_API_MFE + ROTA_LOGIN_MFE;
+    const r = await req(jar, url, {
+        method: 'POST',
+        body: JSON.stringify(credenciais),
+        contentType: 'application/json',
+        referer: 'http://cfe.sefaz.ce.gov.br/mfe/portal',
+    });
+    const noHeader = r.headers ? (r.headers['x-authentication-token'] || '') : '';
+    const achado = extrairJwt(noHeader, cnpjEsperado) || extrairJwt(r.corpo, cnpjEsperado);
+    if (achado) return achado;
+
+    // Sem token: dizer o que veio, menos o que é segredo. Campos recebidos em vez de
+    // "falhou" — a lição que custou quatro rodadas neste projeto.
+    let resumo = '';
+    try {
+        const j = JSON.parse(r.corpo);
+        resumo = ' | campos da resposta: ' + Object.keys(j).join(', ');
+    } catch (e) {
+        resumo = ' | corpo: ' + textoVisivel(r.corpo).slice(0, 200);
+    }
+    throw new Error('a troca key+auth -> JWT respondeu HTTP ' + r.status + ' sem token válido em ' +
+        url + resumo + ' | parâmetros enviados: ' + Object.keys(credenciais).join(', ') +
+        ' (valores omitidos de propósito: são credenciais de sessão)');
+}
+
 // --------------------------------- caminho fixo (passos 3 a 5) ---------------------------------
 
 /**
@@ -576,10 +677,11 @@ async function obterTokenPorCaminho(jar, { cnpj = '', origem = '', dump = '', me
     achado = extrairJwt(r.loc, cnpj) || extrairJwt(r.corpo, cnpj);
     if (achado) return { ...achado, trilha };
 
-    // Passo 5: a seleção salta para cfe.sefaz.ce.gov.br; o JWT aparece em algum desses
-    // saltos. Teto baixo de propósito — se não apareceu em 6, não é "mais um hop".
+    // A seleção redireciona para RedirJavaMFe.asp. Seguir os saltos até lá — e só até lá:
+    // o JWT NÃO está em salto nenhum, o que essa página faz é entregar key+auth ao SPA.
     let url = urlAction;
-    for (let i = 0; i < MAX_SALTOS_FINAIS && r.loc; i++) {
+    let credenciais = extrairCredenciaisMfe(r.corpo);
+    for (let i = 0; i < MAX_SALTOS_FINAIS && r.loc && !credenciais; i++) {
         const proximo = absolutizar(url, r.loc);
         const anterior = url;
         url = proximo;
@@ -587,12 +689,22 @@ async function obterTokenPorCaminho(jar, { cnpj = '', origem = '', dump = '', me
         registrar(r, '5-salto-' + (i + 1));
         achado = extrairJwt(r.loc, cnpj) || extrairJwt(r.corpo, cnpj);
         if (achado) return { ...achado, trilha };
+        credenciais = extrairCredenciaisMfe(r.corpo);
     }
 
-    falhar('seleção de empresa (CGF ' + alvo.cgf + ') aceita, mas nenhum JWT em ' +
-        MAX_SALTOS_FINAIS + ' saltos. Último: HTTP ' + r.status + ' ' + url +
-        (r.loc ? ' -> ' + r.loc : '') + '. Rode com --dump=<pasta>: o token pode estar ' +
-        'vindo por XHR do SPA, e aí precisa da chamada que o SPA faz, não de mais um salto.');
+    if (!credenciais) {
+        falhar('seleção de empresa (CGF ' + alvo.cgf + ') aceita, mas a página de entrega não ' +
+            'trouxe o window.open(.../mfe/portal#/login?...) com key+auth. Último: HTTP ' +
+            r.status + ' ' + url + (r.loc ? ' -> ' + r.loc : '') + ', ' + r.corpo.length +
+            ' bytes. Rode com --dump=<pasta> e me mande esse arquivo.');
+    }
+
+    // Passo 6: a troca. É XHR, não navegação — e é por isso que nenhum número de saltos
+    // resolvia. Os nomes dos campos vão no log; os valores, nunca.
+    registrar({ url: URL_API_MFE + ROTA_LOGIN_MFE, status: 0, corpo: '', loc: '' },
+        '6-troca-key+auth (campos: ' + Object.keys(credenciais).join(',') + ')');
+    const t = await trocarPorJwt(jar, credenciais, cnpj);
+    return { ...t, trilha };
 }
 
 // --------------------------------- descoberta do caminho ---------------------------------
@@ -752,6 +864,8 @@ module.exports = {
     obterTokenPorCaminho, lerEmpresas, escolherEmpresa, valorHidden,
     // Separar "sessao nao estabelecida" de "portal mudou": consertos opostos.
     textoVisivel, pareceCasca,
+    // Passo 6: a troca key+auth -> JWT. E XHR, nao navegacao.
+    extrairCredenciaisMfe, trocarPorJwt, URL_API_MFE, ROTA_LOGIN_MFE,
     URL_ACESSAR_MFE,
 };
 

@@ -293,12 +293,45 @@ por job de usuário, bate em dezenas de páginas por tentativa.
 `escolherEmpresa` **explode em ambiguidade** em vez de pegar a primeira: escolher errado
 aqui baixa cupom de outro contribuinte, o que é pior que falhar. Sem `--cnpj`, recusa.
 
-46 asserções em `scripts/test-token-mfe.mjs` (eram 16), com as strings reais do dump.
+64 asserções em `scripts/test-token-mfe.mjs` (eram 16), com as strings reais do dump.
 
-**Falta:** validar de ponta a ponta com sessão viva. O passo 5 (`RedirJavaMFe.asp` → salto
-para `cfe.sefaz.ce.gov.br`) é o único trecho ainda não observado — se o JWT vier por XHR do
-SPA em vez de vir num salto de navegação, é preciso a chamada que o SPA faz. O erro do
-passo 5 já diz isso explicitamente.
+**Passo 5/6 resolvido (2026-09-11, mesma sessão).** Os passos 2→4 rodaram limpos com
+sessão viva (empresa CGF 67114776 selecionada), e a execução parou em `RedirJavaMFe.asp`
+com "nenhum JWT em 6 saltos". A hipótese registrada acima estava certa: **não havia salto**.
+A página termina com
+
+```html
+<script>window.open('http://cfe.sefaz.ce.gov.br/mfe/portal#/login?key=…&auth=…
+        &vinculo=3&cgf=…&cnpj=…&siglaSistema=portal-mfe');history.back();</script>
+```
+
+Os parâmetros vão no **fragmento** (`#`), que por definição nunca chega ao servidor — quem
+lê é o SPA, no browser. Nenhum número de saltos acharia o token.
+
+A troca saiu do próprio SPA (asset público, sem credencial):
+`/mfe/assets/javascripts/authentication/services/AuthenticationRepository.js` declara
+`route = 'mfe/authentication'` e `loginAmbienteSeguro(credentials)` faz
+`restangular.all(route + "/login").post(credentials)`; o `AuthenticationController` passa o
+`$location.search()` **inteiro**. A base vem do `<meta name="endpoint">` do index do portal:
+`https://cfe.sefaz.ce.gov.br:8443/portalcfews` — o mesmo host:porta que `lib/nfce.js` já usa.
+
+```
+POST https://cfe.sefaz.ce.gov.br:8443/portalcfews/mfe/authentication/login
+Content-Type: application/json
+{ key, auth, vinculo, cgf, cnpj, siglaSistema }        → JWT
+```
+
+Implementado como passo 6. O objeto do fragmento é repassado **inteiro**, sem filtrar por
+nome conhecido: se a SEFAZ acrescentar um campo, ele passa junto — filtrar quebraria em
+silêncio. O JWT é procurado no header `x-authentication-token` **e** no corpo; escolher só
+um devolveria "sem token" com o token na mão.
+
+⚠️ **`key`/`auth` são credenciais de sessão vivas** — quem as tiver entra como o usuário.
+Nunca são logadas nem entram em mensagem de erro (só os nomes dos campos). Dump que as
+contenha é material sensível: `C:	emp\mfe3` tem um.
+
+**Falta:** rodar de ponta a ponta e ver o JWT sair. O passo 6 é o único ainda não executado
+contra a API real — a rota e o corpo saíram do código do SPA, não de tentativa.
 
 ```
 node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2

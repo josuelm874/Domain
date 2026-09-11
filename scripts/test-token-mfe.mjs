@@ -3,7 +3,7 @@
 import assert from 'node:assert';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { extrairJwt, CookieJar, extrairAlvos, parSistema, lerEmpresas, escolherEmpresa, valorHidden, URL_ACESSAR_MFE, textoVisivel, pareceCasca } = require('../worker/lib/token-mfe.js');
+const { extrairJwt, CookieJar, extrairAlvos, parSistema, lerEmpresas, escolherEmpresa, valorHidden, URL_ACESSAR_MFE, textoVisivel, pareceCasca, extrairCredenciaisMfe, URL_API_MFE, ROTA_LOGIN_MFE } = require('../worker/lib/token-mfe.js');
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const jwt = (payload) => 'eyJhbGciOiJIUzI1NiJ9.' + b64(payload) + '.' + 'x'.repeat(20);
@@ -165,5 +165,37 @@ assert.equal(textoVisivel('<p>Sess&atilde;o j&aacute; ativa</p>'), 'Sessão já 
 assert.equal(textoVisivel('<script>var x="oculto";</script><p>visivel</p>'), 'visivel', 'ignora script');
 assert.equal(textoVisivel('<style>p{color:red}</style><p>ok</p>'), 'ok', 'ignora style');
 assert.equal(textoVisivel('<!-- comentario --><p>ok</p>'), 'ok', 'ignora comentario');
+
+// --- passo 6: key+auth vem no FRAGMENTO, nao em salto ---
+// RedirJavaMFe.asp termina com um window.open para o SPA. Os parametros vao depois do '#',
+// que por definicao NUNCA chega ao servidor -- por isso seis saltos nao acharam token
+// nenhum: nao havia salto. Quem le e o SPA, que troca por JWT numa chamada XHR.
+// (valores abaixo sao inventados; os reais sao credenciais de sessao)
+const REDIR = '<div id="textoContainer"><script language=javascript>' +
+    "window.open('http://cfe.sefaz.ce.gov.br/mfe/portal#/login?key=AAAA1111&auth=BBBB2222" +
+    "&vinculo=3&cgf=67114776&cnpj=19154453000109&siglaSistema=portal-mfe');" +
+    'window.openner;history.back();</' + 'script></div>';
+
+const cred = extrairCredenciaisMfe(REDIR);
+assert.ok(cred, 'acha o window.open do RedirJavaMFe');
+assert.equal(cred.key, 'AAAA1111', 'extrai key');
+assert.equal(cred.auth, 'BBBB2222', 'extrai auth');
+assert.equal(cred.cnpj, '19154453000109', 'extrai cnpj');
+assert.equal(cred.siglaSistema, 'portal-mfe', 'extrai siglaSistema');
+// TODOS os campos passam adiante: o SPA manda $location.search() inteiro, e filtrar por
+// nome conhecido quebraria em silencio se a SEFAZ acrescentar um campo.
+assert.deepEqual(Object.keys(cred).sort(),
+    ['auth', 'cgf', 'cnpj', 'key', 'siglaSistema', 'vinculo'], 'passa o objeto inteiro');
+
+assert.equal(extrairCredenciaisMfe('<p>pagina sem redirect</p>'), null, 'pagina sem window.open');
+assert.equal(extrairCredenciaisMfe("window.open('http://cfe.sefaz.ce.gov.br/mfe/portal#/login')"), null,
+    'fragmento sem query devolve null');
+assert.equal(extrairCredenciaisMfe("window.open('https://correio.sefaz.ce.gov.br/')"), null,
+    'window.open de outra coisa (Webmail) ignorado');
+
+// rota lida do proprio SPA: AuthenticationRepository route 'mfe/authentication' + '/login',
+// base do <meta name="endpoint"> do index
+assert.equal(URL_API_MFE + ROTA_LOGIN_MFE,
+    'https://cfe.sefaz.ce.gov.br:8443/portalcfews/mfe/authentication/login', 'rota da troca');
 
 console.log('OK test-token-mfe: todas as assercoes passaram');
