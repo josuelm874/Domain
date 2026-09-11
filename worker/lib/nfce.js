@@ -70,9 +70,17 @@ function cnpjFromToken(token) {
 }
 
 // ------------------------------------------------------------ SEFAZ fetch ----
+// O `fetch` do Node NÃO tem timeout padrão. Requisição que abre e nunca responde
+// pendura a promise para sempre, o slot do pool nunca volta e `maybeFinalizeCompany`
+// nunca satisfaz `downloaded + errors === total` — o job fica eterno e o ZIP nunca sai.
+// Medido em 2026-09-10: 3332 de 3339 baixadas, 7 penduradas, worker rodando sem fim.
+const REQ_TIMEOUT_MS = 45000;
+
 async function fetchWithRetry(url, options, attempt = 0) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
     try {
-        const res = await fetch(url, options);
+        const res = await fetch(url, { ...options, signal: ctrl.signal });
         if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
         if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
         if (!res.ok) {
@@ -85,8 +93,13 @@ async function fetchWithRetry(url, options, attempt = 0) {
             if (err.kind === 'http' && attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
             throw err;
         }
+        const estourou = err && err.name === 'AbortError';
         if (attempt < MAX_RETRIES) { await delay(backoff(attempt)); return fetchWithRetry(url, options, attempt + 1); }
-        throw makeErr('network', (err && err.message) || 'Falha de rede');
+        throw makeErr('network', estourou
+            ? ('sem resposta em ' + (REQ_TIMEOUT_MS / 1000) + 's')
+            : ((err && err.message) || 'Falha de rede'));
+    } finally {
+        clearTimeout(timer);
     }
 }
 

@@ -9682,7 +9682,10 @@ function createBaixarNfcePage(mainContent) {
         if (comp.phase === 'download') {
             setArc(els.blue, dlFrac, RING_C);
             setArc(els.yellow, 0, RING_C);
-            els.pct.textContent = Math.round(dlFrac * 100) + '%';
+            // Arredonda para BAIXO: `Math.round` mostrava 100% com 3332/3339 (99,79%) e o
+            // usuario concluiu que tinha acabado, com 7 chaves penduradas. Na fase de
+            // download, 100% passa a significar "terminou", nao "quase".
+            els.pct.textContent = Math.floor(dlFrac * 100) + '%';
             els.root.classList.remove('done');
         } else {
             setArc(els.blue, 1, RING_C);
@@ -9715,7 +9718,7 @@ function createBaixarNfcePage(mainContent) {
             if (c.phase === 'download') allDownloaded = false;
         });
         const dlFrac = totKeys ? totDl / totKeys : 0;
-        const pct = Math.round(dlFrac * 100);
+        const pct = Math.floor(dlFrac * 100);
         footerText.innerHTML = '<span class="bn-err">' + totErr + ' ' + (totErr === 1 ? 'erro' : 'erros') + '</span> | ' + pct + '%';
         setArc(miniBlue, dlFrac, MINI_C);
         setArc(miniYellow, (allDownloaded && n) ? zipSum / n : 0, MINI_C);
