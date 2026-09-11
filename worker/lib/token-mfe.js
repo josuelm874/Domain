@@ -27,6 +27,7 @@
 
 const fs = require('fs');
 const https = require('https');
+const tls = require('tls');
 const os = require('os');
 const path = require('path');
 
@@ -138,6 +139,21 @@ function extrairJwt(texto, cnpjEsperado) {
 // ponytail: SECLEVEL=0 e martelo; o correto seria a SEFAZ oferecer grupo DH maior.
 const CIPHERS_LEGADO = 'DEFAULT:@SECLEVEL=0';
 
+// A cadeia do servidor termina na "Autoridade Certificadora Raiz Brasileira v10", raiz da
+// ICP-Brasil. Alguns Node a tem na store, outros nao -- SELF_SIGNED_CERT_IN_CHAIN. Em vez
+// de desligar a verificacao (rejeitado: `rejectUnauthorized: false` abre MITM ativo, e um
+// MITM aqui captura a senha), a raiz e a intermediaria vao PINADAS junto com a store
+// padrao. Resultado: valida em qualquer Node, e mais estrito que o default.
+// Regenerar quando a ICP-Brasil rotacionar: ver o cabecalho de ca-icp-brasil.pem.
+const CA_PINADA = (() => {
+    try {
+        const pem = fs.readFileSync(path.join(__dirname, 'ca-icp-brasil.pem'), 'utf8');
+        return [...tls.rootCertificates, pem];
+    } catch (e) {
+        return undefined;   // sem o .pem, cai na store padrao do Node
+    }
+})();
+
 function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
     if (!/^https:/i.test(url)) return Promise.reject(new Error('HTTPS obrigatorio -- recusado: ' + url));
     return new Promise((resolve, reject) => {
@@ -161,6 +177,7 @@ function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
             headers,
             ciphers: CIPHERS_LEGADO,
             minVersion: 'TLSv1',
+            ca: CA_PINADA,
         }, (res) => {
             jar.absorverLista(res.headers['set-cookie']);
             const pedacos = [];
