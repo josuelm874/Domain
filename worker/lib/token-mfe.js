@@ -35,6 +35,15 @@ const HOST_SEGURO = 'https://servicos.sefaz.ce.gov.br';
 const BASE_SEGURO = HOST_SEGURO + '/internet/acessoSeguro/ServicoSenha/LogarUsuario';
 const URL_LOGIN = BASE_SEGURO + '/cweb20011.asp';
 const URL_MENU_MFE = BASE_SEGURO + '/cweb2003.asp?sm=104';
+
+// Passo 3, FIXADO pelo dump de 2026-09-11 (C:\temp\mfe\00-cweb2003.asp_sm_104.html:403).
+// O link "Acessar MFe" NAO e `cweb1010java.asp?sis=&sse=` -- e outro script:
+//     <a href="cweb1010.asp?sse=104&sts=448">Acessar MFe</a>
+// Por isso tres execucoes do andador nao acharam: ele so reconhecia `cweb1010java.asp`.
+// `cweb1010.asp` (sem "java"), parametros `sse` (menu) + `sts` (servico). Responde 302 ->
+//     ../../EMPRESASDOCPF/CWEB2010.ASP?SSE=104&Destino=MFe/RedirJavaMFe.asp
+const URL_ACESSAR_MFE = BASE_SEGURO + '/cweb1010.asp?sse=104&sts=448';
+const MAX_SALTOS_FINAIS = 6;
 const REQ_TIMEOUT_MS = 30000;
 // Teto de saltos; sem ele um redirect ciclico roda para sempre. Subiu de 25 para 40 com
 // evidencia: na execucao de 2026-09-10, 18 dos 25 passos foram gastos em paginas de menu
@@ -51,7 +60,11 @@ const RE_PROIBIDO = /EncerrarSessao|cweb2005|cweb20011|logout|sair|login\.asp|\/
 
 // Acesso a sistema no Ambiente Seguro: cweb1010java.asp?sis=<sistema>&sse=<id>.
 // Descoberto na trilha. E por aqui que se chega ao MFe, entao vai na frente da fila.
-const RE_ACESSO_SISTEMA = /cweb1010java\.asp/i;
+// DOIS scripts, nao um -- foi o que fez o andador errar tres vezes:
+//   cweb1010java.asp?sis=<nome>&sse=<id>   sistemas "java" (PostoFiscal, Sitram, ...)
+//   cweb1010.asp?sse=<menu>&sts=<servico>  os demais -- e o MFe esta AQUI (sse=104&sts=448)
+// O padrao antigo so casava o primeiro, entao "Acessar MFe" nunca entrava na fila.
+const RE_ACESSO_SISTEMA = /cweb1010(java)?\.asp\?/i;
 const RE_PARECE_MFE = /mfe|cfe|fiscal|cupom|nfce/i;
 const ARQUIVO_CRED = path.join(os.homedir(), '.softtech-ambiente-seguro.json');
 
@@ -294,6 +307,75 @@ function extrairAlvos(base, corpo) {
     return Array.from(new Set(alvos)).sort((a, b) => peso(a) - peso(b));
 }
 
+// --------------------------------- seleção de empresa (passo 4) ---------------------------------
+
+// A pagina `EmpresasDoCPF/cweb2010.asp` lista as empresas do CPF (195 no caso do Josue) e
+// submete por JS, nao por link:
+//     function submete(plst, pNum){ form1.lstEmpresa.value=plst; form1.num.value=pNum;
+//                                   form1.submit(); }
+//     <a href="JavaScript:submete('<plst>','<num>');">62124510</a>   <- texto = CGF
+// `plst` e uma string opaca de campos concatenados em largura fixa (sequencial, CGF,
+// CPF/CNPJ, nome). NAO decodificamos: copiamos verbatim da pagina, que e o que o browser
+// faz. Decodificar layout de campo fixo de ASP de 2003 seria inventar contrato -- e
+// qualquer mudanca de largura quebraria em silencio, escolhendo a empresa errada.
+const RE_LINHA_EMPRESA = /submete\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)\s*;?\s*"?\s*>\s*([^<]*)</gi;
+const RE_HIDDEN = /<input[^>]*type\s*=\s*["']hidden["'][^>]*>/gi;
+
+/** Valor de um input hidden pelo `name`, como o browser leria. */
+function valorHidden(html, nome) {
+    RE_HIDDEN.lastIndex = 0;
+    let m;
+    while ((m = RE_HIDDEN.exec(html)) !== null) {
+        const tag = m[0];
+        const n = /name\s*=\s*["']([^"']+)["']/i.exec(tag);
+        if (!n || n[1].toLowerCase() !== String(nome).toLowerCase()) continue;
+        const v = /value\s*=\s*["']([^"']*)["']/i.exec(tag);
+        return v ? v[1] : '';
+    }
+    return null;   // null = campo AUSENTE; '' = presente e vazio. A diferenca importa no erro.
+}
+
+/** Linhas de empresa da pagina de selecao: { plst, num, cgf, digitos }. */
+function lerEmpresas(html) {
+    const linhas = [];
+    RE_LINHA_EMPRESA.lastIndex = 0;
+    let m;
+    while ((m = RE_LINHA_EMPRESA.exec(html)) !== null) {
+        const plst = m[1];
+        if (!plst || plst === 'plst') continue;        // pula a propria declaracao da funcao
+        linhas.push({
+            plst,
+            num: m[2],
+            cgf: String(m[3] || '').trim(),
+            digitos: plst.replace(/\D/g, ''),
+        });
+    }
+    // A mesma empresa aparece em mais de uma celula da linha (CGF e nome): deduplica.
+    const vistos = new Set();
+    return linhas.filter((l) => (vistos.has(l.plst) ? false : (vistos.add(l.plst), true)));
+}
+
+/**
+ * Escolhe a empresa por CNPJ (ou CGF). Sem chute: se nao achar, o erro diz quantas
+ * empresas a pagina trouxe e algumas amostras -- escolher a errada aqui significa baixar
+ * cupom de outro contribuinte, o que e pior que falhar.
+ */
+function escolherEmpresa(empresas, alvo) {
+    const d = String(alvo || '').replace(/\D/g, '');
+    if (!d) return null;
+    const porDigitos = empresas.filter((e) => e.digitos.indexOf(d) !== -1);
+    if (porDigitos.length === 1) return porDigitos[0];
+    if (porDigitos.length > 1) {
+        const e = new Error('CNPJ/CGF ' + d + ' casa com ' + porDigitos.length +
+            ' empresas da lista (CGFs: ' + porDigitos.map((x) => x.cgf).join(', ') +
+            '). Passe o CNPJ completo de 14 digitos.');
+        e.ambiguo = true;
+        throw e;
+    }
+    const porCgf = empresas.filter((e) => e.cgf.replace(/\D/g, '') === d);
+    return porCgf.length === 1 ? porCgf[0] : null;
+}
+
 /** Pares sis/sse de uma URL de acesso a sistema — o que falta descobrir é exatamente isso. */
 function parSistema(u) {
     const m = /cweb1010java\.asp\?(.*)$/i.exec(u);
@@ -365,6 +447,122 @@ async function login(jar) {
         catch (e) { /* nao fatal: segue com o login.asp como origem */ }
     }
     return { status: r.status, loc: r.loc, cookies: jar.cookies.size, paginaFinal };
+}
+
+// --------------------------------- caminho fixo (passos 3 a 5) ---------------------------------
+
+/**
+ * Percorre o caminho CONHECIDO, sem andar às cegas. Cada passo foi fixado com evidência —
+ * o dump de 2026-09-11, não dedução:
+ *
+ *   3. GET  cweb1010.asp?sse=104&sts=448        (link "Acessar MFe" do menu sm=104)
+ *      -> 302 EmpresasDoCPF/cweb2010.asp?SSE=104&Destino=MFe/RedirJavaMFe.asp
+ *   4. GET  essa lista, escolhe a empresa, POST cweb2010.asp com lstEmpresa/num/hidControle
+ *   5. segue os saltos até cfe.sefaz.ce.gov.br, varrendo por JWT
+ *
+ * Referer em TODO passo: o portal recusa com "Página de origem desconhecida" sem ele.
+ *
+ * Falha com mensagem que diz em QUAL passo parou e o que veio. O andador (`descobrirToken`)
+ * continua existindo para quando o portal mudar — mas ele é o plano B, não o caminho.
+ */
+async function obterTokenPorCaminho(jar, { cnpj = '', origem = '', dump = '' } = {}) {
+    const trilha = [];
+    const registrar = (r, rotulo) => {
+        const p = { passo: rotulo, url: r.url, status: r.status, bytes: r.corpo.length };
+        if (r.loc) p.loc = r.loc;
+        if (dump) p.arquivo = gravarDump(dump, trilha.length, r);
+        trilha.push(p);
+        return p;
+    };
+    const falhar = (msg) => { const e = new Error(msg); e.trilha = trilha; throw e; };
+
+    // Passo 2 refeito aqui de propósito: é ele que vira o Referer legítimo do passo 3.
+    const menu = await req(jar, URL_MENU_MFE, { referer: origem || (BASE_SEGURO + '/cweb2002.asp') });
+    registrar(menu, '2-menu-mfe');
+    if (menu.status !== 200) falhar('menu MFe (sm=104) respondeu HTTP ' + menu.status + ' — sessão caiu?');
+    if (menu.corpo.indexOf('cweb1010.asp?sse=104&sts=448') === -1) {
+        falhar('o menu sm=104 não contém mais o link "Acessar MFe" (cweb1010.asp?sse=104&sts=448). ' +
+            'O portal mudou: rode --descobrir --dump=<pasta> e me mande o HTML.');
+    }
+
+    const acesso = await req(jar, URL_ACESSAR_MFE, { referer: URL_MENU_MFE });
+    registrar(acesso, '3-acessar-mfe');
+    let achado = extrairJwt(acesso.loc, cnpj) || extrairJwt(acesso.corpo, cnpj);
+    if (achado) return { ...achado, trilha };
+    if (!acesso.loc) {
+        falhar('"Acessar MFe" respondeu HTTP ' + acesso.status + ' sem Location. ' +
+            'Esperado 302 para EmpresasDoCPF/cweb2010.asp.');
+    }
+    if (/cwebErro/i.test(acesso.loc)) {
+        falhar('"Acessar MFe" caiu em cwebErro: ' + acesso.loc +
+            ' — em geral é Referer/sessão. Referer enviado: ' + URL_MENU_MFE);
+    }
+
+    const urlLista = absolutizar(URL_ACESSAR_MFE, acesso.loc);
+    const lista = await req(jar, urlLista, { referer: URL_ACESSAR_MFE });
+    registrar(lista, '4-lista-empresas');
+    achado = extrairJwt(lista.corpo, cnpj);
+    if (achado) return { ...achado, trilha };
+    if (lista.status !== 200) falhar('lista de empresas respondeu HTTP ' + lista.status + ': ' + urlLista);
+
+    const empresas = lerEmpresas(lista.corpo);
+    if (!empresas.length) {
+        falhar('a lista de empresas veio sem nenhuma linha submete(...) em ' + lista.corpo.length +
+            ' bytes. O formato mudou: rode com --dump=<pasta> e me mande ' + urlLista);
+    }
+    if (!cnpj) {
+        const e = new Error('a seleção de empresa exige CNPJ: a lista trouxe ' + empresas.length +
+            ' empresas e escolher por conta própria significaria baixar cupom de outro ' +
+            'contribuinte. Passe --cnpj=<14 dígitos> (CGFs de exemplo: ' +
+            empresas.slice(0, 5).map((x) => x.cgf).join(', ') + ').');
+        e.trilha = trilha;
+        e.empresas = empresas.length;
+        throw e;
+    }
+    const alvo = escolherEmpresa(empresas, cnpj);
+    if (!alvo) {
+        falhar('CNPJ/CGF ' + String(cnpj).replace(/\D/g, '') + ' não está entre as ' +
+            empresas.length + ' empresas do CPF logado. CGFs de exemplo: ' +
+            empresas.slice(0, 8).map((x) => x.cgf).join(', '));
+    }
+
+    // hidControle sai da PÁGINA, não é hardcoded: é o destino pós-seleção e muda por
+    // sistema (aqui deve apontar para MFe/RedirJavaMFe.asp).
+    const hidControle = valorHidden(lista.corpo, 'hidControle');
+    if (hidControle === null) {
+        falhar('a lista de empresas não tem o campo hidControle — o form mudou. Dump: ' + urlLista);
+    }
+    const corpoPost = new URLSearchParams({
+        num: alvo.num,
+        lstEmpresa: alvo.plst,
+        hidControle: hidControle,
+        destino: valorHidden(lista.corpo, 'destino') || '',
+        SSE: valorHidden(lista.corpo, 'SSE') || '',
+    }).toString();
+
+    const urlAction = absolutizar(urlLista, 'cweb2010.asp');
+    let r = await req(jar, urlAction, { method: 'POST', body: corpoPost, referer: urlLista });
+    registrar(r, '4-post-empresa(CGF ' + alvo.cgf + ')');
+    achado = extrairJwt(r.loc, cnpj) || extrairJwt(r.corpo, cnpj);
+    if (achado) return { ...achado, trilha };
+
+    // Passo 5: a seleção salta para cfe.sefaz.ce.gov.br; o JWT aparece em algum desses
+    // saltos. Teto baixo de propósito — se não apareceu em 6, não é "mais um hop".
+    let url = urlAction;
+    for (let i = 0; i < MAX_SALTOS_FINAIS && r.loc; i++) {
+        const proximo = absolutizar(url, r.loc);
+        const anterior = url;
+        url = proximo;
+        r = await req(jar, proximo, { referer: anterior });
+        registrar(r, '5-salto-' + (i + 1));
+        achado = extrairJwt(r.loc, cnpj) || extrairJwt(r.corpo, cnpj);
+        if (achado) return { ...achado, trilha };
+    }
+
+    falhar('seleção de empresa (CGF ' + alvo.cgf + ') aceita, mas nenhum JWT em ' +
+        MAX_SALTOS_FINAIS + ' saltos. Último: HTTP ' + r.status + ' ' + url +
+        (r.loc ? ' -> ' + r.loc : '') + '. Rode com --dump=<pasta>: o token pode estar ' +
+        'vindo por XHR do SPA, e aí precisa da chamada que o SPA faz, não de mais um salto.');
 }
 
 // --------------------------------- descoberta do caminho ---------------------------------
@@ -475,7 +673,11 @@ async function obterToken({ cnpj = '', forcar = false } = {}) {
     if (!forcar && cache && cache.exp - 300 > agora && (!cnpj || cache.cnpj === cnpj)) return cache;
     const jar = new CookieJar();
     const l = await login(jar);
-    const t = await descobrirToken(jar, { cnpj, origem: l.paginaFinal });
+    // Produção usa o caminho FIXO. Não cai no andador se falhar: um crawler cego contra
+    // portal de fisco, disparado por job de usuário, bate em dezenas de páginas por
+    // tentativa. O andador é ferramenta de diagnóstico (`--descobrir`), não plano B
+    // automático — se o caminho quebrar, o erro diz onde e alguém roda --descobrir.
+    const t = await obterTokenPorCaminho(jar, { cnpj, origem: l.paginaFinal });
     cache = { jwt: t.jwt, cnpj: t.cnpj, exp: t.exp };
     return cache;
 }
@@ -485,6 +687,9 @@ module.exports = {
     // Exportados para teste: a colheita de links é onde o andador falhou em silêncio por
     // três execuções, e falha silenciosa que não é testável volta.
     extrairAlvos, parSistema,
+    // Passo 4: escolher a empresa errada baixa cupom de outro contribuinte. Testado.
+    obterTokenPorCaminho, lerEmpresas, escolherEmpresa, valorHidden,
+    URL_ACESSAR_MFE,
 };
 
 // --------------------------------- CLI ---------------------------------
@@ -507,7 +712,14 @@ if (require.main === module) {
         try {
             const l = await login(jar);
             console.log('  login: HTTP ' + l.status + (l.loc ? ' -> ' + l.loc : '') + ' | cookies: ' + jar.cookies.size);
-            const t = await descobrirToken(jar, { cnpj, verboso: true, dump, origem: l.paginaFinal });
+            // Padrao: caminho fixo. `--descobrir` so para quando o portal mudar e for
+            // preciso remapear -- e um crawler, nao o modo de operacao.
+            const andar = process.argv.indexOf('--descobrir') !== -1;
+            console.log('  modo: ' + (andar ? 'andador (--descobrir)' : 'caminho fixo (passos 2-5)'));
+            const t = andar
+                ? await descobrirToken(jar, { cnpj, verboso: true, dump, origem: l.paginaFinal })
+                : await obterTokenPorCaminho(jar, { cnpj, dump, origem: l.paginaFinal });
+            if (t.trilha && !andar) t.trilha.forEach((p) => console.log('  ' + JSON.stringify(p)));
             console.log('  TOKEN OBTIDO | CNPJ ' + t.cnpj + ' | expira ' +
                 (t.exp ? new Date(t.exp * 1000).toLocaleString('pt-BR') : '(sem exp)'));
             console.log('  (o valor do token não é impresso de propósito)');

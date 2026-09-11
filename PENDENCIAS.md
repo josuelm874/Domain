@@ -256,9 +256,53 @@ Também novo: `--dump=<pasta>` grava o HTML de cada passo (latin1→utf8, senão
 "Acessar MFe" quebra justo no rótulo que é a pista), e a falha passa a listar **todos** os
 pares `sis/sse` vistos em vez de truncar em 6.
 
-**Próximo passo:** `node <worktree>/worker/lib/token-mfe.js --descobrir --dump=C:\temp\mfe`.
-A trilha diz o que foi *pedido*; o dump diz o que a página *contém* — é a diferença entre
-mais uma rodada de hipótese e o par `sis/sse` do MFe na mão.
+**O dump resolveu (2026-09-11).** As duas rotas que faltavam saíram do HTML salvo, não de
+dedução:
+
+**Passo 3 — "Acessar MFe" não é `cweb1010java.asp`.** É outro script
+(`00-cweb2003.asp_sm_104.html:403`):
+```html
+<a href="cweb1010.asp?sse=104&sts=448" class="off">Acessar MFe</a>
+```
+`cweb1010.asp` **sem "java"**, parâmetros `sse` (menu) + `sts` (serviço) — não `sis`+`sse`.
+Era exatamente por isso que três execuções do andador falharam: `RE_ACESSO_SISTEMA` só
+casava `cweb1010java\.asp`, então o link do MFe **nunca entrou na fila**. Ele responde
+`302 → EmpresasDoCPF/cweb2010.asp?SSE=104&Destino=MFe/RedirJavaMFe.asp`.
+
+Nota de processo: na execução de 2026-09-11 o andador **chegou** nesse 302 (passo 25) e o
+enfileirou — mas a fila é FIFO e o salto ficou atrás de 14 páginas de menu, com o orçamento
+de 40 passos acabando antes. O achado estava a um hop de distância.
+
+**Passo 4 — seleção de empresa é POST, submetido por JS.** A página lista 195 empresas do
+CPF e cada linha chama:
+```js
+function submete(plst, pNum){ form1.lstEmpresa.value=plst; form1.num.value=pNum; form1.submit(); }
+<a href="JavaScript:submete('<plst>','1');">62124510</a>   // texto do link = CGF
+```
+POST em `cweb2010.asp` com `num`, `lstEmpresa`, `hidControle`, `destino`, `SSE`. O `plst` é
+string de campos concatenados em largura fixa. **Não decodificamos** — copiamos verbatim da
+página, que é o que o browser faz; decodificar layout de ASP de 2003 seria inventar contrato,
+e uma mudança de largura escolheria a empresa errada **em silêncio**.
+
+**Implementado:** `obterTokenPorCaminho()` percorre 2→3→4→5 de forma determinística, com
+Referer em todo passo e erro que diz em qual passo parou e o que veio. O andador
+(`--descobrir`) continua, mas virou **ferramenta de diagnóstico, não plano B automático**:
+produção não cai nele se o caminho quebrar — crawler cego contra portal de fisco, disparado
+por job de usuário, bate em dezenas de páginas por tentativa.
+
+`escolherEmpresa` **explode em ambiguidade** em vez de pegar a primeira: escolher errado
+aqui baixa cupom de outro contribuinte, o que é pior que falhar. Sem `--cnpj`, recusa.
+
+46 asserções em `scripts/test-token-mfe.mjs` (eram 16), com as strings reais do dump.
+
+**Falta:** validar de ponta a ponta com sessão viva. O passo 5 (`RedirJavaMFe.asp` → salto
+para `cfe.sefaz.ce.gov.br`) é o único trecho ainda não observado — se o JWT vier por XHR do
+SPA em vez de vir num salto de navegação, é preciso a chamada que o SPA faz. O erro do
+passo 5 já diz isso explicitamente.
+
+```
+node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2
+```
 
 ## Resolvido
 
