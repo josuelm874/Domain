@@ -216,16 +216,44 @@ function absolutizar(base, href) {
  */
 async function login(jar) {
     const cred = lerCredenciais();
+
+    // GET ANTES do POST: o ASP classico cria a sessao ao servir `login.asp`, e o POST sem
+    // esse cookie cai em 302 -> cwebErro.asp. Era exatamente a falha observada. O
+    // `submete()` da pagina so chama form.submit(), sem transformar a senha -- conferido,
+    // entao POST em claro dos dois campos e o correto.
+    await req(jar, BASE_SEGURO + '/login.asp');
+    if (jar.vazio) {
+        throw new Error('o GET de login.asp nao devolveu cookie de sessao -- o portal mudou?');
+    }
+
     const body = new URLSearchParams({ txtUsuario: cred.usuario, txtSenha: cred.senha }).toString();
     const r = await req(jar, URL_LOGIN, { method: 'POST', body, referer: BASE_SEGURO + '/login.asp' });
-    if (jar.vazio) throw new Error('login não devolveu cookie de sessão — o portal pode ter mudado.');
-    const falhou = /senha inv|usu.rio inv|n.o cadastrad|bloquead|incorret/i.test(r.corpo);
-    if (falhou) {
-        // NÃO retentar. Corrigir o arquivo e rodar de novo é ação humana.
-        throw new Error('login recusado pelo Ambiente Seguro. Confira as credenciais em ' +
-            cred.origem + '. NÃO vou tentar de novo para não bloquear a conta.');
+
+    // Falha chega como 302 para cwebErro.asp COM CORPO VAZIO: checar o Location, nao o
+    // corpo. Antes eu testava so o corpo e por isso segui adiante com login recusado,
+    // reportando "token nao encontrado" em vez da causa real.
+    if (/erro/i.test(r.loc)) {
+        let detalhe = '';
+        try {
+            const pag = await req(jar, absolutizar(URL_LOGIN, r.loc));
+            detalhe = pag.corpo.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+        } catch (e) { /* a mensagem e um extra: nao deixar mascarar o erro principal */ }
+        throw new Error('login recusado pelo Ambiente Seguro' + (detalhe ? ' -- ' + detalhe : '') +
+            ' | confira as credenciais em ' + cred.origem +
+            '. NAO vou tentar de novo para nao bloquear a conta.');
     }
-    return { status: r.status, loc: r.loc };
+    if (/senha inv|usu.rio inv|n.o cadastrad|bloquead|incorret/i.test(r.corpo)) {
+        throw new Error('login recusado pelo Ambiente Seguro. Confira as credenciais em ' +
+            cred.origem + '. NAO vou tentar de novo para nao bloquear a conta.');
+    }
+
+    // Sucesso costuma vir como 302 para a pagina de servicos: seguir uma vez fecha o fluxo
+    // de autenticacao antes do andador comecar.
+    if (r.loc) {
+        try { await req(jar, absolutizar(URL_LOGIN, r.loc)); } catch (e) { /* nao fatal */ }
+    }
+    return { status: r.status, loc: r.loc, cookies: jar.cookies.size };
 }
 
 // --------------------------------- descoberta do caminho ---------------------------------
