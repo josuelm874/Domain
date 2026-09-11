@@ -39,6 +39,15 @@ const REQ_TIMEOUT_MS = 30000;
 const MAX_PASSOS = 12;          // ponytail: teto de saltos; sem ele um redirect cíclico roda para sempre
 const ARQUIVO_CRED = path.join(os.homedir(), '.softtech-ambiente-seguro.json');
 
+// O form de login exige `cboTipoUsuario` (rotulado "Tipo/Vinculo do Usuario"). Nao e
+// opcional: sem ele o POST volta 302 para cwebErro.asp com "Tipo de Usuario Nao Foi
+// Selecionado". Padrao CONTADOR porque e o vinculo do Josue; outro vinculo se configura
+// por "tipoUsuario" no arquivo de credenciais.
+const TIPO_USUARIO_PADRAO = '3';
+const TIPOS_CONHECIDOS = 'Valores de cboTipoUsuario: 3=CONTADOR, 4=DEPENDENTE DE CONTADOR, ' +
+    '1=SOCIO, 2=DEPENDENTE DE SOCIO, 10=PORTAL FISCAL MESTRE, 11=PORTAL FISCAL DEPENDENTE, ' +
+    '80=EMISSOR DE NFE. A lista completa esta no <select> de login.asp.';
+
 // --------------------------------- credenciais ---------------------------------
 
 /**
@@ -47,11 +56,16 @@ const ARQUIVO_CRED = path.join(os.homedir(), '.softtech-ambiente-seguro.json');
  */
 function lerCredenciais() {
     if (process.env.SEFAZ_AS_USUARIO && process.env.SEFAZ_AS_SENHA) {
-        return { usuario: process.env.SEFAZ_AS_USUARIO, senha: process.env.SEFAZ_AS_SENHA, origem: 'env' };
+        return {
+            usuario: process.env.SEFAZ_AS_USUARIO,
+            senha: process.env.SEFAZ_AS_SENHA,
+            tipoUsuario: String(process.env.SEFAZ_AS_TIPO || TIPO_USUARIO_PADRAO),
+            origem: 'env',
+        };
     }
     if (!fs.existsSync(ARQUIVO_CRED)) {
         throw new Error('Credenciais ausentes. Crie ' + ARQUIVO_CRED +
-            ' com {"usuario":"<CPF>","senha":"<senha>"} ou defina SEFAZ_AS_USUARIO / SEFAZ_AS_SENHA.');
+            ' com {"usuario":"<CPF>","senha":"<senha>"} ou defina SEFAZ_AS_USUARIO / SEFAZ_AS_SENHA / SEFAZ_AS_TIPO. ' + TIPOS_CONHECIDOS);
     }
     let j;
     try {
@@ -62,7 +76,9 @@ function lerCredenciais() {
     const usuario = String(j.usuario || '').replace(/\D/g, '');
     const senha = String(j.senha || '');
     if (!usuario || !senha) throw new Error('Arquivo de credenciais sem "usuario" ou "senha": ' + ARQUIVO_CRED);
-    return { usuario, senha, origem: ARQUIVO_CRED };
+    const tipoUsuario = String(j.tipoUsuario || j.tipo || TIPO_USUARIO_PADRAO).replace(/[^0-9]/g, '');
+    if (!tipoUsuario) throw new Error('"tipoUsuario" invalido em ' + ARQUIVO_CRED + '. ' + TIPOS_CONHECIDOS);
+    return { usuario, senha, tipoUsuario, origem: ARQUIVO_CRED };
 }
 
 // --------------------------------- cookie jar ---------------------------------
@@ -226,7 +242,11 @@ async function login(jar) {
         throw new Error('o GET de login.asp nao devolveu cookie de sessao -- o portal mudou?');
     }
 
-    const body = new URLSearchParams({ txtUsuario: cred.usuario, txtSenha: cred.senha }).toString();
+    const body = new URLSearchParams({
+        txtUsuario: cred.usuario,
+        txtSenha: cred.senha,
+        cboTipoUsuario: cred.tipoUsuario,
+    }).toString();
     const r = await req(jar, URL_LOGIN, { method: 'POST', body, referer: BASE_SEGURO + '/login.asp' });
 
     // Falha chega como 302 para cwebErro.asp COM CORPO VAZIO: checar o Location, nao o
@@ -239,8 +259,11 @@ async function login(jar) {
             detalhe = pag.corpo.replace(/<script[\s\S]*?<\/script>/gi, ' ')
                 .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
         } catch (e) { /* a mensagem e um extra: nao deixar mascarar o erro principal */ }
+        const dicaTipo = /tipo de usu/i.test(detalhe)
+            ? ' | tipoUsuario enviado: ' + cred.tipoUsuario + '. ' + TIPOS_CONHECIDOS
+            : '';
         throw new Error('login recusado pelo Ambiente Seguro' + (detalhe ? ' -- ' + detalhe : '') +
-            ' | confira as credenciais em ' + cred.origem +
+            ' | confira as credenciais em ' + cred.origem + dicaTipo +
             '. NAO vou tentar de novo para nao bloquear a conta.');
     }
     if (/senha inv|usu.rio inv|n.o cadastrad|bloquead|incorret/i.test(r.corpo)) {
