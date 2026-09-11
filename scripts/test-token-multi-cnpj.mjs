@@ -82,14 +82,29 @@ async function sondar(rotulo, token, taxid) {
         return { rotulo, status: 0, veredito: 'ERRO DE REDE', detalhe: (e && e.message) || String(e) };
     }
     const s = r.status;
-    const veredito = (s === 401 || s === 403) ? 'RECUSADO (token não vale para esse contribuinte)'
-        : s === 404 ? 'ACEITO (cupom não encontrado)'
+    // 409 apareceu na medicao de 2026-09-11 e e DECISIVO, nao indefinido: o corpo diz
+    // "Usuario identificado nao confere com o informado" -- taxid != sub do token.
+    const veredito = (s === 401 || s === 403) ? 'RECUSADO (token invalido/expirado)'
+        : s === 409 ? 'RECUSADO (taxid nao confere com o sub do token)'
+        : s === 404 ? 'ACEITO (cupom nao encontrado)'
         : s === 200 ? 'ACEITO (cupom encontrado)'
         : 'INDEFINIDO';
     let detalhe = '';
-    try { detalhe = ' campos: ' + Object.keys(r.json()).join(', '); }
-    catch (e) { detalhe = ' corpo: ' + r.text().replace(/\s+/g, ' ').trim().slice(0, 120); }
-    return { rotulo, status: s, veredito, detalhe };
+    let chaveDevolvida = '';
+    try {
+        const j = r.json();
+        // A chave devolvida importa: em 2026-09-11 uma sonda com o token de A e a chave de
+        // B voltou 200. Ou a API nao checa a chave contra o taxid, ou devolveu OUTRO cupom.
+        // Conferir aqui transforma a surpresa em fato -- `lib/nfce.js` ja tem a mesma
+        // salvaguarda (compara a chave interna do XML com a pedida).
+        chaveDevolvida = String(j.chaveNfe || '').replace(/\D/g, '');
+        detalhe = ' campos: ' + Object.keys(j).join(', ');
+        if (chaveDevolvida) {
+            detalhe += ' | chaveNfe devolvida ' +
+                (chaveDevolvida === chave ? 'CONFERE com a pedida' : 'DIVERGE: ' + chaveDevolvida);
+        }
+    } catch (e) { detalhe = ' corpo: ' + r.text().replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140); }
+    return { rotulo, status: s, veredito, detalhe, chaveDevolvida };
 }
 
 const linha = (x) => console.log(
@@ -135,7 +150,7 @@ const linha = (x) => console.log(
     } else if (r2.status === 404 || r2.status === 200) {
         console.log('  => o token de A foi ACEITO para o CNPJ de B: um login serve várias empresas.');
         console.log('     `lib/nfce.js` pode replicar um token por todo o lote, como a UI já faz hoje.');
-    } else if (r2.status === 401 || r2.status === 403) {
+    } else if (r2.status === 401 || r2.status === 403 || r2.status === 409) {
         console.log('  => o token é POR EMPRESA: um login no portal por CNPJ do lote.');
         console.log('     A integração precisa de cache por CNPJ e de aceitar que lote grande');
         console.log('     gasta minutos só autenticando. 195 empresas = 195 logins.');

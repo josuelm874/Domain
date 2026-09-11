@@ -347,9 +347,32 @@ planilha" falta:
 4. `token-mfe.js` + `ca-icp-brasil.pem` no `FILES` de `scripts/bundle-worker.js` — hoje
    estão de fora, e sem eles o zip publicado sobe sem essa capacidade (mesma classe da P3).
 
-Decisão pendente antes do item 2: **um JWT serve N CNPJs?** O token traz `sub` = um CNPJ e o
-passo 4 seleciona UMA empresa, o que sugere um token por empresa — logo um login por empresa
-do lote. Com 195 empresas no CPF isso é muita ida ao portal; medir antes de desenhar.
+**Medido em 2026-09-11** (`scripts/test-token-multi-cnpj.mjs`, dois CNPJs reais, chave real,
+token vivo). Três achados, dois deles não previstos:
+
+| sonda | status | leitura |
+|---|---|---|
+| token A + taxid A | **200** cupom | controle — e o token **sobreviveu ao logout** |
+| token A + taxid B | **409** | `Usuário identificado não confere com o informado` |
+| token B + taxid B | **200** cupom | controle positivo |
+
+1. **O JWT sobrevive ao encerramento da sessão do portal.** As sondas rodaram *depois* do
+   `encerrar: true`. Ou seja: o worker pode (e deve) deslogar assim que pega o token —
+   obrigatório, porque o Ambiente Seguro é sessão única e sem logout o próprio usuário fica
+   trancado fora do portal.
+2. **`x-authentication-taxid` tem que ser o `sub` do token.** Divergir dá 409, não 401.
+   `lib/nfce.js` classificava 409 no ramo genérico e **retentava 3× por chave** — 3,5 s cada
+   para reproduzir o mesmo erro e terminar com "HTTP 409", que não diz nada. Corrigido:
+   `kind 'auth'`, sem retry, drena a empresa com o motivo literal.
+3. **A chave pedida NÃO é conferida contra o taxid.** A primeira sonda usou uma chave da
+   empresa **B** com token e taxid de **A**, e voltou 200 com cupom completo. Se confirmar,
+   **um login serve o lote inteiro** — basta mandar sempre o taxid do próprio token. Isso
+   derruba o medo dos 195 logins.
+
+   ⚠️ **Medido uma vez e é surpreendente.** A sonda passou a imprimir se o `chaveNfe`
+   devolvido confere com o pedido — rodar de novo fecha. Enquanto não fechar, o desenho
+   seguro continua um token por empresa. A salvaguarda de `processChave` (chave interna do
+   XML × chave pedida) é o que separa as duas leituras na prática.
 
 ```
 node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2

@@ -12,8 +12,19 @@
  * todas as empresas; no modo "por empresa" cada uma traz o seu. O worker só
  * processa empresas com (token, taxid, keys).
  *
- * PREMISSA AINDA NÃO VALIDADA (precisa token vivo + 2 CNPJs reais): um único
- * JWT serve N CNPJs distintos. Hoje taxid = CNPJ do token (sub do JWT).
+ * PREMISSA VALIDADA em 2026-09-11 (scripts/test-token-multi-cnpj.mjs, dois CNPJs
+ * reais, token vivo). Um JWT NÃO serve N CNPJs no header: mandar
+ * `x-authentication-taxid` diferente do `sub` do token devolve HTTP 409
+ * "Usuário identificado não confere com o informado".
+ *
+ * MAS a chave pedida não é conferida contra o taxid: a sonda pediu uma chave da
+ * empresa B com token E taxid de A e voltou HTTP 200 com cupom. Se isso se
+ * confirmar (medido UMA vez, e é surpreendente), um único login serve o lote
+ * inteiro desde que o taxid seja sempre o CNPJ do próprio token. Enquanto não
+ * confirmar, o desenho seguro continua sendo um token por empresa.
+ *
+ * A salvaguarda de `processChave` (chave interna do XML × chave pedida) é o que
+ * separa as duas leituras na prática: se a API devolvesse outro cupom, ela pega.
  */
 'use strict';
 
@@ -107,6 +118,17 @@ async function fetchWithRetry(url, options, attempt = 0, saltos = 0) {
 
         if (res.status === 401 || res.status === 403) throw makeErr('auth', 'Token expirado/inválido (HTTP ' + res.status + ')');
         if (res.status === 404) throw makeErr('notfound', 'Cupom não encontrado (404)');
+        // 409 = "Usuário identificado não confere com o informado": o `x-authentication-taxid`
+        // não bate com o `sub` do token. Medido 2026-09-11. NÃO é falha transitória — antes
+        // caía no ramo genérico e era retentado 3x por chave, gastando 3,5 s cada para
+        // reproduzir o mesmo 409 e terminar com "HTTP 409", que não diz nada. É erro de
+        // configuração da empresa e vale para todas as chaves dela, então usa o kind 'auth':
+        // não retenta e drena a fila da empresa com o motivo literal.
+        if (res.status === 409) {
+            throw makeErr('auth', 'taxid não confere com o token (HTTP 409) — o ' +
+                'x-authentication-taxid enviado precisa ser o CNPJ do próprio token. Resposta: ' +
+                res.text().replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160));
+        }
 
         // `fetch` seguia redirect sozinho; `https.request` não. Seguir SÓ na mesma origem:
         // os headers carregam o JWT, e repeti-los num host que o servidor escolheu é
