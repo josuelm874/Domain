@@ -364,7 +364,19 @@ ZIP: "NFCe 08-2026_E L DE OLIVEIRA JUNIOR ME.zip"
 ```
 
 O nome da empresa saiu do XML baixado, não da planilha. Botão liberou sozinho com o worker
-no ar. P9 fechada.
+no ar.
+
+**Repetido em escala real, mesma sessão** — planilha `.xlsx` de produção
+(`NFC-E_A DE ALMEIDA MATRIZ.xlsx`, 3.339 chaves), de novo **sem colar token**:
+
+```
+A DE ALMEIDA COSTA: 3339 | 3339   100%   0 erros     (406 s, ~8 chaves/s)
+ZIP 13,7 MB · 3.339 entradas · 3.339 nomes únicos (sem duplicata)
+1º XML: chave interna == nome do arquivo
+```
+
+Mesmo volume da execução histórica de 2026-09-10 (3339/3339), que precisou de token colado
+à mão. Agora o worker obtém sozinho, **um login para o lote**. P9 fechada.
 
 **O teste de tela achou três defeitos que a suíte não achava** — todos corrigidos em
 `ffa39ed`, e todos de classes que já tinham mordido antes:
