@@ -357,18 +357,6 @@ token próprio não logando, e a falha carregando o motivo literal.
 
 **Falta:** rodar de ponta a ponta na tela, com planilha real e sem colar token.
 
-~~**Falta INTEGRAR — e isso é o que resta do objetivo.**~~ `worker/lib/token-mfe.js` ainda não é
-chamado por ninguém: `grep` em `server.js`, `lib/nfce.js` e `assets/js/app.js` não acha uma
-referência. Hoje o token continua vindo colado na UI. Para fechar "o usuário fornece só a
-planilha" falta:
-
-1. rota no `server.js` (ex.: `POST /mfe/token`) chamando `obterToken({ cnpj })`;
-2. `lib/nfce.js` pedindo o token por CNPJ quando a empresa vier sem ele — com o cache de
-   `obterToken` (reaproveita até 5 min antes do `exp`) evitando um login por chave;
-3. a tela deixando de exigir o token colado;
-4. `token-mfe.js` + `ca-icp-brasil.pem` no `FILES` de `scripts/bundle-worker.js` — hoje
-   estão de fora, e sem eles o zip publicado sobe sem essa capacidade (mesma classe da P3).
-
 **Medido em 2026-09-11** (`scripts/test-token-multi-cnpj.mjs`, dois CNPJs reais, chave real,
 token vivo). Três achados, dois deles não previstos:
 
