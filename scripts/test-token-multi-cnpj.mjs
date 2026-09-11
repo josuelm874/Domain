@@ -101,16 +101,25 @@ const linha = (x) => console.log(
     console.log('  chave sondada: ' + chave + (chaveSintetica ? '  (SINTÉTICA — ver ressalva no fim)' : '  (real, informada)'));
     console.log('  dois logins no Ambiente Seguro; nenhum token é impresso.\n');
 
-    console.log('  obtendo token de A...');
-    const tA = await obterToken({ cnpj: A });
+    // ENCERRAR a sessão de A antes de logar como B não é higiene: é obrigatório. O Ambiente
+    // Seguro é de SESSÃO ÚNICA e a primeira versão deste script derrubou a si mesma —
+    // o portal recusou o segundo login com "O usuário já está logado no sistema. Verifique
+    // outro login, ou se o último foi encerrado corretamente e aguarde alguns minutos".
+    //
+    // Efeito colateral útil: com o logout ANTES das sondas, r1 também mede se o JWT
+    // sobrevive ao encerramento da sessão do portal. Se r1 vier 401, o worker NÃO pode
+    // deslogar depois de pegar o token — e aí lote multiempresa precisa de espera entre
+    // CNPJs em vez de logout.
+    console.log('  obtendo token de A (e encerrando a sessão em seguida)...');
+    const tA = await obterToken({ cnpj: A, encerrar: true });
     console.log('  token A: sub=' + tA.cnpj + ' expira ' + new Date(tA.exp * 1000).toLocaleString('pt-BR'));
     if (tA.cnpj !== A) console.log('  [ATENÇÃO] o sub do token de A não é o CNPJ pedido.');
 
     const r1 = await sondar('token A + taxid A (controle)', tA.jwt, A);
     const r2 = await sondar('token A + taxid B  <-- A PERGUNTA', tA.jwt, B);
 
-    console.log('\n  obtendo token de B...');
-    const tB = await obterToken({ cnpj: B, forcar: true });
+    console.log('\n  obtendo token de B (sessão de A já encerrada)...');
+    const tB = await obterToken({ cnpj: B, forcar: true, encerrar: true });
     console.log('  token B: sub=' + tB.cnpj + ' expira ' + new Date(tB.exp * 1000).toLocaleString('pt-BR'));
 
     const r3 = await sondar('token B + taxid B (controle +)', tB.jwt, B);
@@ -133,6 +142,13 @@ const linha = (x) => console.log(
     } else {
         console.log('  => INDEFINIDO. O controle r3 diz se a sonda em si presta:');
         console.log('     se r3 também não deu 200/404, a chave ou o endpoint é que estão errados.');
+    }
+    if (r1.status === 401 || r1.status === 403) {
+        console.log('\n  [ACHADO] r1 recusou com o taxid do PRÓPRIO token. Como a sessão do portal');
+        console.log('  foi encerrada antes das sondas, a leitura é: o JWT MORRE junto com a sessão do');
+        console.log('  Ambiente Seguro. Consequência para a integração: o worker NÃO pode deslogar');
+        console.log('  depois de pegar o token — e como o portal é sessão única, lote multiempresa');
+        console.log('  vira fila com espera entre CNPJs, não logout-e-relogin.');
     }
     if (chaveSintetica) {
         console.log('\n  RESSALVA: a chave é sintética. Se r1 e r3 (controles) deram 404 junto com r2,');

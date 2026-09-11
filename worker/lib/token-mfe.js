@@ -59,6 +59,10 @@ const URL_MENU_MFE = BASE_SEGURO + '/cweb2003.asp?sm=104';
 // `cweb1010.asp` (sem "java"), parametros `sse` (menu) + `sts` (servico). Responde 302 ->
 //     ../../EMPRESASDOCPF/CWEB2010.ASP?SSE=104&Destino=MFe/RedirJavaMFe.asp
 const URL_ACESSAR_MFE = BASE_SEGURO + '/cweb1010.asp?sse=104&sts=448';
+// Logout. Visto no dump de RedirJavaMFe.asp ("| Sair"). O Ambiente Seguro e de SESSAO
+// UNICA: sem encerrar, o proximo login -- do worker ou do proprio usuario no browser --
+// e recusado com "O usuario ja esta logado no sistema".
+const URL_ENCERRAR = HOST_SEGURO + '/internet/acessoSeguro/ServicoSenha/EncerrarSessao/cweb2005.asp';
 const MAX_SALTOS_FINAIS = 6;
 const REQ_TIMEOUT_MS = 30000;
 // Teto de saltos; sem ele um redirect ciclico roda para sempre. Subiu de 25 para 40 com
@@ -841,7 +845,7 @@ function gravarDump(dir, indice, r, prefixo) {
 let cache = null;   // { jwt, cnpj, exp }
 
 /** Reaproveita o token até 5 min antes de expirar — evita um login por chamada. */
-async function obterToken({ cnpj = '', forcar = false } = {}) {
+async function obterToken({ cnpj = '', forcar = false, encerrar = false } = {}) {
     const agora = Math.floor(Date.now() / 1000);
     if (!forcar && cache && cache.exp - 300 > agora && (!cnpj || cache.cnpj === cnpj)) return cache;
     const jar = new CookieJar();
@@ -852,7 +856,34 @@ async function obterToken({ cnpj = '', forcar = false } = {}) {
     // automático — se o caminho quebrar, o erro diz onde e alguém roda --descobrir.
     const t = await obterTokenPorCaminho(jar, { cnpj, origem: l.paginaFinal, mensagemLogin: l.mensagem });
     cache = { jwt: t.jwt, cnpj: t.cnpj, exp: t.exp };
+    if (encerrar) await encerrarSessao(jar);
     return cache;
+}
+
+/**
+ * Encerra a sessão no Ambiente Seguro.
+ *
+ * NÃO é higiene opcional. O Ambiente Seguro é de SESSÃO ÚNICA: enquanto a sessão do worker
+ * estiver viva, um segundo login é recusado com "O usuário já está logado no sistema.
+ * Verifique outro login, ou se o último foi encerrado corretamente e aguarde alguns
+ * minutos". Medido em 2026-09-11 tentando obter token de dois CNPJs em seguida.
+ *
+ * Consequência que passa fácil: um worker que loga e nunca encerra TRANCA O USUÁRIO FORA
+ * do próprio portal, e ele fica esperando "alguns minutos" sem saber por quê.
+ *
+ * Falha de propósito em silêncio — o token já está na mão e derrubar a obtenção por causa
+ * do logout trocaria um incômodo por uma falha. Devolve booleano para quem quiser saber.
+ *
+ * Cuidado: `RE_PROIBIDO` barra esta URL no andador, e com razão — lá ela mataria a sessão
+ * no meio da caminhada. Aqui é chamada de propósito, no fim.
+ */
+async function encerrarSessao(jar) {
+    try {
+        const r = await req(jar, URL_ENCERRAR, { referer: BASE_SEGURO + '/cweb2003.asp' });
+        return r.status >= 200 && r.status < 400;
+    } catch (e) {
+        return false;
+    }
 }
 
 module.exports = {
@@ -866,6 +897,8 @@ module.exports = {
     textoVisivel, pareceCasca,
     // Passo 6: a troca key+auth -> JWT. E XHR, nao navegacao.
     extrairCredenciaisMfe, trocarPorJwt, URL_API_MFE, ROTA_LOGIN_MFE,
+    // Sessao unica: quem loga TEM que encerrar, ou tranca o usuario fora do portal.
+    encerrarSessao, URL_ENCERRAR,
     URL_ACESSAR_MFE,
 };
 
