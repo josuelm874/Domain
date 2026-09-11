@@ -36,7 +36,17 @@ const BASE_SEGURO = HOST_SEGURO + '/internet/acessoSeguro/ServicoSenha/LogarUsua
 const URL_LOGIN = BASE_SEGURO + '/cweb20011.asp';
 const URL_MENU_MFE = BASE_SEGURO + '/cweb2003.asp?sm=104';
 const REQ_TIMEOUT_MS = 30000;
-const MAX_PASSOS = 12;          // ponytail: teto de saltos; sem ele um redirect cíclico roda para sempre
+const MAX_PASSOS = 25;          // ponytail: teto de saltos; sem ele um redirect ciclico roda para sempre
+
+// Links que DESTROEM a sessao ou saem do fluxo. O andador clicou em EncerrarSessao no
+// terceiro passo da primeira execucao e matou a propria sessao -- todo o resto da trilha
+// voltou pagina deslogada. Filtro por 'logout|sair' nao pegava 'EncerrarSessao'.
+const RE_PROIBIDO = /EncerrarSessao|cweb2005|cweb20011|logout|sair|login\.asp|\/index\.asp|cwebErro/i;
+
+// Acesso a sistema no Ambiente Seguro: cweb1010java.asp?sis=<sistema>&sse=<id>.
+// Descoberto na trilha. E por aqui que se chega ao MFe, entao vai na frente da fila.
+const RE_ACESSO_SISTEMA = /cweb1010java\.asp/i;
+const RE_PARECE_MFE = /mfe|cfe|fiscal|cupom|nfce/i;
 const ARQUIVO_CRED = path.join(os.homedir(), '.softtech-ambiente-seguro.json');
 
 // O form de login exige `cboTipoUsuario` (rotulado "Tipo/Vinculo do Usuario"). Nao e
@@ -323,7 +333,14 @@ async function descobrirToken(jar, { cnpj = '', verboso = false } = {}) {
         ].map((m) => absolutizar(url, m[1]))
             .filter((u) => /^https:\/\/(servicos|cfe)\.sefaz\.ce\.gov\.br/.test(u))
             .filter((u) => !/\.(css|js|png|jpe?g|gif|svg|ico|woff2?)(\?|$)/i.test(u))
-            .filter((u) => !/login\.asp|logout|sair/i.test(u));
+            .filter((u) => !RE_PROIBIDO.test(u));
+
+        // Ordem importa: acesso a sistema que parece MFe primeiro, depois os outros
+        // acessos a sistema, e so no fim a navegacao generica. Sem isso o andador gasta
+        // o orcamento de passos em paginas institucionais.
+        const peso = (u) => (RE_ACESSO_SISTEMA.test(u) ? (RE_PARECE_MFE.test(u) ? 0 : 1) : (RE_PARECE_MFE.test(u) ? 2 : 3));
+        alvos.sort((a, b) => peso(a) - peso(b));
+        passo.candidatos = alvos.slice(0, 6);   // na trilha, para diagnosticar quando falhar
         for (const u of alvos) if (!visitados.has(u)) fila.push(u);
     }
 
