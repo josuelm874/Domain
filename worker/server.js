@@ -242,6 +242,44 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Token do MFe obtido pelo próprio worker: POST /mfe/token  { cnpj? }
+    //
+    // NÃO devolve o JWT. De propósito: o token é credencial do contribuinte, e a única
+    // razão para a UI tê-lo seria repassá-lo de volta ao worker — que é quem o usa. Mandar
+    // para o browser só amplia onde ele pode vazar (console, extensão, log de rede) sem
+    // habilitar nada. A UI recebe o que precisa mostrar: de quem é e até quando vale.
+    //
+    // Serve para "testar as credenciais" e para aquecer o cache antes do lote; o download
+    // em si não depende desta rota — `lib/nfce.js` resolve o token sozinho quando a empresa
+    // vem sem ele.
+    //
+    // `require` TARDIO: se `token-mfe.js` faltar no pacote ou quebrar, o worker inteiro não
+    // pode morrer na carga por causa disso. Foi exatamente assim que o `exceljs` derrubou o
+    // worker na máquina da empresa por meses (P1).
+    if (method === 'POST' && path === '/mfe/token') {
+        try {
+            const raw = await readBody(req, 4096);
+            const body = raw ? JSON.parse(raw) : {};
+            const cnpj = String(body.cnpj || '').replace(/\D/g, '');
+            const { obterToken } = require('./lib/token-mfe');
+            // `encerrar: true` NÃO é higiene: o Ambiente Seguro é de sessão única, e sessão
+            // deixada aberta tranca o usuário fora do próprio portal ("O usuário já está
+            // logado no sistema"). Medido 2026-09-11 — e o JWT sobrevive ao logout.
+            const t = await obterToken({ cnpj, forcar: !!body.forcar, encerrar: true });
+            sendJson(res, 200, {
+                ok: true,
+                cnpj: t.cnpj,
+                exp: t.exp,
+                expiraEm: t.exp ? new Date(t.exp * 1000).toISOString() : '',
+            });
+        } catch (e) {
+            // A mensagem do token-mfe já nomeia o passo que falhou e repete o recado literal
+            // do portal ("O usuário já está logado no sistema", etc.). Repassar inteira.
+            sendJson(res, 502, { ok: false, error: (e && e.message) || 'falha ao obter token do MFe' });
+        }
+        return;
+    }
+
     // Progresso (polling): GET /nfce/status/{jobId}
     if (method === 'GET' && path.startsWith('/nfce/status/')) {
         const jobId = decodeURIComponent(path.slice('/nfce/status/'.length));

@@ -335,7 +335,29 @@ seleção da empresa (CGF 67114776) → fragmento → troca. `TOKEN OBTIDO | CNP
 validade ~24 h. Os seis passos rodaram sem intervenção, e o passo 6 (o único que ainda era
 leitura de código do SPA, não medição) respondeu na primeira tentativa.
 
-**Falta INTEGRAR — e isso é o que resta do objetivo.** `worker/lib/token-mfe.js` ainda não é
+**INTEGRADO em 2026-09-11.** Itens 1–4 feitos:
+
+1. `POST /mfe/token` no `server.js` — **não devolve o JWT**. Devolve `{cnpj, exp}`. A única
+   razão para a UI ter o token seria mandá-lo de volta ao worker, que é quem o usa; expor ao
+   browser só amplia onde ele pode vazar sem habilitar nada. Serve para testar credenciais e
+   aquecer o cache. `require` tardio de `token-mfe` — módulo que falta não pode derrubar o
+   worker na carga (P1).
+2. `resolverTokens()` em `lib/nfce.js`, antes dos runners: empresa sem token ganha um, **um
+   login para o lote inteiro**, `taxid = sub do token` (o CNPJ da empresa daria 409). Falha
+   morre UMA vez com o recado literal do portal em vez de 3339 vezes com "token ausente".
+   Empresa que traz o próprio token nunca passa por ali — é o fallback.
+3. Tela: com o worker no ar o botão libera só com chaves, o relatório sem token deixa de ser
+   descartado em silêncio, e a dica muda para "o token é obtido automaticamente".
+   `?v=` bumpado para `20260911a`.
+4. `token-mfe.js` + `ca-icp-brasil.pem` no bundle (feito antes, commit `813a9fd`).
+
+30 asserções em `worker/test/nfce-http.test.mjs` (eram 19), com hook `_obterToken` no
+padrão do `poster` do `distnsu`: cobrem um-login-para-o-lote, `taxid` do token, empresa com
+token próprio não logando, e a falha carregando o motivo literal.
+
+**Falta:** rodar de ponta a ponta na tela, com planilha real e sem colar token.
+
+~~**Falta INTEGRAR — e isso é o que resta do objetivo.**~~ `worker/lib/token-mfe.js` ainda não é
 chamado por ninguém: `grep` em `server.js`, `lib/nfce.js` e `assets/js/app.js` não acha uma
 referência. Hoje o token continua vindo colado na UI. Para fechar "o usuário fornece só a
 planilha" falta:

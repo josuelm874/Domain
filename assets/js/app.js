@@ -9249,7 +9249,7 @@ function createBaixarNfcePage(mainContent) {
                         <textarea id="bn-token" rows="2" placeholder="Cole o token JWT (vale 24h), ou a URL completa do /xml/ contendo apiKey=…"></textarea>
                         <div id="bn-jwt-status"></div>
                     </div>
-                    <div id="bn-percompany-hint" style="font-size: 0.82rem; color: var(--color-info-dark);">Cole o token JWT de cada empresa no respectivo relatório acima.</div>
+                    <div id="bn-percompany-hint" style="font-size: 0.82rem; color: var(--color-info-dark);">Com o worker no ar o token é automático. Sem worker, cole o JWT de cada empresa no respectivo relatório acima.</div>
                 </div>
 
                 <div id="bn-worker-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
@@ -9283,6 +9283,26 @@ function createBaixarNfcePage(mainContent) {
     const reportGrid = document.getElementById('bn-report-grid');
     const jwtStatus = document.getElementById('bn-jwt-status');
     const startBtn = document.getElementById('bn-start');
+
+    // O worker obtém o JWT sozinho no Ambiente Seguro (POST /mfe/token; worker/lib/nfce.js
+    // resolve na largada do job). Com ele no ar, colar token deixa de ser obrigatório — que
+    // era o objetivo: o usuário fornece só a planilha.
+    //
+    // A detecção é ANTECIPADA, não na hora de iniciar: `updateStartButton` precisa saber
+    // disso para liberar o botão, e descobrir só no clique deixaria o botão travado com uma
+    // exigência que já não existe.
+    let workerPronto = false;
+    detectWorker().then((ok) => {
+        workerPronto = !!ok;
+        if (workerPronto) {
+            const dica = document.getElementById('bn-percompany-hint');
+            if (dica) {
+                dica.textContent = 'Worker no ar: o token é obtido automaticamente. ' +
+                    'Cole um JWT só se quiser usar o seu.';
+            }
+        }
+        updateStartButton();
+    }).catch(() => { /* sem worker o fluxo antigo continua valendo */ });
     const stageSelect = document.getElementById('bn-stage-select');
     const stageDownload = document.getElementById('bn-stage-download');
     const unifiedBox = document.getElementById('bn-unified');
@@ -9481,6 +9501,10 @@ function createBaixarNfcePage(mainContent) {
     function updateStartButton() {
         const totalKeys = reports.reduce((acc, r) => acc + r.keys.length, 0);
         if (!totalKeys) { startBtn.disabled = true; return; }
+        // Com o worker no ar, chave é o bastante: ele busca o token. Token colado continua
+        // valendo e tem precedência (é o fallback se a SEFAZ passar a conferir o vínculo
+        // chave<->taxid, que hoje ela não confere).
+        if (workerPronto) { startBtn.disabled = false; return; }
         let ok;
         if (globalModeChk.checked) {
             const token = extractToken(tokenInput.value);
@@ -9777,13 +9801,18 @@ function createBaixarNfcePage(mainContent) {
         const byGroup = new Map();
         for (const r of reportsList) {
             const tok = globalMode ? globalTok : (extractToken(r.token || '') || globalTok);
-            if (!tok) continue;
-            const taxid = validateJwt(tok).cnpj || '';
+            // Sem token E sem worker o relatório não tem como ser baixado -- o fallback do
+            // browser está morto por CORS (P7). Com worker, segue com token vazio: ele
+            // resolve na largada do job, e é UM login para o lote inteiro.
+            if (!tok && !workerPronto) continue;
+            // taxid vazio junto com token vazio de propósito: quem preenche é o worker, com
+            // o CNPJ DO TOKEN. Mandar o CNPJ da empresa aqui daria HTTP 409.
+            const taxid = tok ? (validateJwt(tok).cnpj || '') : '';
             for (const chave of r.keys) {
                 const cnpj = cnpjFromKey(chave);
                 const id = cnpj + '-' + yyyymmFromKey(chave);
                 let c = byGroup.get(id);
-                if (!c) { c = { id, cnpj, token: tok, taxid, keys: [], meta: {} }; byGroup.set(id, c); }
+                if (!c) { c = { id, cnpj, token: tok || '', taxid, keys: [], meta: {} }; byGroup.set(id, c); }
                 c.keys.push(chave);
                 const m = r.meta && r.meta.get(chave);
                 if (m) c.meta[chave] = m;

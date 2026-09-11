@@ -182,6 +182,74 @@ ok(!/[^.\w]fetch\s*\(/.test(semComentario),
 ok(/require\(['"]\.\/http['"]\)/.test(semComentario),
     'nfce.js usa o transporte de lib/http.js');
 
+// ---------------------------------------------------------------- 4. token automático ----
+// Empresa sem token não é mais descartada: o worker obtém o JWT sozinho. Dois pontos que
+// só aparecem em produção se não forem travados aqui:
+//   - `taxid` tem que ser o CNPJ DO TOKEN, não o da empresa. Usar o da empresa devolve
+//     HTTP 409 "Usuário identificado não confere com o informado" (medido 2026-09-11).
+//   - falha ao obter o token tem que morrer UMA vez com a causa, não N vezes com sintoma.
+const CNPJ_TOKEN = '99888777000166';
+const tokenAuto = jwtFalso(CNPJ_TOKEN);
+let chamadasObterToken = 0;
+
+const jobAuto = nfce.startJob({
+    concurrency: 2,
+    // Sem `token`. Duas empresas de CNPJs diferentes, um login só.
+    companies: [
+        { cnpj: CNPJ, keys: [CHAVE_A] },
+        { cnpj: '11222333000144', id: 'outra-202605', keys: [CHAVE_B] },
+    ],
+    _obterToken: async (opc) => {
+        chamadasObterToken++;
+        // O worker TEM que encerrar a sessão: o Ambiente Seguro é de sessão única e deixá-la
+        // aberta tranca o usuário fora do próprio portal.
+        ok(opc && opc.encerrar === true, 'obterToken é chamado com encerrar:true');
+        return { jwt: tokenAuto, cnpj: CNPJ_TOKEN, exp: Math.floor(Date.now() / 1000) + 3600 };
+    },
+});
+const limAuto = Date.now() + 20000;
+while (!jobAuto.done && Date.now() < limAuto) await new Promise((r) => setTimeout(r, 50));
+
+ok(jobAuto.done && !jobAuto.error, 'job com token automático termina sem erro', jobAuto.error);
+ok(chamadasObterToken === 1, 'UM login serve o lote inteiro (2 empresas, 1 chamada)',
+    'chamadas=' + chamadasObterToken);
+const compsAuto = Array.from(jobAuto.companies.values());
+ok(compsAuto.length === 2, 'empresa sem token NÃO é mais descartada', 'n=' + compsAuto.length);
+ok(compsAuto.every((c) => c.taxid === CNPJ_TOKEN),
+    'taxid é o CNPJ do TOKEN, não o da empresa (senão 409)',
+    compsAuto.map((c) => c.cnpj + '->' + c.taxid).join(' '));
+ok(compsAuto.every((c) => c.downloaded === 1 && c.errors === 0), 'as duas baixaram',
+    compsAuto.map((c) => c.downloaded + '/' + c.errors).join(' '));
+
+// Empresa que TRAZ token não passa pelo caminho automático — é o fallback que sobrevive
+// caso a SEFAZ passe a conferir o vínculo chave↔taxid.
+let chamou = 0;
+const jobManual = nfce.startJob({
+    concurrency: 1,
+    companies: [{ cnpj: CNPJ, token, keys: [CHAVE_A] }],
+    _obterToken: async () => { chamou++; throw new Error('não deveria ser chamado'); },
+});
+const limMan = Date.now() + 20000;
+while (!jobManual.done && Date.now() < limMan) await new Promise((r) => setTimeout(r, 50));
+ok(chamou === 0, 'empresa com token próprio não dispara login no portal');
+ok(Array.from(jobManual.companies.values())[0].downloaded === 1, 'e baixa normalmente');
+
+// Falha ao obter o token: uma causa, não milhares de sintomas.
+const jobFalha = nfce.startJob({
+    concurrency: 1,
+    companies: [{ cnpj: CNPJ, keys: [CHAVE_A, CHAVE_B] }],
+    _obterToken: async () => { throw new Error('O usuário já está logado no sistema.'); },
+});
+const limFal = Date.now() + 20000;
+while (!jobFalha.done && Date.now() < limFal) await new Promise((r) => setTimeout(r, 50));
+const cFal = Array.from(jobFalha.companies.values())[0];
+ok(/já está logado/.test(jobFalha.error || ''),
+    'o job carrega o motivo LITERAL do portal', jobFalha.error);
+ok(cFal.errors === 2 && cFal.downloaded === 0, 'as chaves não são tentadas às cegas',
+    cFal.downloaded + '/' + cFal.errors);
+ok(/já está logado/.test((cFal.failures[0] || {}).motivo || ''),
+    'e cada chave diz por que não foi tentada', JSON.stringify(cFal.failures[0]));
+
 // ---------------------------------------------------------------- fim ----
 mock.close();
 console.log('\n  ' + passou + ' asserções ok, ' + falhas.length + ' falha(s)\n');

@@ -7,24 +7,29 @@
  * à SEFAZ-CE e a montagem do ZIP por empresa. Progresso é exposto por polling
  * (GET /nfce/status). A UI baixa cada ZIP por GET /nfce/zip/{jobId}/{cnpj}.
  *
- * Token FLEXÍVEL: o worker não conhece "modo". Cada empresa traz seu próprio
- * token + taxid. No modo "1 token global" a UI replica o mesmo token/taxid em
- * todas as empresas; no modo "por empresa" cada uma traz o seu. O worker só
- * processa empresas com (token, taxid, keys).
+ * Token FLEXÍVEL: o worker não conhece "modo". Empresa que traz `token` usa o
+ * dela; empresa que vem SEM token recebe um obtido pelo próprio worker no
+ * Ambiente Seguro (`resolverTokens`, que roda antes dos runners). É isso que
+ * permite o usuário fornecer só a planilha.
  *
- * PREMISSA VALIDADA em 2026-09-11 (scripts/test-token-multi-cnpj.mjs, dois CNPJs
- * reais, token vivo). Um JWT NÃO serve N CNPJs no header: mandar
- * `x-authentication-taxid` diferente do `sub` do token devolve HTTP 409
- * "Usuário identificado não confere com o informado".
+ * PREMISSA VALIDADA em 2026-09-11 (`scripts/test-token-multi-cnpj.mjs`, dois
+ * CNPJs reais, confirmada em DUAS execuções com conferência da `chaveNfe`
+ * devolvida). Duas regras, e a segunda é a que decide o desenho:
  *
- * MAS a chave pedida não é conferida contra o taxid: a sonda pediu uma chave da
- * empresa B com token E taxid de A e voltou HTTP 200 com cupom. Se isso se
- * confirmar (medido UMA vez, e é surpreendente), um único login serve o lote
- * inteiro desde que o taxid seja sempre o CNPJ do próprio token. Enquanto não
- * confirmar, o desenho seguro continua sendo um token por empresa.
+ *   1. o header `x-authentication-taxid` TEM que ser o `sub` do token. Divergir
+ *      devolve HTTP 409 "Usuário identificado não confere com o informado".
+ *   2. a CHAVE pedida NÃO é conferida contra o taxid. Token e taxid de A trazem
+ *      o cupom de B, com a chave devolvida conferindo.
+ *
+ * Logo: UM LOGIN SERVE O LOTE INTEIRO. 195 empresas = 1 login, não 195.
+ *
+ * A regra 2 é comportamento da SEFAZ, não contrato: pode ser fechada sem aviso, e
+ * aí cada empresa volta a precisar do seu token. O caminho continua aberto —
+ * empresa que traz `token` nunca passa por `resolverTokens`.
  *
  * A salvaguarda de `processChave` (chave interna do XML × chave pedida) é o que
- * separa as duas leituras na prática: se a API devolvesse outro cupom, ela pega.
+ * separa "autorizado" de "devolveu outro cupom": se a API entregasse o documento
+ * errado, ela pega.
  */
 'use strict';
 
@@ -264,8 +269,11 @@ function startJob(payload) {
     const companies = new Map();
 
     for (const c of incoming) {
+        // Empresa SEM token não é mais descartada: o worker obtém o JWT sozinho pelo
+        // Ambiente Seguro (ver `resolverTokens`). Antes o `continue` aqui era silencioso —
+        // a empresa sumia do job e a tela mostrava menos anéis do que o usuário mandou,
+        // sem dizer por quê.
         const token = String(c.token || '').trim();
-        if (!token) continue;
         const keys = [];
         const seen = new Set();
         for (const k of (c.keys || [])) {
@@ -277,13 +285,18 @@ function startJob(payload) {
         // id = identidade do grupo (1 ZIP). A UI manda "<cnpj>-<YYYYMM>"; se faltar,
         // derivamos da 1ª chave. Chaveia o Map por id p/ não colidir meses do mesmo CNPJ.
         const id = String(c.id || '').trim() || (cnpj + '-' + (keys[0] ? yyyymmFromKey(keys[0]) : '000000'));
-        const taxid = cleanDigits(c.taxid) || cnpjFromToken(token) || cnpj;
+        // taxid TEM que ser o `sub` do token -- divergir devolve HTTP 409 "Usuario
+        // identificado nao confere com o informado" (medido 2026-09-11). Para empresa sem
+        // token ainda, fica vazio e `resolverTokens` preenche com o CNPJ do token obtido,
+        // NAO com o CNPJ da empresa.
+        const autoToken = !token;
+        const taxid = autoToken ? '' : (cleanDigits(c.taxid) || cnpjFromToken(token) || cnpj);
         const meta = new Map();
         if (c.meta && typeof c.meta === 'object') {
             for (const k of Object.keys(c.meta)) { const kk = cleanDigits(k); if (kk.length === 44) meta.set(kk, c.meta[k]); }
         }
         companies.set(id, {
-            id, cnpj, token, taxid, nome: '', nomeResolved: false,
+            id, cnpj, token, taxid, autoToken, nome: '', nomeResolved: false,
             monthLabel: keys[0] ? monthYearFromKey(keys[0]) : '',
             keys, pending: keys.slice(), total: keys.length,
             downloaded: 0, errors: 0, phase: 'download', aborted: false, abortReason: '',
@@ -292,9 +305,9 @@ function startJob(payload) {
         });
     }
 
-    const job = { id, createdAt: Date.now(), concurrency, companies, done: false, rr: 0, error: '' };
+    const job = { id, createdAt: Date.now(), concurrency, companies, done: false, rr: 0, error: '', _obterToken: payload._obterToken || null };
     jobs.set(id, job);
-    if (!companies.size) { job.done = true; job.error = 'nenhuma empresa com token + chaves válidas'; return job; }
+    if (!companies.size) { job.done = true; job.error = 'nenhuma empresa com chaves válidas (44 dígitos)'; return job; }
     runJob(job).catch((e) => { job.error = (e && e.message) || 'erro interno'; job.done = true; });
     return job;
 }
@@ -370,7 +383,65 @@ function maybeFinalizeCompany(comp) {
     }
 }
 
+/**
+ * Preenche o token das empresas que vieram sem ele, obtendo o JWT no Ambiente Seguro.
+ *
+ * UM LOGIN PARA O LOTE INTEIRO. Medido em 2026-09-11 (`scripts/test-token-multi-cnpj.mjs`,
+ * dois CNPJs reais, confirmado em duas execuções com conferência da `chaveNfe` devolvida):
+ * a API amarra o header `x-authentication-taxid` ao `sub` do token (divergir dá 409), mas
+ * NÃO confere a chave pedida contra o taxid. Um token de A baixa cupom de B, desde que o
+ * taxid enviado seja o CNPJ de A. Então 195 empresas custam 1 login, não 195.
+ *
+ * Daí `taxid = t.cnpj` e não `comp.cnpj`: usar o CNPJ da empresa seria o 409.
+ *
+ * Isso depende de a SEFAZ não checar o vínculo chave↔taxid — comportamento do lado deles,
+ * não contrato. Se fecharem, cada empresa volta a precisar do seu token; o caminho continua
+ * aberto, porque empresa que já vem com `token` é deixada em paz aqui.
+ *
+ * `require` TARDIO pelo mesmo motivo do server.js: um módulo que falta no pacote não pode
+ * derrubar o job inteiro na carga (P1).
+ */
+async function resolverTokens(job) {
+    const semToken = Array.from(job.companies.values()).filter((c) => c.autoToken && !c.token);
+    if (!semToken.length) return;
+
+    let t;
+    try {
+        // `job._obterToken` e hook de TESTE -- mesmo padrao do `poster` em lib/distnsu.js.
+        // Producao nunca injeta nada e cai no require real.
+        const obterToken = job._obterToken || require('./token-mfe').obterToken;
+        // `encerrar: true` é obrigatório: o Ambiente Seguro é de sessão única e sessão
+        // deixada aberta tranca o usuário fora do próprio portal. O JWT sobrevive ao
+        // logout — medido junto.
+        t = await obterToken({ encerrar: true });
+    } catch (e) {
+        // Falhar AQUI, com a mensagem do token-mfe (que nomeia o passo e repete o recado
+        // literal do portal), em vez de deixar milhares de chaves falharem uma a uma com
+        // "token ausente". Uma linha de causa vale mais que 3339 de sintoma.
+        const motivo = 'não foi possível obter o token do MFe: ' + ((e && e.message) || e);
+        for (const c of semToken) {
+            c.aborted = true;
+            c.abortReason = motivo;
+            while (c.pending.length) {
+                c.errors++;
+                c.failures.push({ chave: c.pending.shift(), motivo: 'não tentado (' + motivo + ')' });
+            }
+            maybeFinalizeCompany(c);
+        }
+        job.error = job.error || motivo;
+        return;
+    }
+
+    for (const c of semToken) {
+        c.token = t.jwt;
+        c.taxid = t.cnpj;   // o sub do token, NÃO o CNPJ da empresa — senão 409
+    }
+}
+
 async function runJob(job) {
+    // Antes de qualquer runner: quem veio sem token ganha um. Sequencial de propósito —
+    // são requisições ao portal do fisco, não à API de cupons.
+    await resolverTokens(job);
     const totalKeys = Array.from(job.companies.values()).reduce((a, c) => a + c.total, 0);
     const n = Math.max(1, Math.min(job.concurrency, totalKeys));
     const runners = [];
