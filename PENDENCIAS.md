@@ -355,7 +355,30 @@ leitura de código do SPA, não medição) respondeu na primeira tentativa.
 padrão do `poster` do `distnsu`: cobrem um-login-para-o-lote, `taxid` do token, empresa com
 token próprio não logando, e a falha carregando o motivo literal.
 
-**Falta:** rodar de ponta a ponta na tela, com planilha real e sem colar token.
+**RODADO DE PONTA A PONTA NA TELA em 2026-09-11 16:4x** — worker local, planilha `.txt`
+com 1 chave real, **sem colar token**:
+
+```
+E L DE OLIVEIRA JUNIOR ME: 1 | 1  100%   0 erros
+ZIP: "NFCe 08-2026_E L DE OLIVEIRA JUNIOR ME.zip"
+```
+
+O nome da empresa saiu do XML baixado, não da planilha. Botão liberou sozinho com o worker
+no ar. P9 fechada.
+
+**O teste de tela achou três defeitos que a suíte não achava** — todos corrigidos em
+`ffa39ed`, e todos de classes que já tinham mordido antes:
+
+1. **TDZ engolida por `.catch`.** A detecção antecipada chamava `detectWorker()` ~500 linhas
+   antes de `const WORKER_BASE` existir. ReferenceError, capturado pelo meu próprio catch: a
+   tela mostrava "Worker detectado" **e** o botão travado. Duas detecções independentes
+   divergindo — agora é uma só, a mesma que pinta o badge.
+2. **`resolverTokens` chamava `obterToken()` sem CNPJ.** A guarda do passo 4 (não escolher
+   empresa sozinho, entre 195) estava certa; faltava o chamador obedecer. Usa o CNPJ da
+   primeira empresa sem token do lote.
+3. **Sessão pendurada em caminho de erro.** `encerrar` só rodava no sucesso, então cada
+   falha trancava a tentativa seguinte com "O usuário já está logado no sistema" — um
+   defeito virando dois. Agora é `finally`, e `encerrar` é `true` por padrão.
 
 **Medido em 2026-09-11** (`scripts/test-token-multi-cnpj.mjs`, dois CNPJs reais, chave real,
 token vivo). Três achados, dois deles não previstos:
