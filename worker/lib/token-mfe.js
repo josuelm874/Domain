@@ -1,7 +1,7 @@
 /* ------------------------------ Token do MFe (Ambiente Seguro) ------------------------------
  *
  * Obtém o JWT que a API `portalcfews` exige, percorrendo o Ambiente Seguro da SEFAZ-CE por
- * HTTP puro. Zero dependência externa — `fetch` e `zlib` nativos. Isso é deliberado: a única
+ * HTTP puro. Zero dependência externa — só `https` nativo. Isso é deliberado: a única
  * dependência que o worker tinha (`exceljs`) foi o que o impediu de subir na máquina da
  * empresa por meses (ver P1). Chromium headless resolveria de forma mais direta e custaria
  * ~300 MB de `npm install` — o mesmo defeito, ampliado.
@@ -26,6 +26,7 @@
 'use strict';
 
 const fs = require('fs');
+const https = require('https');
 const os = require('os');
 const path = require('path');
 
@@ -76,7 +77,10 @@ class CookieJar {
         const raw = typeof res.headers.getSetCookie === 'function'
             ? res.headers.getSetCookie()
             : [res.headers.get('set-cookie')].filter(Boolean);
-        for (const linha of raw) {
+        this.absorverLista(raw);
+    }
+    absorverLista(raw) {
+        for (const linha of (raw || [])) {
             const par = String(linha).split(';')[0];
             const i = par.indexOf('=');
             if (i > 0) this.cookies.set(par.slice(0, i).trim(), par.slice(i + 1).trim());
@@ -126,31 +130,61 @@ function extrairJwt(texto, cnpjEsperado) {
 
 // --------------------------------- HTTP ---------------------------------
 
-async function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
-    if (!/^https:/i.test(url)) throw new Error('HTTPS obrigatório — recusado: ' + url);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
-    try {
+// O Ambiente Seguro roda IIS 6.0 (2003) e negocia Diffie-Hellman com chave pequena. O
+// OpenSSL do Node recusa com ERR_SSL_DH_KEY_TOO_SMALL (protecao contra Logjam) e o `fetch`
+// nao permite ajustar cifra -- dai `https.request`, que aceita. SECLEVEL=0 enfraquece ESTA
+// conexao; a alternativa seria HTTP puro, com a senha em claro na rede. E o menos pior.
+// Confinado aos hosts da SEFAZ: nada mais no worker usa este helper.
+// ponytail: SECLEVEL=0 e martelo; o correto seria a SEFAZ oferecer grupo DH maior.
+const CIPHERS_LEGADO = 'DEFAULT:@SECLEVEL=0';
+
+function req(jar, url, { method = 'GET', body = null, referer = '' } = {}) {
+    if (!/^https:/i.test(url)) return Promise.reject(new Error('HTTPS obrigatorio -- recusado: ' + url));
+    return new Promise((resolve, reject) => {
+        let u;
+        try { u = new URL(url); } catch (e) { return reject(new Error('URL invalida: ' + url)); }
         const headers = {
             'user-agent': 'softtech-worker',
             'accept': 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
         };
         if (!jar.vazio) headers.cookie = jar.header();
         if (referer) headers.referer = referer;
-        if (body) headers['content-type'] = 'application/x-www-form-urlencoded';
-        // redirect manual: o token pode viver no header `Location` do salto
-        const res = await fetch(url, { method, headers, body, redirect: 'manual', signal: ctrl.signal });
-        jar.absorver(res);
-        const loc = res.headers.get('location') || '';
-        const tipo = res.headers.get('content-type') || '';
-        const corpo = /^(3\d\d)$/.test(String(res.status)) ? '' : await res.text();
-        return { status: res.status, loc, tipo, corpo, url };
-    } catch (e) {
-        if (e && e.name === 'AbortError') throw new Error('sem resposta em ' + (REQ_TIMEOUT_MS / 1000) + 's: ' + url);
-        throw e;
-    } finally {
-        clearTimeout(timer);
-    }
+        if (body) {
+            headers['content-type'] = 'application/x-www-form-urlencoded';
+            headers['content-length'] = Buffer.byteLength(body);
+        }
+        const r = https.request({
+            method,
+            hostname: u.hostname,
+            port: u.port || 443,
+            path: u.pathname + u.search,
+            headers,
+            ciphers: CIPHERS_LEGADO,
+            minVersion: 'TLSv1',
+        }, (res) => {
+            jar.absorverLista(res.headers['set-cookie']);
+            const pedacos = [];
+            res.on('data', (c) => pedacos.push(c));
+            res.on('end', () => resolve({
+                status: res.statusCode,
+                loc: res.headers.location || '',
+                tipo: res.headers['content-type'] || '',
+                // latin1: ASP classico serve ISO-8859-1; JWT e ASCII, entao a regex nao sofre
+                corpo: Buffer.concat(pedacos).toString('latin1'),
+                url,
+            }));
+        });
+        r.setTimeout(REQ_TIMEOUT_MS, () => r.destroy(
+            new Error('sem resposta em ' + (REQ_TIMEOUT_MS / 1000) + 's: ' + url)));
+        // Expor o `code` e a `cause`: "fetch failed" sozinho nao dizia nada e custou uma
+        // rodada inteira para descobrir que era o handshake TLS.
+        r.on('error', (e) => reject(new Error(
+            ((e && e.message) || String(e)) +
+            (e && e.code ? ' [' + e.code + ']' : '') +
+            (e && e.cause && e.cause.code ? ' cause=' + e.cause.code : ''))));
+        if (body) r.write(body);
+        r.end();
+    });
 }
 
 function absolutizar(base, href) {
