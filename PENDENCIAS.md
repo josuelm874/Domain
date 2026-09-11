@@ -187,6 +187,22 @@ ocupados desde o primeiro segundo.
 
 ## Resolvido
 
+### ✓ Baixar NFCe pelo worker — FUNCIONANDO de ponta a ponta (2026-09-10)
+**3.339 de 3.339 baixadas, ZIP gerado.** Confirmado pelo Josué na máquina pessoal.
+
+Foram **cinco** defeitos em série, cada um escondendo o seguinte:
+1. Slot vazado no pool do browser (`.then` sem `.catch`) — `8d7eb79`
+2. Sem timeout de requisição no browser — `37f27e7`
+3. **CORS**: a API da SEFAZ não responde preflight, o caminho do browser é impossível — `8b77477` (P7)
+4. Worker não subia: `require('exceljs')` no topo + flag via `NODE_OPTIONS` — `105d782`, `565f2d1` (P1)
+5. `idNfe` com parser rígido, e **sem timeout no worker** — `be1a692`, `7884b1d`
+
+O 5 foi o último: 7 requisições penduradas travavam `maybeFinalizeCompany` para sempre
+(`downloaded + errors < total`). Estava **registrado em P6 e não corrigido** — lição: quando o
+conserto é do tamanho do registro, registrar é a escolha errada.
+
+**Caminho válido hoje: worker Node.** O fallback do browser continua morto por CORS (P7).
+
 ### ✓ P1 — Worker não subia fora da máquina pessoal: era o `require` do exceljs (2026-09-10)
 **Causa raiz.** `worker/server.js` faz `require('./lib/dirbi')` na carga, e `lib/dirbi.js`
 fazia `require('exceljs')` no topo. O bundle **nunca incluiu** `node_modules` — por desenho,
