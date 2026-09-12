@@ -22,6 +22,9 @@ Deve imprimir `ouvindo em http://127.0.0.1:47620`. Deixe a janela aberta.
 |------|--------|----------|
 | `/health` | GET | health-check (a UI usa p/ detectar o worker) |
 | `/echo` | POST | eco (validação da ponte) |
+| `/mfe/credenciais` | GET | estado do acesso ao Ambiente Seguro nesta máquina — **nunca devolve a senha**, só máscara do CPF, vínculo e origem (`env` ganha de `arquivo`) |
+| `/mfe/credenciais` | POST | grava CPF/senha/vínculo em `~/.softtech-ambiente-seguro.json` — body `{ usuario, senha, tipoUsuario }` |
+| `/mfe/credenciais/remover` | POST | apaga o arquivo (POST e não DELETE: o preflight só anuncia GET/POST/OPTIONS) |
 | `/nfce/start` | POST | inicia um job NFCe — body `{ concurrency, companies:[{cnpj,token,taxid,keys,meta}] }` → `{ jobId }` |
 | `/nfce/status/{jobId}` | GET | progresso por empresa (polling) |
 | `/nfce/detail/{jobId}/{cnpj}` | GET | falhas + divergências de conferência de uma empresa |

@@ -73,7 +73,10 @@ const distnsu = require('./lib/distnsu.js');
 const dirbi = require('./lib/dirbi');
 
 const HOST = '127.0.0.1';      // só loopback — nunca expor na rede
-const PORT = 47620;            // porta fixa (briefing); alta p/ evitar colisão
+// Porta fixa 47620 (a UI aponta para ela). O env existe para subir uma SEGUNDA
+// instância sem derrubar a do usuário -- teste, diagnóstico, duas contas na mesma
+// máquina. Sem o env, comportamento idêntico ao de antes.
+const PORT = Number(process.env.SOFTTECH_WORKER_PORT) || 47620;
 const NAME = 'softtech-worker';
 const VERSION = '0.5.0-nfe-auth';
 
@@ -278,6 +281,49 @@ const server = http.createServer(async (req, res) => {
             sendJson(res, 502, { ok: false, error: (e && e.message) || 'falha ao obter token do MFe' });
         }
         return;
+    }
+
+    // ================= CREDENCIAIS DO AMBIENTE SEGURO (CPF/senha/vínculo) =================
+    //
+    // Na máquina do Josué o arquivo `~/.softtech-ambiente-seguro.json` já existe. Em máquina
+    // nova, não — e o sintoma só aparecia no meio do lote, como "não foi possível obter o
+    // token do MFe". Estas rotas deixam a tela configurar isso antes de começar.
+    //
+    // A SENHA NUNCA VOLTA. O GET devolve só máscara + de onde veio. O único caminho de saída
+    // do valor é o POST para o portal do fisco, dentro do próprio worker.
+    //
+    // Atrás do token de pareamento como todo o resto: sem isso, qualquer página aberta no
+    // navegador gravaria credencial de fisco no perfil do usuário.
+    //
+    // `require` TARDIO pelo mesmo motivo de /mfe/token: módulo ausente no pacote não pode
+    // derrubar o worker inteiro na carga.
+    if (path === '/mfe/credenciais' || path === '/mfe/credenciais/remover') {
+        try {
+            const mfe = require('./lib/token-mfe');
+            if (method === 'GET' && path === '/mfe/credenciais') {
+                sendJson(res, 200, { ok: true, ...mfe.statusCredenciais(), tipos: mfe.TIPOS_USUARIO });
+                return;
+            }
+            if (method === 'POST' && path === '/mfe/credenciais') {
+                const raw = await readBody(req, 8192);
+                const body = raw ? JSON.parse(raw) : {};
+                const st = mfe.gravarCredenciais(body);
+                console.log('  ↳ credenciais do Ambiente Seguro gravadas para ' + st.usuario + ' (vínculo ' + st.tipoUsuario + ')');
+                sendJson(res, 200, { ok: true, ...st, tipos: mfe.TIPOS_USUARIO });
+                return;
+            }
+            if (method === 'POST' && path === '/mfe/credenciais/remover') {
+                // POST e não DELETE de propósito: o preflight só anuncia GET/POST/OPTIONS, e
+                // um verbo a mais custaria mexer no CORS por nada.
+                sendJson(res, 200, { ok: true, ...mfe.apagarCredenciais(), tipos: mfe.TIPOS_USUARIO });
+                return;
+            }
+        } catch (e) {
+            // A mensagem de gravarCredenciais é de validação (CPF/vínculo) e pode ir para a
+            // tela inteira. Nenhuma delas cita a senha.
+            sendJson(res, 400, { ok: false, error: (e && e.message) || 'falha ao tratar credenciais' });
+            return;
+        }
     }
 
     // Progresso (polling): GET /nfce/status/{jobId}

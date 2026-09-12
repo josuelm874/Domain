@@ -93,9 +93,20 @@ const ARQUIVO_CRED = path.join(os.homedir(), '.softtech-ambiente-seguro.json');
 // Selecionado". Padrao CONTADOR porque e o vinculo do Josue; outro vinculo se configura
 // por "tipoUsuario" no arquivo de credenciais.
 const TIPO_USUARIO_PADRAO = '3';
-const TIPOS_CONHECIDOS = 'Valores de cboTipoUsuario: 3=CONTADOR, 4=DEPENDENTE DE CONTADOR, ' +
-    '1=SOCIO, 2=DEPENDENTE DE SOCIO, 10=PORTAL FISCAL MESTRE, 11=PORTAL FISCAL DEPENDENTE, ' +
-    '80=EMISSOR DE NFE. A lista completa esta no <select> de login.asp.';
+// Mesma lista, em forma de dado: a UI monta o <select> de "Vinculo" a partir daqui, em vez
+// de repetir os codigos numa segunda tabela que sai de sincronia com esta.
+const TIPOS_USUARIO = [
+    { codigo: '3', nome: 'CONTADOR' },
+    { codigo: '4', nome: 'DEPENDENTE DE CONTADOR' },
+    { codigo: '1', nome: 'SOCIO' },
+    { codigo: '2', nome: 'DEPENDENTE DE SOCIO' },
+    { codigo: '10', nome: 'PORTAL FISCAL MESTRE' },
+    { codigo: '11', nome: 'PORTAL FISCAL DEPENDENTE' },
+    { codigo: '80', nome: 'EMISSOR DE NFE' },
+];
+const TIPOS_CONHECIDOS = 'Valores de cboTipoUsuario: ' +
+    TIPOS_USUARIO.map((t) => t.codigo + '=' + t.nome).join(', ') +
+    '. A lista completa esta no <select> de login.asp.';
 
 // --------------------------------- credenciais ---------------------------------
 
@@ -128,6 +139,68 @@ function lerCredenciais() {
     const tipoUsuario = String(j.tipoUsuario || j.tipo || TIPO_USUARIO_PADRAO).replace(/[^0-9]/g, '');
     if (!tipoUsuario) throw new Error('"tipoUsuario" invalido em ' + ARQUIVO_CRED + '. ' + TIPOS_CONHECIDOS);
     return { usuario, senha, tipoUsuario, origem: ARQUIVO_CRED };
+}
+
+/**
+ * Estado das credenciais, SEM devolver senha nem CPF inteiro.
+ *
+ * Existe porque a máquina da empresa não tem o arquivo e o sintoma disso só aparecia no
+ * meio de um lote de milhares de chaves, como "não foi possível obter o token do MFe".
+ * A tela agora pergunta antes de começar.
+ *
+ * `origem` importa: env GANHA do arquivo em `lerCredenciais`. Se alguém definiu
+ * SEFAZ_AS_USUARIO nesta máquina, gravar o arquivo não muda nada — e a tela precisa
+ * dizer isso, senão o usuário digita, salva, e continua falhando com a credencial antiga.
+ */
+function statusCredenciais() {
+    const porEnv = !!(process.env.SEFAZ_AS_USUARIO && process.env.SEFAZ_AS_SENHA);
+    try {
+        const c = lerCredenciais();
+        return {
+            configurado: true,
+            origem: porEnv ? 'env' : 'arquivo',
+            arquivo: ARQUIVO_CRED,
+            usuario: mascararCpf(c.usuario),
+            tipoUsuario: c.tipoUsuario,
+            travadoPorEnv: porEnv,
+        };
+    } catch (e) {
+        return { configurado: false, origem: '', arquivo: ARQUIVO_CRED, usuario: '', tipoUsuario: TIPO_USUARIO_PADRAO, travadoPorEnv: porEnv };
+    }
+}
+
+function mascararCpf(d) {
+    const s = String(d || '').replace(/\D/g, '');
+    if (s.length !== 11) return s ? '*'.repeat(Math.max(0, s.length - 2)) + s.slice(-2) : '';
+    return '***.***.' + s.slice(6, 9) + '-**';
+}
+
+/**
+ * Grava as credenciais no home do usuário desta máquina. NÃO sai do disco local: quem
+ * chama é a rota do worker em 127.0.0.1, e o site na Vercel nunca vê o valor de volta
+ * (`statusCredenciais` só devolve máscara).
+ *
+ * `mode: 0o600` é honesto no Linux/Mac e decorativo no Windows (o NTFS ignora o modo
+ * POSIX). No Windows quem protege é o lugar: o perfil do usuário. Não vendo isso como
+ * criptografia — não é.
+ */
+function gravarCredenciais({ usuario, senha, tipoUsuario }) {
+    const cpf = String(usuario || '').replace(/\D/g, '');
+    if (cpf.length !== 11) throw new Error('CPF inválido: informe os 11 dígitos do CPF que entra no Ambiente Seguro.');
+    const pass = String(senha == null ? '' : senha);
+    if (!pass) throw new Error('Senha vazia.');
+    const tipo = String(tipoUsuario || TIPO_USUARIO_PADRAO).replace(/\D/g, '');
+    if (!TIPOS_USUARIO.some((t) => t.codigo === tipo)) {
+        throw new Error('Vínculo desconhecido: "' + tipo + '". ' + TIPOS_CONHECIDOS);
+    }
+    fs.writeFileSync(ARQUIVO_CRED, JSON.stringify({ usuario: cpf, senha: pass, tipoUsuario: tipo }, null, 2), { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(ARQUIVO_CRED, 0o600); } catch { /* Windows: sem equivalente, segue */ }
+    return statusCredenciais();
+}
+
+function apagarCredenciais() {
+    try { fs.unlinkSync(ARQUIVO_CRED); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    return statusCredenciais();
 }
 
 // --------------------------------- cookie jar ---------------------------------
@@ -901,6 +974,8 @@ async function encerrarSessao(jar) {
 
 module.exports = {
     obterToken, login, descobrirToken, extrairJwt, CookieJar, lerCredenciais, ARQUIVO_CRED,
+    // Credenciais pela tela (máquina da empresa não tem o arquivo). Nada aqui devolve senha.
+    statusCredenciais, gravarCredenciais, apagarCredenciais, TIPOS_USUARIO, mascararCpf,
     // Exportados para teste: a colheita de links é onde o andador falhou em silêncio por
     // três execuções, e falha silenciosa que não é testável volta.
     extrairAlvos, parSistema,

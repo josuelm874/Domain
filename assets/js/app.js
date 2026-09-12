@@ -9192,6 +9192,26 @@ function createBaixarNfcePage(mainContent) {
             .bn-rc-token.bn-bad { border-color: var(--color-danger); }
             .bn-rc-token.bn-good { border-color: var(--color-success); }
             .bn-rc-tokstatus { font-size: 0.68rem; margin-top: 0.2rem; min-height: 0.8rem; }
+            /* Credenciais do Ambiente Seguro (CPF/senha/vinculo). So aparece com o worker no ar:
+               a credencial vive no disco DAQUELA maquina, nao no navegador. */
+            .bn-cred { border: 1px solid rgba(115,128,243,0.35); border-radius: 0.8rem; padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.7rem; background: rgba(115,128,243,0.05); }
+            .bn-cred.bn-cred-falta { border-color: var(--color-warning); background: rgba(247,208,96,0.09); }
+            .bn-cred-head { display: flex; align-items: center; gap: 0.5rem; }
+            .bn-cred-head .material-icons-sharp { font-size: 1.1rem; color: var(--color-primary); }
+            .bn-cred-title { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; }
+            .bn-cred-state { margin-left: auto; font-size: 0.78rem; font-weight: 600; }
+            .bn-cred-body { display: flex; flex-direction: column; gap: 0.6rem; }
+            .bn-cred-row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: flex-end; }
+            .bn-cred-field { display: flex; flex-direction: column; gap: 0.22rem; flex: 1 1 11rem; min-width: 9rem; }
+            .bn-cred-field label { font-size: 0.72rem; font-weight: 600; color: var(--color-info-dark); letter-spacing: .02em; }
+            .bn-cred-field input, .bn-cred-field select { width: 100%; padding: 0.48rem 0.55rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); font-size: 0.82rem; font-family: inherit; }
+            .bn-cred-field select { appearance: auto; }
+            .bn-cred-btn { padding: 0.5rem 0.9rem; border-radius: 0.4rem; border: 1px solid var(--color-primary); background: var(--color-primary); color: #fff; font-weight: 600; font-size: 0.82rem; cursor: pointer; white-space: nowrap; }
+            .bn-cred-btn:disabled { opacity: 0.5; cursor: default; }
+            .bn-cred-btn.bn-ghost { background: transparent; color: var(--color-dark); border-color: var(--color-info-dark); }
+            .bn-cred-btn.bn-ghost:hover { border-color: var(--color-danger); color: var(--color-danger); }
+            .bn-cred-msg { font-size: 0.76rem; min-height: 0.95rem; }
+            .bn-cred-hint { font-size: 0.74rem; color: var(--color-info-dark); line-height: 1.35; }
             .bn-mode-toggle { display: flex; align-items: center; gap: 0.5rem; font-size: 0.86rem; color: var(--color-dark); cursor: pointer; user-select: none; }
             .bn-report-card.bn-merge { transform: scale(0.6); opacity: 0; }
             @keyframes bnPop { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
@@ -9264,6 +9284,15 @@ function createBaixarNfcePage(mainContent) {
 
                 <div id="bn-worker-status" style="font-size: 0.85rem; min-height: 1.1rem;"></div>
 
+                <div id="bn-cred" class="bn-cred" style="display: none;">
+                    <div class="bn-cred-head">
+                        <span class="material-icons-sharp">badge</span>
+                        <span class="bn-cred-title">Acesso ao Ambiente Seguro</span>
+                        <span id="bn-cred-state" class="bn-cred-state"></span>
+                    </div>
+                    <div id="bn-cred-body" class="bn-cred-body"></div>
+                </div>
+
                 <button id="bn-start" type="button" class="bn-start-btn" disabled>Iniciar Download NFCe</button>
             </div>
 
@@ -9304,6 +9333,12 @@ function createBaixarNfcePage(mainContent) {
     // ReferenceError e o botão continuava travado por uma exigência que já não existia --
     // falha silenciosa, achada só no teste de tela.
     let workerPronto = false;
+    // Credenciais do Ambiente Seguro presentes NA MAQUINA DO WORKER. Comeca em `true`
+    // de proposito: so travamos o botao quando o worker AFIRMA que nao tem credencial.
+    // Worker antigo nao conhece /mfe/credenciais e responde 404 -- travar nesse caso
+    // quebraria quem ja tem o arquivo configurado desde sempre. Fail-open no desconhecido,
+    // fail-closed so no negativo explicito.
+    let credOk = true;
     const stageSelect = document.getElementById('bn-stage-select');
     const stageDownload = document.getElementById('bn-stage-download');
     const unifiedBox = document.getElementById('bn-unified');
@@ -9502,10 +9537,16 @@ function createBaixarNfcePage(mainContent) {
     function updateStartButton() {
         const totalKeys = reports.reduce((acc, r) => acc + r.keys.length, 0);
         if (!totalKeys) { startBtn.disabled = true; return; }
-        // Com o worker no ar, chave é o bastante: ele busca o token. Token colado continua
-        // valendo e tem precedência (é o fallback se a SEFAZ passar a conferir o vínculo
-        // chave<->taxid, que hoje ela não confere).
-        if (workerPronto) { startBtn.disabled = false; return; }
+        // Com o worker no ar E credencial configurada nele, a planilha basta: ele faz o
+        // login e busca o token. Token colado continua valendo e tem precedência (é o
+        // fallback se a SEFAZ passar a conferir o vínculo chave<->taxid, que hoje ela
+        // não confere).
+        //
+        // Sem credencial no worker (máquina nova), NÃO liberamos por estar "no ar": o
+        // login falharia e o erro só apareceria lá no meio do lote. Cai na mesma exigência
+        // de quem não tem worker -- JWT colado -- que é a saída de quem não quer gravar
+        // senha de fisco na máquina.
+        if (workerPronto && credOk) { startBtn.disabled = false; return; }
         let ok;
         if (globalModeChk.checked) {
             const token = extractToken(tokenInput.value);
@@ -10333,6 +10374,185 @@ function createBaixarNfcePage(mainContent) {
     tokenInput.addEventListener('input', refreshJwtStatus);
     globalModeChk.addEventListener('change', onModeToggle);
 
+    // ---------- credenciais do Ambiente Seguro (CPF / senha / vínculo) ----------
+    //
+    // Vivem no disco da MAQUINA QUE RODA O WORKER (~/.softtech-ambiente-seguro.json), não
+    // no navegador: é de lá que sai o login que gera o JWT. Na máquina de desenvolvimento o
+    // arquivo já existia, então isto nunca apareceu; numa máquina empresarial nova ele não
+    // existe, e o sintoma disso era um lote de milhares de chaves morrendo no meio com
+    // "não foi possível obter o token do MFe".
+    //
+    // A SENHA NUNCA VOLTA do worker: o GET devolve máscara do CPF, vínculo e origem. O
+    // único caminho de saída do valor é o POST do próprio worker para o portal do fisco.
+    const credBox = document.getElementById('bn-cred');
+    const credBody = document.getElementById('bn-cred-body');
+    const credState = document.getElementById('bn-cred-state');
+
+    /**
+     * Estado das credenciais no worker.
+     * @returns {Promise<object|null>} o status, ou null quando o worker não conhece a rota
+     *   (binário antigo) ou não respondeu. null = "não sei", e não gatilha nada.
+     */
+    async function fetchCredStatus() {
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/mfe/credenciais');
+            if (!res.ok) return null;
+            const j = await res.json();
+            return j && j.ok ? j : null;
+        } catch (e) { return null; }
+    }
+
+    function credOptions(tipos, selecionado) {
+        return (tipos || []).map((t) =>
+            '<option value="' + escapeHtml(t.codigo) + '"' + (String(t.codigo) === String(selecionado) ? ' selected' : '') + '>' +
+            escapeHtml(t.nome) + '</option>').join('');
+    }
+
+    /**
+     * Pinta o painel a partir do status e ajusta `credOk` + o botão Iniciar.
+     * @param {object|null} st
+     */
+    function renderCred(st) {
+        if (!credBox) return;
+        if (!st) {
+            // Worker ausente ou sem a rota: some da tela e não trava nada.
+            credOk = true;
+            credBox.style.display = 'none';
+            updateStartButton();
+            return;
+        }
+        credBox.style.display = 'flex';
+        credOk = !!st.configurado;
+        credBox.classList.toggle('bn-cred-falta', !st.configurado);
+        credState.textContent = st.configurado ? '● configurado' : '● não configurado';
+        credState.style.color = st.configurado ? 'var(--color-success)' : 'var(--color-warning)';
+
+        // `travadoPorEnv`: as variáveis SEFAZ_AS_* ganham do arquivo no worker. Sem dizer
+        // isso, o usuário digitaria, salvaria, e continuaria falhando com a credencial
+        // antiga sem entender por quê.
+        const avisoEnv = st.travadoPorEnv
+            ? '<div class="bn-cred-hint" style="color: var(--color-warning);">Esta máquina define SEFAZ_AS_USUARIO/SEFAZ_AS_SENHA no ambiente, e o ambiente tem precedência sobre o que for salvo aqui. Para usar outro acesso, remova essas variáveis.</div>'
+            : '';
+
+        if (st.configurado) {
+            credBody.innerHTML =
+                '<div class="bn-cred-row" style="align-items: center;">' +
+                    '<div style="flex: 1 1 auto; font-size: 0.84rem; color: var(--color-dark);">' +
+                        'CPF <b>' + escapeHtml(st.usuario || '') + '</b>' +
+                        ' &nbsp;•&nbsp; vínculo <b>' + escapeHtml(credNomeTipo(st)) + '</b>' +
+                        ' &nbsp;•&nbsp; <span style="color: var(--color-info-dark);">origem: ' + escapeHtml(st.origem || '') + '</span>' +
+                    '</div>' +
+                    '<button type="button" class="bn-cred-btn bn-ghost" id="bn-cred-trocar">Trocar</button>' +
+                    '<button type="button" class="bn-cred-btn bn-ghost" id="bn-cred-remover">Remover</button>' +
+                '</div>' + avisoEnv +
+                '<div id="bn-cred-msg" class="bn-cred-msg"></div>';
+            const bt = document.getElementById('bn-cred-trocar');
+            const br = document.getElementById('bn-cred-remover');
+            if (bt) bt.addEventListener('click', () => renderCredForm(st));
+            if (br) br.addEventListener('click', () => removerCred());
+        } else {
+            renderCredForm(st);
+        }
+        updateStartButton();
+    }
+
+    function credNomeTipo(st) {
+        const achado = (st.tipos || []).find((t) => String(t.codigo) === String(st.tipoUsuario));
+        return achado ? achado.nome : String(st.tipoUsuario || '');
+    }
+
+    /**
+     * Formulário de CPF/senha/vínculo. `autocomplete=new-password` de propósito: sem isso o
+     * gerenciador do navegador oferece guardar a senha do fisco sob o domínio do site, que
+     * não é onde ela vive.
+     * @param {object} st
+     */
+    function renderCredForm(st) {
+        credBody.innerHTML =
+            '<div class="bn-cred-hint">O worker faz o login no Ambiente Seguro por você e pega o token sozinho. Informe o acesso <b>uma vez nesta máquina</b> — fica gravado em <code>' + escapeHtml(st.arquivo || '') + '</code>, no perfil deste usuário do Windows, e nunca sai daqui.</div>' +
+            '<div class="bn-cred-row">' +
+                '<div class="bn-cred-field"><label for="bn-cred-cpf">CPF</label>' +
+                    '<input type="text" id="bn-cred-cpf" inputmode="numeric" maxlength="14" placeholder="000.000.000-00" autocomplete="off"></div>' +
+                '<div class="bn-cred-field"><label for="bn-cred-senha">Senha</label>' +
+                    '<input type="password" id="bn-cred-senha" placeholder="senha do Ambiente Seguro" autocomplete="new-password"></div>' +
+                '<div class="bn-cred-field"><label for="bn-cred-tipo">Vínculo</label>' +
+                    '<select id="bn-cred-tipo">' + credOptions(st.tipos, st.tipoUsuario) + '</select></div>' +
+                '<button type="button" class="bn-cred-btn" id="bn-cred-salvar">Salvar</button>' +
+                (st.configurado ? '<button type="button" class="bn-cred-btn bn-ghost" id="bn-cred-cancelar">Cancelar</button>' : '') +
+            '</div>' +
+            (st.travadoPorEnv ? '<div class="bn-cred-hint" style="color: var(--color-warning);">As variáveis SEFAZ_AS_* desta máquina têm precedência sobre o que for salvo aqui.</div>' : '') +
+            '<div id="bn-cred-msg" class="bn-cred-msg"></div>';
+
+        const cpf = document.getElementById('bn-cred-cpf');
+        if (cpf) cpf.addEventListener('input', () => { cpf.value = formatCpf(cpf.value); });
+        const salvar = document.getElementById('bn-cred-salvar');
+        if (salvar) salvar.addEventListener('click', () => salvarCred());
+        const cancelar = document.getElementById('bn-cred-cancelar');
+        if (cancelar) cancelar.addEventListener('click', () => renderCred(st));
+        const senha = document.getElementById('bn-cred-senha');
+        if (senha) senha.addEventListener('keydown', (e) => { if (e.key === 'Enter') salvarCred(); });
+    }
+
+    function formatCpf(v) {
+        const d = String(v || '').replace(/\D/g, '').slice(0, 11);
+        if (d.length <= 3) return d;
+        if (d.length <= 6) return d.slice(0, 3) + '.' + d.slice(3);
+        if (d.length <= 9) return d.slice(0, 3) + '.' + d.slice(3, 6) + '.' + d.slice(6);
+        return d.slice(0, 3) + '.' + d.slice(3, 6) + '.' + d.slice(6, 9) + '-' + d.slice(9);
+    }
+
+    function credMsg(texto, cor) {
+        const el = document.getElementById('bn-cred-msg');
+        if (!el) return;
+        el.textContent = texto;
+        el.style.color = cor || 'var(--color-info-dark)';
+    }
+
+    async function salvarCred() {
+        const cpfEl = document.getElementById('bn-cred-cpf');
+        const senhaEl = document.getElementById('bn-cred-senha');
+        const tipoEl = document.getElementById('bn-cred-tipo');
+        const btn = document.getElementById('bn-cred-salvar');
+        const usuario = String(cpfEl ? cpfEl.value : '').replace(/\D/g, '');
+        const senha = senhaEl ? senhaEl.value : '';
+        if (usuario.length !== 11) { credMsg('Informe os 11 dígitos do CPF.', 'var(--color-danger)'); return; }
+        if (!senha) { credMsg('Informe a senha.', 'var(--color-danger)'); return; }
+        if (btn) btn.disabled = true;
+        credMsg('Salvando...');
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/mfe/credenciais', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ usuario, senha, tipoUsuario: tipoEl ? tipoEl.value : '' }),
+            });
+            const j = await res.json().catch(() => null);
+            if (!res.ok || !j || !j.ok) {
+                credMsg((j && j.error) || ('O worker recusou (HTTP ' + res.status + ').'), 'var(--color-danger)');
+                if (btn) btn.disabled = false;
+                return;
+            }
+            // Zera o campo antes de repintar: a senha não fica pendurada no DOM depois de ir.
+            if (senhaEl) senhaEl.value = '';
+            renderCred(j);
+        } catch (e) {
+            credMsg('Não foi possível falar com o worker. Ele ainda está aberto?', 'var(--color-danger)');
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function removerCred() {
+        if (!window.confirm('Remover o acesso ao Ambiente Seguro gravado nesta máquina?\n\nO download passa a exigir token JWT colado até você configurar de novo.')) return;
+        credMsg('Removendo...');
+        try {
+            const res = await window.workerFetch(WORKER_BASE + '/mfe/credenciais/remover', { method: 'POST' });
+            const j = await res.json().catch(() => null);
+            if (!res.ok || !j || !j.ok) { credMsg('Falha ao remover (HTTP ' + res.status + ').', 'var(--color-danger)'); return; }
+            renderCred(j);
+        } catch (e) {
+            credMsg('Não foi possível falar com o worker.', 'var(--color-danger)');
+        }
+    }
+
     onModeToggle(); // estado inicial: token por empresa (padrão)
     loadContributors().then(() => { renderReportCards(); });
     renderReportCards();
@@ -10352,10 +10572,22 @@ function createBaixarNfcePage(mainContent) {
                 'Cole um JWT só se quiser usar o seu.';
         }
         const ws = document.getElementById('bn-worker-status');
-        if (!ws) return;
-        ws.innerHTML = ok
-            ? '<span style="color:var(--color-success); font-weight:600;">● Worker Node detectado — download em alta escala (sem CORS).</span>'
-            : workerHintHtml();
+        if (ws) {
+            ws.innerHTML = ok
+                ? '<span style="color:var(--color-success); font-weight:600;">● Worker Node detectado — download em alta escala (sem CORS).</span>'
+                : workerHintHtml();
+        }
+        // Credenciais só fazem sentido com o worker no ar: é a máquina DELE que loga no
+        // Ambiente Seguro. Sem worker o painel nem aparece -- o caminho ali é o JWT colado.
+        if (!ok) { renderCred(null); return; }
+        fetchCredStatus().then((st) => {
+            renderCred(st);
+            const dica = document.getElementById('bn-percompany-hint');
+            if (dica && st && !st.configurado) {
+                dica.textContent = 'Worker no ar, mas sem acesso ao Ambiente Seguro configurado nesta máquina. ' +
+                    'Preencha o acesso abaixo (uma vez só) ou cole o JWT de cada empresa.';
+            }
+        });
     });
 }
 //---------------------------------- FIM Baixar NFCe ----------------------------------//
