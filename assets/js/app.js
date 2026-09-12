@@ -9176,6 +9176,16 @@ function createBaixarNfcePage(mainContent) {
             .bn-report-grid { display: grid; gap: 0.9rem; width: 100%; grid-auto-rows: 1fr; }
             .bn-report-card { background: rgba(115,128,243,0.07); border: 1px solid rgba(115,128,243,0.35); border-radius: 0.8rem; padding: 1rem; display: flex; flex-direction: column; justify-content: center; gap: 0.45rem; min-height: 92px; animation: bnPop .28s cubic-bezier(0.16,1,0.3,1); transition: transform .35s cubic-bezier(0.16,1,0.3,1), opacity .35s ease; }
             .bn-report-card .bn-rc-name { font-weight: 600; color: var(--color-dark); font-size: 0.9rem; word-break: break-word; }
+            .bn-report-card { position: relative; }
+            .bn-report-card .bn-rc-name { padding-right: 4.4rem; }
+            .bn-rc-ord { position: absolute; top: 0.5rem; right: 0.5rem; display: flex; align-items: center; gap: 0.15rem; }
+            .bn-rc-pos { font-size: 0.72rem; font-weight: 700; color: var(--color-primary); margin-right: 0.15rem; }
+            .bn-rc-move { width: 22px; height: 22px; border-radius: 0.35rem; border: 1px solid rgba(115,128,243,0.35); background: transparent; color: var(--color-dark); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+            .bn-rc-move:hover:not(:disabled) { background: var(--color-primary); color: #fff; }
+            .bn-rc-move:disabled { opacity: 0.25; cursor: default; }
+            .bn-rc-move .material-icons-sharp { font-size: 1rem; }
+            .bn-ring-item.fila .bn-ring { opacity: 0.4; }
+            .bn-ring-queue { font-size: 0.7rem; font-weight: 700; color: #f5b301; letter-spacing: .02em; min-height: 0.9rem; }
             .bn-report-card .bn-rc-count { font-size: 0.82rem; color: var(--color-primary); font-weight: 600; }
             .bn-report-card .bn-rc-emp { font-size: 0.74rem; color: var(--color-info-dark); }
             .bn-rc-token { width: 100%; margin-top: 0.4rem; padding: 0.45rem 0.5rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.7rem; resize: vertical; word-break: break-all; }
@@ -9595,7 +9605,7 @@ function createBaixarNfcePage(mainContent) {
         const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
         reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
         const perCompany = !globalModeChk.checked;
-        reportGrid.innerHTML = reports.map((r) => {
+        reportGrid.innerHTML = reports.map((r, i) => {
             const cnpj = r.keys.length ? cnpjFromKey(r.keys[0]) : '';
             const emp = (cnpj && contributorsByCnpj.get(cnpj)) || (cnpj ? 'CNPJ ' + cnpj : '');
             const nKeys = r.keys.length;
@@ -9603,14 +9613,41 @@ function createBaixarNfcePage(mainContent) {
                 ? '<textarea class="bn-rc-token" data-rid="' + r.id + '" rows="2" placeholder="Token JWT desta empresa…">' + escapeHtml(r.token || '') + '</textarea>' +
                   '<div class="bn-rc-tokstatus" data-rid="' + r.id + '"></div>'
                 : '';
+            // Ordem da fila. A posição aqui É a ordem de execução: `buildCompanies` percorre
+            // `reports` na ordem e o Map do worker preserva a inserção.
+            const ord = '<div class="bn-rc-ord">' +
+                '<span class="bn-rc-pos" title="Posição na fila">' + (i + 1) + 'º</span>' +
+                '<button type="button" class="bn-rc-move" data-dir="-1" data-idx="' + i + '"' +
+                    (i === 0 ? ' disabled' : '') + ' title="Subir na fila" aria-label="Subir na fila">' +
+                    '<span class="material-icons-sharp">keyboard_arrow_up</span></button>' +
+                '<button type="button" class="bn-rc-move" data-dir="1" data-idx="' + i + '"' +
+                    (i === reports.length - 1 ? ' disabled' : '') + ' title="Descer na fila" aria-label="Descer na fila">' +
+                    '<span class="material-icons-sharp">keyboard_arrow_down</span></button>' +
+                '</div>';
             return '<div class="bn-report-card">' +
+                ord +
                 '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
                 '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + '</div>' +
                 (emp ? '<div class="bn-rc-emp">' + escapeHtml(emp) + '</div>' : '') +
                 tokBox +
                 '</div>';
         }).join('');
+        wireCardOrder();
         if (perCompany) wireCardTokens();
+    }
+
+    // Reordena a fila. Troca vizinhos no array `reports` — nada mais precisa saber da
+    // ordem, porque `buildCompanies` já lê o array na sequência.
+    function wireCardOrder() {
+        reportGrid.querySelectorAll('.bn-rc-move').forEach((b) => {
+            b.addEventListener('click', () => {
+                const i = parseInt(b.getAttribute('data-idx'), 10);
+                const j = i + parseInt(b.getAttribute('data-dir'), 10);
+                if (j < 0 || j >= reports.length) return;
+                const tmp = reports[i]; reports[i] = reports[j]; reports[j] = tmp;
+                renderReportCards();
+            });
+        });
     }
 
     // Liga os campos de token por empresa (modo padrão): valida JWT ao digitar e
@@ -9677,7 +9714,8 @@ function createBaixarNfcePage(mainContent) {
         item.className = 'bn-ring-item';
         item.innerHTML =
             '<div class="bn-ring">' + ringSvg() + '<div class="bn-ring-center"><div class="bn-ring-pct">0%</div></div></div>' +
-            '<div class="bn-ring-label"></div>';
+            '<div class="bn-ring-label"></div>' +
+            '<div class="bn-ring-queue"></div>';
         ringsWrap.appendChild(item);
         comp.els = {
             root: item,
@@ -9685,6 +9723,7 @@ function createBaixarNfcePage(mainContent) {
             yellow: item.querySelector('.bn-arc-yellow'),
             pct: item.querySelector('.bn-ring-pct'),
             name: item.querySelector('.bn-ring-label'),
+            queue: item.querySelector('.bn-ring-queue'),
         };
         comp.els.name.textContent = comp.nome || cnpjLabel(cnpj);
         layoutRings();
@@ -9709,6 +9748,11 @@ function createBaixarNfcePage(mainContent) {
             if (comp.phase === 'done') { els.root.classList.add('done'); els.pct.textContent = '100%'; }
         }
         if (comp.nome) els.name.textContent = comp.nome;
+        if (els.queue) {
+            const naFila = !!comp.fila && comp.phase === 'download';
+            els.root.classList.toggle('fila', naFila);
+            els.queue.textContent = naFila ? ('na fila — ' + (comp.posicao || 1) + 'º') : '';
+        }
     }
 
     // ---------- rodapé + mini anel + tooltip ----------
@@ -9858,6 +9902,10 @@ function createBaixarNfcePage(mainContent) {
             if (cs.phase === 'done') { comp.phase = 'done'; comp.zipProgress = 1; }
             else if (cs.phase === 'zip') { comp.phase = 'zip'; comp.zipProgress = 0.5; }
             else comp.phase = 'download';
+            // Fila: o worker processa UMA empresa por vez. Sem esta marca, as que ainda
+            // nao tiveram a vez ficam em 0% e a tela parece travada.
+            comp.fila = !!cs.fila;
+            comp.posicao = cs.posicao || 0;
             updateRing(comp);
             if (cs.zipReady && !comp.zipDownloaded) {
                 comp.zipDownloaded = true;
@@ -9919,7 +9967,6 @@ function createBaixarNfcePage(mainContent) {
     const REQ_TIMEOUT_MS = 45000;
     const makeErr = (kind, message) => { const e = new Error(message); e.kind = kind; return e; };
     const browserPool = { active: 0, concurrency: CONCURRENCY };
-    let brRr = 0;
 
     // Vigia de diagnostico. Dois mecanismos diferentes (slot vazado / requisicao
     // pendurada) produzem o MESMO sintoma na tela. Sem isto, so da para distinguir
@@ -10110,13 +10157,14 @@ function createBaixarNfcePage(mainContent) {
         return true;
     }
 
+    // FILA, igual ao worker (`nextJob` em worker/lib/nfce.js): a primeira empresa da ordem
+    // que ainda tem chave pendente leva todos os slots do pool. A seguinte só começa quando
+    // a anterior esvazia. Ordem = ordem de inserção no Map = ordem dos cards na tela.
     function nextBrowserJob() {
-        const ativos = [];
-        companies.forEach((c) => { if (c.pending && c.pending.length) ativos.push(c); });
-        if (!ativos.length) return null;
-        const comp = ativos[brRr % ativos.length];
-        brRr++;
-        return { comp, chave: comp.pending.shift() };
+        for (const comp of companies.values()) {
+            if (comp.pending && comp.pending.length) return { comp, chave: comp.pending.shift() };
+        }
+        return null;
     }
 
     function pumpBrowser() {

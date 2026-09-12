@@ -305,20 +305,31 @@ function startJob(payload) {
         });
     }
 
-    const job = { id, createdAt: Date.now(), concurrency, companies, done: false, rr: 0, error: '', _obterToken: payload._obterToken || null };
+    const job = { id, createdAt: Date.now(), concurrency, companies, done: false, error: '', _obterToken: payload._obterToken || null };
     jobs.set(id, job);
     if (!companies.size) { job.done = true; job.error = 'nenhuma empresa com chaves válidas (44 dígitos)'; return job; }
     runJob(job).catch((e) => { job.error = (e && e.message) || 'erro interno'; job.done = true; });
     return job;
 }
 
+/**
+ * FILA, não round-robin. Devolve sempre a PRIMEIRA empresa da ordem que ainda tem chave
+ * pendente — os `concurrency` runners ficam todos dentro dela, e a seguinte só começa
+ * quando a anterior esvazia.
+ *
+ * Era round-robin (índice rotativo sobre os ativos): 4 empresas andavam juntas, as 4
+ * terminavam perto do fim e nenhum ZIP saía antes disso. Sequencial entrega o ZIP da 1ª
+ * empresa em 1/4 do tempo, e o total não piora — o gargalo é a API da SEFAZ, não o número
+ * de empresas abertas ao mesmo tempo.
+ *
+ * A ordem é a de INSERÇÃO do Map, que é a ordem em que a UI mandou `companies[]`. Quem
+ * decide a prioridade é o usuário, reordenando os cards antes de iniciar.
+ */
 function nextJob(job) {
-    const ativos = [];
-    job.companies.forEach((c) => { if (c.pending.length && !c.aborted) ativos.push(c); });
-    if (!ativos.length) return null;
-    const comp = ativos[job.rr % ativos.length];
-    job.rr++;
-    return { comp, chave: comp.pending.shift() };
+    for (const comp of job.companies.values()) {
+        if (comp.pending.length && !comp.aborted) return { comp, chave: comp.pending.shift() };
+    }
+    return null;
 }
 
 function tryResolveName(comp, xml) {
@@ -491,7 +502,19 @@ function getStatus(jobId) {
     const job = jobs.get(jobId);
     if (!job) return null;
     const companies = [];
-    job.companies.forEach((c) => companies.push(companyStatus(c)));
+    // `fila`: empresa que ainda não teve a vez. Sem isso a tela mostra N anéis em 0% e
+    // parece travada — é o preço de ter trocado o round-robin pela fila (ver nextJob).
+    // A ATIVA é a primeira com pendência; as de trás, que ainda não baixaram nada, estão
+    // na fila. `posicao` é 1-based e só existe para quem está esperando.
+    let jaAchouAtiva = false;
+    let posicao = 0;
+    job.companies.forEach((c) => {
+        const st = companyStatus(c);
+        const esperando = c.pending.length > 0 && !c.aborted;
+        if (esperando && jaAchouAtiva) { st.fila = true; st.posicao = ++posicao; }
+        else if (esperando) jaAchouAtiva = true;
+        companies.push(st);
+    });
     return { ok: true, jobId: job.id, done: job.done, error: job.error || '', companies };
 }
 
@@ -513,4 +536,7 @@ function getCompanyZip(jobId, groupId) {
     return { buffer: c.zipBuffer, name: c.zipName };
 }
 
-module.exports = { startJob, getStatus, getCompanyDetail, getCompanyZip, jobs };
+// `nextJob` exportado só para o teste da fila (worker/test/nfce-fila.test.mjs): é o ponto
+// onde a ordem é decidida, e testar pela borda HTTP exigiria um lote grande só para ver a
+// ordem aparecer.
+module.exports = { startJob, getStatus, getCompanyDetail, getCompanyZip, jobs, nextJob };
