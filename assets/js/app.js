@@ -856,16 +856,16 @@
             const span1 = darkMode.querySelector('span:nth-child(1)');
             const span2 = darkMode.querySelector('span:nth-child(2)');
             
-            if (savedTheme === 'dark' && span1 && span2) {
+            if (savedTheme !== 'light' && span1 && span2) {
                 document.body.classList.add('dark-mode-variables');
                 span1.classList.remove('active');
                 span2.classList.add('active');
-                document.documentElement.style.background = '#181a1e';
+                document.documentElement.style.background = 'var(--color-background)';
             } else if (span1 && span2) {
                 document.body.classList.remove('dark-mode-variables');
                 span1.classList.add('active');
                 span2.classList.remove('active');
-                document.documentElement.style.background = '#f6f6f9';
+                document.documentElement.style.background = 'var(--color-background)';
             }
         }
     }
@@ -1073,7 +1073,7 @@
                 span1.classList.toggle('active');
                 span2.classList.toggle('active');
             }
-            document.documentElement.style.background = document.body.classList.contains('dark-mode-variables') ? '#181a1e' : '#f6f6f9';
+            document.documentElement.style.background = 'var(--color-background)';
             if (currentUser) {
                 localStorage.setItem(`theme_${currentUser}`, document.body.classList.contains('dark-mode-variables') ? 'dark' : 'light');
             }
@@ -4047,7 +4047,10 @@ function workerHintHtml() {
         'Não detectei o worker. Funciona normal pelo navegador; para usar o Node: ' +
         '<a href="' + WORKER_DOWNLOAD_URL + '" download style="color:var(--color-primary); font-weight:700;">baixar o worker</a>, ' +
         'extrair e rodar <code>start.bat</code> (Windows) ou <code>start.sh</code> (Linux/Mac). ' +
-        'Precisa de <strong>Node.js</strong> instalado. Depois recarregue esta página.' +
+        // Desde que o start.bat resolve o runtime sozinho (baixa o Node oficial para dentro
+        // da propria pasta, com conferencia de SHA-256), exigir Node instalado virou mentira
+        // -- e mentira que assusta quem nao e tecnico e faz desistir do modo Node.
+        '<strong>Não precisa instalar nada</strong> nem ser administrador. Depois recarregue esta página.' +
         '</div></div>'
     );
 }

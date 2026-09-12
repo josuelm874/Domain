@@ -604,30 +604,63 @@ html {
 
 /* Dashboard Styles */
 :root {
-    --color-primary: #6C9BCF;
-    --color-danger: #FF0060;
-    --color-success: #1B9C85;
-    --color-warning: #F7D060;
-    --color-white: #fff;
-    --color-info-dark: #7d8da1;
-    --color-dark: #363949;
-    --color-light: rgba(132, 139, 200, 0.18);
-    --color-dark-variant: #677483;
-    --color-background: #f6f6f9;
-    --card-border-radius: 2rem;
+    /* ---------------------------------------------------------------------
+       TEMA CLARO. O escuro e o padrao do produto (ver .dark-mode-variables
+       abaixo); este aqui e a alternativa do botao de tema.
+
+       Os nomes das variaveis sao os historicos de propria para nao quebrar as
+       ~4800 linhas de CSS e as 8 abas que ja as consomem. A semantica real:
+         --color-white        superficie de card (NAO e branco no tema escuro)
+         --color-dark         texto primario
+         --color-dark-variant texto secundario
+         --color-info-dark    texto terciario / desabilitado
+         --color-light        preenchimento sutil (hover, trilho de barra)
+       Trocar o VALOR aqui repinta o sistema inteiro, porque quase todo o CSS
+       das paginas ja usa var(). Os hex soltos que sobraram sao a excecao a
+       caçar -- estao contados no PENDENCIAS.
+       --------------------------------------------------------------------- */
+    --color-primary: #E11D2E;
+    --color-primary-soft: rgba(225, 29, 46, 0.12);
+    --color-danger: #F04438;
+    --color-success: #17B26A;
+    --color-warning: #F59E0B;
+    --color-accent: #06B6D4;
+    --color-white: #FFFFFF;
+    --color-info-dark: #6B7280;
+    --color-dark: #111827;
+    --color-light: rgba(17, 24, 39, 0.06);
+    --color-dark-variant: #4B5563;
+    --color-background: #F5F6F8;
+    --color-border: rgba(17, 24, 39, 0.10);
+    --color-surface-2: #FAFBFC;
+    --card-border-radius: 0.9rem;
     --border-radius-1: 0.4rem;
-    --border-radius-2: 1.2rem;
-    --card-padding: 1.8rem;
-    --padding-1: 1.2rem;
-    --box-shadow: 0 2rem 3rem var(--color-light);
+    --border-radius-2: 0.7rem;
+    --card-padding: 1.25rem;
+    --padding-1: 1rem;
+    --box-shadow: 0 1px 2px rgba(17, 24, 39, 0.06), 0 8px 24px rgba(17, 24, 39, 0.05);
 }
+/* Paleta do design de referencia: fundo quase preto de leve viés frio, cards
+   elevados com borda de 1px (no escuro a borda separa melhor que a sombra --
+   sombra sobre preto some), vermelho de marca como primaria, verde para metrica
+   boa e ciano como serie secundaria dos graficos. */
 .dark-mode-variables {
-    --color-background: #181a1e;
-    --color-white: #202528;
-    --color-dark: #edeffd;
-    --color-dark-variant: #a3bdcc;
-    --color-light: rgba(0, 0, 0, 0.4);
-    --box-shadow: 0 2rem 3rem var(--color-light);
+    --color-background: #0B0E13;
+    --color-white: #141A23;
+    --color-surface-2: #1A212C;
+    --color-dark: #E6EAF2;
+    --color-dark-variant: #9AA4B5;
+    --color-info-dark: #6B7688;
+    --color-light: rgba(255, 255, 255, 0.06);
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-primary-soft: rgba(225, 29, 46, 0.16);
+    /* Sombra quase nula de proposito: o que da relevo no escuro e a borda. */
+    --box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+/* Card ganha contorno em vez de sombra pesada -- vale nos dois temas. */
+.dashboard-container .box,
+.dashboard-container aside .sidebar {
+    border: 1px solid var(--color-border);
 }
 .dashboard-container {
     font-size: 14px;
