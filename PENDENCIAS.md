@@ -512,11 +512,28 @@ aparece na tela nem fica no historico do shell. Imprime o `pbkdf2$...` para
 colar em Project -> Settings -> Environment Variables -> APP_ADMIN_PASSWORD_HASH,
 e refazer o deploy.
 
-**Ja blindado no codigo:** `scripts/gen-config.js` agora valida o FORMATO das
-env vars, nao so a presenca -- com o valor de hoje o build FALHA dizendo
-"parece uma URL; provavelmente o valor de outra variavel foi colado aqui".
+**Resolvido em 2026-09-16, em duas rodadas.** A primeira correcao colou o hash
+em APP_PASSWORD_SALT -- e a validacao de formato deixou passar, porque
+`length >= 32` aceita um hash de 51 caracteres folgado. O salt mudou de 40 para
+51 chars e, por alguns minutos, TODOS os hashes de `registeredUsers` estavam
+invalidos. O salt antigo foi restaurado antes de qualquer perda.
+
+**Blindagem final em `scripts/gen-config.js`**, com as tres regras que teriam
+barrado cada rodada:
+  1. FORMATO por variavel -- hash tem que casar `pbkdf2$` + base64; salt nao
+     pode comecar com `pbkdf2$` nem com `http`; SUPABASE_URL tem que ser
+     `*.supabase.co`.
+  2. NENHUMA env var pode ter valor IDENTICO a outra. Duas iguais e sempre
+     engano de copia -- foi o que aconteceu nas duas rodadas.
+  3. As mensagens nomeiam a causa sem imprimir o valor.
+
 E o login, se algo passar, diz "Acesso de administrador mal configurado neste
 ambiente" em vez de "Senha incorreta".
+
+**Licao que vale registrar:** `APP_PASSWORD_SALT` nao pode ser tratado como
+segredo descartavel. Trocar o salt invalida o login de fallback da equipe
+inteira de uma vez, e nao ha como recuperar os hashes antigos sem o valor
+original. Guarde-o fora da Vercel antes de qualquer edicao.
 
 ## Resolvido
 
