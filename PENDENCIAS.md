@@ -531,9 +531,40 @@ E o login, se algo passar, diz "Acesso de administrador mal configurado neste
 ambiente" em vez de "Senha incorreta".
 
 **Licao que vale registrar:** `APP_PASSWORD_SALT` nao pode ser tratado como
-segredo descartavel. Trocar o salt invalida o login de fallback da equipe
-inteira de uma vez, e nao ha como recuperar os hashes antigos sem o valor
-original. Guarde-o fora da Vercel antes de qualquer edicao.
+segredo descartavel. Trocar o salt invalida os hashes que dependem dele, e nao
+ha como recupera-los sem o valor original. Guarde-o fora da Vercel antes de
+qualquer edicao.
+
+**Encerrado em 2026-09-16:** o login de fallback local saiu. Autenticacao e so
+Supabase Auth, entao o salt ja NAO tem poder sobre o login de ninguem -- sobrou
+so para o hash do contribuinte (ver P12). `APP_ADMIN_PASSWORD_HASH` pode ser
+APAGADA da Vercel.
+
+### P12 — `contributors[].password` e escrito e NUNCA lido
+
+Achado ao migrar o login (2026-09-16). O cadastro de contribuinte pede uma senha,
+passa por `generateSecureHash` (PBKDF2, irreversivel) e grava em
+`contributors[].password` / `passwordHash`. **Nenhum codigo le esse campo de
+volta** -- nao ha verificacao, nao ha uso no worker, nao ha nada.
+
+Duas consequencias:
+
+1. Quem preenche o campo acredita que a senha ficou guardada. Ela nao ficou: um
+   hash PBKDF2 nao volta a ser senha. Se a intencao era guardar a senha do portal
+   do contribuinte para reuso, isso NUNCA funcionou.
+2. E o unico motivo pelo qual `generateSecureHash` e, por tabela,
+   `APP_PASSWORD_SALT` ainda existem no cliente. Enquanto esse campo existir, o
+   salt continua viajando para o navegador de todo visitante.
+
+**Decidir qual dos dois:**
+- Se a senha precisa ser REUSADA (login no portal): hash esta errado -- tem que
+  ser cifra reversivel com chave no servidor, nunca no navegador.
+- Se a senha nao serve para nada: apagar o campo do formulario e do modelo. Ai
+  `generateSecureHash` e `APP_PASSWORD_SALT` somem junto, e o incidente de hoje
+  (salt trocado derrubando o login de todos) deixa de ser possivel.
+
+Nao mexi nisso ao migrar o login porque e outra feature e a escolha acima e de
+produto, nao de codigo.
 
 ## Resolvido
 
