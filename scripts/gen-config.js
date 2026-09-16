@@ -13,7 +13,6 @@
 //   SUPABASE_PUBLISHABLE_KEY  ← SUPABASE_CONFIG.publishableKey
 //   SUPABASE_ANON_KEY         ← SUPABASE_CONFIG.anonKey        (opcional; vazio se não usar)
 //   APP_PASSWORD_SALT         ← APP_CONFIG.passwordSalt
-//   APP_ADMIN_PASSWORD_HASH   ← APP_CONFIG.adminPasswordHash
 //   ICMS_API_URL              ← APP_CONFIG.icmsApiUrl          (opcional; usa default de prod)
 
 const fs = require('fs');
@@ -25,7 +24,9 @@ if (!onVercel) {
     process.exit(0);
 }
 
-const required = ['SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'APP_PASSWORD_SALT', 'APP_ADMIN_PASSWORD_HASH'];
+// APP_ADMIN_PASSWORD_HASH saiu em 2026-09-16: o login virou Supabase-only e o
+// super-admin `adm` deixou de existir. A variavel pode ser APAGADA da Vercel.
+const required = ['SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'APP_PASSWORD_SALT'];
 const missing = required.filter((k) => !process.env[k]);
 if (missing.length) {
     console.error('[gen-config] env vars obrigatórias faltando no Vercel: ' + missing.join(', '));
@@ -48,13 +49,6 @@ const clean = (v) => (v == null ? '' : String(v).trim().replace(/^(['"])([\s\S]*
 // auth quebrada silenciosa — agora aplicada ao FORMATO, não só à presença.
 const formatos = [
     {
-        nome: 'APP_ADMIN_PASSWORD_HASH',
-        valor: clean(process.env.APP_ADMIN_PASSWORD_HASH),
-        // 'pbkdf2$' + base64 de 32 bytes (44 chars com o padding '=')
-        ok: (v) => /^pbkdf2\$[A-Za-z0-9+/]{42,44}={0,2}$/.test(v),
-        comoGerar: 'gere com: node scripts/gerar-hash-admin.mjs',
-    },
-    {
         nome: 'APP_PASSWORD_SALT',
         valor: clean(process.env.APP_PASSWORD_SALT),
         // `length >= 32` sozinho era frouxo demais: em 2026-09-16 o HASH (51 chars)
@@ -75,7 +69,6 @@ const formatos = [
 // vezes seguidas no mesmo dia: primeiro a URL da API no hash do admin, depois o
 // hash do admin no salt. Nenhum par aqui tem motivo legítimo para coincidir.
 const todas = [
-    ['APP_ADMIN_PASSWORD_HASH', clean(process.env.APP_ADMIN_PASSWORD_HASH)],
     ['APP_PASSWORD_SALT', clean(process.env.APP_PASSWORD_SALT)],
     ['SUPABASE_URL', clean(process.env.SUPABASE_URL)],
     ['SUPABASE_PUBLISHABLE_KEY', clean(process.env.SUPABASE_PUBLISHABLE_KEY)],
@@ -114,7 +107,6 @@ if (invalidas.length) {
 const cfg = `// GERADO no build do Vercel por scripts/gen-config.js — não editar à mão.
 window.APP_CONFIG = {
     passwordSalt: ${JSON.stringify(clean(process.env.APP_PASSWORD_SALT))},
-    adminPasswordHash: ${JSON.stringify(clean(process.env.APP_ADMIN_PASSWORD_HASH))},
     icmsApiUrl: ${JSON.stringify(clean(process.env.ICMS_API_URL) || 'https://softtech-icms-api.onrender.com/api/icms')},
 };
 window.SUPABASE_CONFIG = {

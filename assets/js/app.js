@@ -100,53 +100,15 @@
         const b64 = btoa(String.fromCharCode(...new Uint8Array(bits)));
         return 'pbkdf2$' + b64;
     };
-    /**
-     * Verifica password contra hash. Aceita o formato novo (pbkdf2$...) e o legacy.
-     * Se a senha bater no legacy, retorna { ok: true, upgrade: novoHash } para o caller
-     * persistir o upgrade silencioso no Supabase/localStorage.
-     * @param {string} password
-     * @param {string} storedHash
-     * @returns {Promise<{ok: boolean, upgrade?: string}>}
-     */
-    window.verifyPassword = async function verifyPassword(password, storedHash) {
-        if (!storedHash) return { ok: false };
-        if (storedHash.startsWith('pbkdf2$')) {
-            const candidate = await window.generateSecureHash(password);
-            return { ok: candidate === storedHash };
-        }
-        // Legacy: aceita uma única vez e força upgrade.
-        const legacy = window._legacyUnsafeHash(password);
-        if (legacy === storedHash) {
-            const upgraded = await window.generateSecureHash(password);
-            return { ok: true, upgrade: upgraded };
-        }
-        return { ok: false };
-    };
-    /**
-     * Hash legacy (btoa+reverse). MANTIDO APENAS para validar senhas antigas
-     * no primeiro login após esta migração; novos cadastros usam PBKDF2.
-     * NÃO usar em código novo.
-     * @deprecated
-     */
-    window._legacyUnsafeHash = function _legacyUnsafeHash(input) {
-        const s1 = "JosueProg2024!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
-        const s2 = "DominiumBetaSystem!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
-        const s3 = "AdminSecurity404!@#$%^&*()_+{}|:<>?[]\\;'\",./`~";
-        let h = input;
-        for (const salt of [s1, s2, s3, s1, s2, s3]) {
-            h = btoa((h + salt).split('').reverse().join(''));
-        }
-        h = btoa((h + s1 + s2 + s3).split('').reverse().join(''));
-        h = btoa((h + s1 + s2 + s3).split('').reverse().join(''));
-        return h;
-    };
-    // Shim deprecated: cadastros antigos ainda chamam isto sincronamente.
-    // Novos cadastros DEVEM usar generateSecureHash (async).
-    window.generateUltraSecureHash = function(input) {
-        console.warn('[DEPRECATED] generateUltraSecureHash síncrono. Use generateSecureHash (async).');
-        return window._legacyUnsafeHash(input);
-    };
-    
+    // `verifyPassword`, `_legacyUnsafeHash` e `generateUltraSecureHash` sairam em
+    // 2026-09-16 junto com o login de fallback: nenhum deles tinha mais chamador.
+    // Quem valida senha agora e o Supabase Auth, no servidor.
+    //
+    // `generateSecureHash` acima FICA porque o cadastro de contribuinte ainda a chama
+    // (campo `password`/`passwordHash`). Ver PENDENCIAS: esse hash e ESCRITO e nunca
+    // lido por ninguem -- enquanto ele existir, APP_PASSWORD_SALT tem que continuar
+    // viajando para o navegador.
+
     // Função auxiliar para garantir que elementos sejam encontrados
     const ensureElements = () => {
         const loginContainer = document.querySelector('.login-container');
@@ -536,337 +498,36 @@
             console.info('Supabase Auth falhou, tentando fallback local:', result.error);
         }
 
-        // ============== TENTATIVA 2: PBKDF2 local (compat. com cadastros antigos) ==============
-        let registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-        
-        // Se não há usuários no localStorage, tentar carregar do Supabase
-        if (registeredUsers.length === 0 && window.supabaseSync && window.supabaseSync.isConfigured()) {
-            console.log('📥 Nenhum usuário no localStorage, tentando carregar do Supabase...');
-            
-            // Mostrar indicador de carregamento
-            const loginButton = loginForm?.querySelector('button[type="submit"]');
-            const originalButtonText = loginButton?.textContent || '';
-            if (loginButton) {
-                loginButton.disabled = true;
-                loginButton.textContent = 'Carregando usuários...';
-            }
-            
-            try {
-                // Tentar carregar dados do Supabase diretamente
-                registeredUsers = await loadDataSync('registeredUsers', []);
-                console.log(`✅ Carregados ${registeredUsers.length} usuários do Supabase`);
-                
-                // Se ainda estiver vazio, tentar sincronizar
-                if (registeredUsers.length === 0) {
-                    console.log('🔄 Tentando sincronizar dados do Supabase...');
-                    if (loginButton) {
-                        loginButton.textContent = 'Sincronizando...';
-                    }
-                    await window.supabaseSync.syncAll(['registeredUsers']);
-                    registeredUsers = await loadDataSync('registeredUsers', []);
-                    console.log(`✅ Após sincronização: ${registeredUsers.length} usuários carregados`);
-                }
-            } catch (error) {
-                console.warn('⚠️ Erro ao carregar usuários do Supabase:', error);
-                // Continuar com array vazio - admin sempre pode fazer login
-            } finally {
-                // Restaurar botão
-                if (loginButton) {
-                    loginButton.disabled = false;
-                    loginButton.textContent = originalButtonText;
-                }
-            }
-        }
-        
-        // Verificar usuários cadastrados dinamicamente
-        const user = registeredUsers.find(u => u.username === username);
+        // Sem fallback local. Se o Supabase recusou, a resposta e essa -- nao ha
+        // segundo caminho de autenticacao no cliente.
+        //
+        // O fallback PBKDF2 contra `registeredUsers` e o super-admin `adm` contra
+        // APP_CONFIG.adminPasswordHash sairam em 2026-09-16, depois de auditar o
+        // banco: 8 usuarios no espelho, 8 contas em auth.users, zero orfaos, e 308
+        // logins pelo Supabase. O fallback ja nao autenticava ninguem -- so mantinha
+        // hash de senha no navegador e obrigava o salt a viajar para o cliente.
+        mostrarErroLogin(
+            window.supabaseSync?.isConfigured?.()
+                ? 'Usuário ou senha incorretos.'
+                : 'Não foi possível falar com o servidor de autenticação. Tente de novo em instantes.'
+        );
+    }
 
-        // Verificar se é usuário cadastrado
-        if (user) {
-            const verification = await window.verifyPassword(password, user.password);
-            if (verification.ok) {
-                // Upgrade silencioso: se a senha foi validada via legacy hash, persistir o novo.
-                if (verification.upgrade) {
-                    try {
-                        const all = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-                        const idx = all.findIndex(u => u.username === user.username);
-                        if (idx >= 0) {
-                            all[idx].password = verification.upgrade;
-                            localStorage.setItem('registeredUsers', JSON.stringify(all));
-                            if (typeof saveDataSync === 'function') {
-                                saveDataSync('registeredUsers', all).catch(() => {});
-                            }
-                            console.log(`🔐 Hash da senha do usuário ${user.username} migrado para PBKDF2.`);
-                        }
-                    } catch (e) {
-                        console.warn('Falha ao persistir upgrade de hash:', e);
-                    }
-                }
-                // "Lembrar de mim" agora persiste APENAS o username.
-                const rememberMe = rememberMeCheckbox?.checked || false;
-                if (rememberMe) {
-                    localStorage.setItem('savedUsername', username);
-                } else {
-                    localStorage.removeItem('savedUsername');
-                }
-                localStorage.removeItem('savedPassword'); // limpa resíduo antigo
-
-                currentUser = user.username;
-                window.currentUser = user.username;
-                
-                // #region agent log
-                // #endregion
-                // Usar função centralizada para mostrar dashboard
-                loadUserPreferences();
-                showDashboardAfterLogin();
-                const userNameElement = document.querySelector('#current-user-name');
-                const adminLabelElement = document.querySelector('#admin-label');
-                const profileImageElement = document.querySelector('#profile-image');
-                if (userNameElement) {
-                    userNameElement.textContent = user.name;
-                }
-                if (adminLabelElement) {
-                    adminLabelElement.style.display = (user.control === 'administrador') ? 'block' : 'none';
-                }
-                if (profileImageElement) {
-                    profileImageElement.src = user.profileImage || profileImages['default'];
-                    console.log(`Imagem de perfil atualizada para ${currentUser}: ${profileImageElement.src}`);
-                }
-            } else {
-                if (loginForm) {
-                    const errorDiv = document.createElement('div');
-                    errorDiv.className = 'error-message';
-                    errorDiv.textContent = 'Senha incorreta. Tente novamente.';
-                    loginForm.appendChild(errorDiv);
-                    setTimeout(() => errorDiv.remove(), 3000);
-                }
-            }
-        } else if (username === 'adm') {
-            // Login do super-admin: hash agora vem de window.APP_CONFIG.adminPasswordHash
-            // (definido em assets/js/config.js, gitignored). Aceita formato novo "pbkdf2$..."
-            // e legacy (com upgrade silencioso).
-            const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
-
-            // Hash presente mas fora do formato = variavel de ambiente com o valor
-            // errado, nao senha errada. Em producao isso ja aconteceu (a URL da API
-            // de ICMS foi colada em APP_ADMIN_PASSWORD_HASH) e a tela dizia "Senha
-            // incorreta" -- mandando o usuario tentar de novo uma senha que nunca
-            // ia funcionar. O build agora barra isso (scripts/gen-config.js), e aqui
-            // fica a rede: se passar, pelo menos diz a verdade.
-            if (adminHash && !/^pbkdf2\$[A-Za-z0-9+/]{42,44}={0,2}$/.test(adminHash)) {
-                console.error('❌ adminPasswordHash com formato inválido. Esperado "pbkdf2$..." — veja scripts/gerar-hash-admin.mjs.');
-                if (loginForm) {
-                    const errorDiv = document.createElement('div');
-                    errorDiv.className = 'error-message';
-                    errorDiv.textContent = 'Acesso de administrador mal configurado neste ambiente. Não é a sua senha — avise o responsável.';
-                    loginForm.appendChild(errorDiv);
-                    setTimeout(() => errorDiv.remove(), 6000);
-                }
-                return;
-            }
-
-            if (!adminHash) {
-                console.error('❌ adminPasswordHash não configurado em window.APP_CONFIG. Veja config.example.js.');
-                if (loginForm) {
-                    const errorDiv = document.createElement('div');
-                    errorDiv.className = 'error-message';
-                    errorDiv.textContent = 'Admin não configurado. Contate o responsável.';
-                    loginForm.appendChild(errorDiv);
-                    setTimeout(() => errorDiv.remove(), 3000);
-                }
-                return;
-            }
-
-            const adminVerification = await window.verifyPassword(password, adminHash);
-            if (adminVerification.ok) {
-                currentUser = 'adm';
-                window.currentUser = 'adm';
-
-                if (adminVerification.upgrade) {
-                    console.warn('🔐 Hash do admin ainda em formato legacy. Atualize window.APP_CONFIG.adminPasswordHash para:', adminVerification.upgrade);
-                }
-
-                // "Lembrar de mim" persiste apenas username.
-                const rememberMe = rememberMeCheckbox?.checked || false;
-                if (rememberMe) {
-                    localStorage.setItem('savedUsername', username);
-                } else {
-                    localStorage.removeItem('savedUsername');
-                }
-                localStorage.removeItem('savedPassword');
-                
-                // Usar função centralizada para mostrar dashboard
-                loadUserPreferences();
-                showDashboardAfterLogin();
-                
-                // Configurar perfil de admin
-                const userNameElement = document.querySelector('#current-user-name');
-                const adminLabelElement = document.querySelector('#admin-label');
-                const profileImageElement = document.querySelector('#profile-image');
-                if (userNameElement) {
-                    userNameElement.textContent = 'Administrador';
-                }
-                if (adminLabelElement) {
-                    adminLabelElement.style.display = 'none';
-                }
-                if (profileImageElement) {
-                    profileImageElement.src = profileImages['default'];
-                    console.log(`Imagem de perfil atualizada para ${currentUser}: ${profileImageElement.src}`);
-                }
-            } else {
-                // Verificar se é um usuário administrador cadastrado (via verifyPassword com upgrade).
-                const allUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-                const adminCandidates = allUsers.filter(u => u.control === 'administrador');
-                let adminUser = null;
-                let adminUpgrade = null;
-                for (const candidate of adminCandidates) {
-                    const v = await window.verifyPassword(password, candidate.password);
-                    if (v.ok) { adminUser = candidate; adminUpgrade = v.upgrade; break; }
-                }
-
-                if (adminUser) {
-                    currentUser = adminUser.username;
-                    window.currentUser = adminUser.username;
-
-                    if (adminUpgrade) {
-                        const idx = allUsers.findIndex(u => u.username === adminUser.username);
-                        if (idx >= 0) {
-                            allUsers[idx].password = adminUpgrade;
-                            localStorage.setItem('registeredUsers', JSON.stringify(allUsers));
-                            if (typeof saveDataSync === 'function') {
-                                saveDataSync('registeredUsers', allUsers).catch(() => {});
-                            }
-                        }
-                    }
-
-                    const rememberMe = rememberMeCheckbox?.checked || false;
-                    if (rememberMe) {
-                        localStorage.setItem('savedUsername', adminUser.username);
-                    } else {
-                        localStorage.removeItem('savedUsername');
-                    }
-                    localStorage.removeItem('savedPassword');
-                    
-                    // Usar função centralizada para mostrar dashboard
-                    loadUserPreferences();
-                    showDashboardAfterLogin();
-                    
-                    // Configurar perfil de admin user
-                    const userNameElement = document.querySelector('#current-user-name');
-                    const adminLabelElement = document.querySelector('#admin-label');
-                    const profileImageElement = document.querySelector('#profile-image');
-                    if (userNameElement) {
-                        userNameElement.textContent = adminUser.name;
-                    }
-                    if (adminLabelElement) {
-                        adminLabelElement.style.display = 'block';
-                    }
-                    if (profileImageElement) {
-                        profileImageElement.src = adminUser.profileImage || profileImages['default'];
-                    }
-                } else {
-                    if (loginForm) {
-                        const errorDiv = document.createElement('div');
-                        errorDiv.className = 'error-message';
-                        errorDiv.textContent = 'Senha incorreta. Tente novamente.';
-                        loginForm.appendChild(errorDiv);
-                        setTimeout(() => errorDiv.remove(), 3000);
-                    }
-                }
-            }
-        } else {
-            if (loginForm) {
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'error-message';
-                errorDiv.textContent = 'Usuário não encontrado. Verifique se está cadastrado.';
-                loginForm.appendChild(errorDiv);
-                setTimeout(() => errorDiv.remove(), 3000);
-            }
-        }
+    /** Mensagem de erro dentro do cartao de login, com auto-remocao. */
+    function mostrarErroLogin(texto) {
+        if (!loginForm) return;
+        loginForm.querySelectorAll('.error-message').forEach((el) => el.remove());
+        const div = document.createElement('div');
+        div.className = 'error-message';
+        div.setAttribute('role', 'alert');
+        div.textContent = texto;
+        loginForm.appendChild(div);
+        setTimeout(() => div.remove(), 5000);
     }
 
     // NOTA: a função `window.generateUltraSecureHash` foi movida para o topo do IIFE
     // como shim deprecated que apenas chama `_legacyUnsafeHash` e emite warning.
     // A implementação real (PBKDF2) está em `window.generateSecureHash`. Veja início do arquivo.
-
-    async function handleAdminLogin() {
-        // Função legada (admin-form não está mais ativo no HTML — ver Dominium.html:379).
-        // Mantida para compatibilidade caso seja reativada no futuro.
-        if (!adminPassword) return;
-
-        const password = adminPassword.value.trim();
-        const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
-
-        if (!adminHash) {
-            console.error('❌ adminPasswordHash não configurado em window.APP_CONFIG.');
-            return;
-        }
-
-        const adminVerification = await window.verifyPassword(password, adminHash);
-        const registeredUsers = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-
-        // Procurar admin cadastrado com verificação async.
-        let adminUser = null;
-        for (const u of registeredUsers.filter(u => u.control === 'administrador')) {
-            const v = await window.verifyPassword(password, u.password);
-            if (v.ok) { adminUser = u; break; }
-        }
-
-        if (adminVerification.ok) {
-            // #region agent log
-            // #endregion
-            currentUser = 'adm';
-            window.currentUser = 'adm';
-            
-            // Usar função centralizada para mostrar dashboard
-            loadUserPreferences();
-            showDashboardAfterLogin();
-            // MODIFICAÇÃO: Definir nome como "Administrador", ocultar "Admin" e usar profile-1.png
-            const userNameElement = document.querySelector('#current-user-name');
-            const adminLabelElement = document.querySelector('#admin-label');
-            const profileImageElement = document.querySelector('#profile-image');
-            if (userNameElement) {
-                userNameElement.textContent = 'Administrador'; // Nome fixo em vez de capitalizeName('adm')
-            }
-            if (adminLabelElement) {
-                adminLabelElement.style.display = 'none'; // Sempre ocultar para adm
-            }
-            if (profileImageElement) {
-                profileImageElement.src = profileImages['default'];
-                console.log(`Imagem de perfil atualizada para ${currentUser}: ${profileImageElement.src}`);
-            }
-        } else if (adminUser) {
-            currentUser = adminUser.username;
-            window.currentUser = adminUser.username;
-            
-            // Usar função centralizada para mostrar dashboard
-            loadUserPreferences();
-            showDashboardAfterLogin();
-            
-            const userNameElement = document.querySelector('#current-user-name');
-            const adminLabelElement = document.querySelector('#admin-label');
-            const profileImageElement = document.querySelector('#profile-image');
-            if (userNameElement) {
-                userNameElement.textContent = adminUser.name;
-            }
-            if (adminLabelElement) {
-                adminLabelElement.style.display = 'block';
-            }
-            if (profileImageElement) {
-                profileImageElement.src = adminUser.profileImage || profileImages['default'];
-                console.log(`Imagem de perfil atualizada para ${currentUser}: ${profileImageElement.src}`);
-            }
-        } else {
-            if (adminForm) {
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'error-message';
-                errorDiv.textContent = 'Senha incorreta. Tente novamente.';
-                adminForm.appendChild(errorDiv);
-                setTimeout(() => errorDiv.remove(), 3000);
-            }
-        }
-    }
-
 
     function loadUserPreferences() {
         if (currentUser && darkMode) {
@@ -1832,8 +1493,8 @@
             <div class="modal-content">
                 <span class="material-icons-sharp">lock</span>
                 <h3>Acesso Restrito</h3>
-                <p>Digite a senha do Administrador para acessar Analytics</p>
-                <input type="password" id="analytics-password" placeholder="Senha do Administrador" autofocus>
+                <p>Confirme a SUA senha para abrir os Indicadores</p>
+                <input type="password" id="analytics-password" placeholder="Sua senha" autofocus autocomplete="current-password">
                 <p class="error-message" id="analytics-error" style="display: none; color: var(--color-danger); margin-top: 1rem; font-size: 0.9rem;"></p>
             </div>
         `;
@@ -1842,7 +1503,11 @@
         const passwordInput = document.getElementById('analytics-password');
         const errorMsg = document.getElementById('analytics-error');
 
-        // Verifica senha do admin contra window.APP_CONFIG.adminPasswordHash (async, PBKDF2).
+        // Re-autentica o usuario ATUAL no Supabase. Antes isto comparava uma senha de
+        // administrador COMPARTILHADA contra APP_CONFIG.adminPasswordHash -- uma senha
+        // so para todo mundo, guardada como hash no navegador. Agora cada pessoa
+        // confirma a PROPRIA senha: quem abriu os Indicadores fica no audit_log, e nao
+        // ha mais segredo compartilhado para vazar.
         async function checkAnalyticsAdminPassword() {
             const password = passwordInput.value.trim();
             if (!password) {
@@ -1850,17 +1515,19 @@
                 errorMsg.style.display = 'block';
                 return;
             }
-            const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
-            if (!adminHash) {
-                errorMsg.textContent = 'Admin não configurado (APP_CONFIG.adminPasswordHash).';
+            if (!window.supabaseSync?.auth?.signIn || !window.supabaseSync.isConfigured()) {
+                errorMsg.textContent = 'Servidor de autenticação indisponível. Tente novamente em instantes.';
                 errorMsg.style.display = 'block';
                 return;
             }
-            const verification = await window.verifyPassword(password, adminHash);
+
+            passwordInput.disabled = true;
+            errorMsg.style.display = 'none';
+            // Mesmo usuario da sessao: o signIn apenas renova o token, nao troca de conta.
+            const verification = await window.supabaseSync.auth.signIn(window.currentUser, password);
+            passwordInput.disabled = false;
+
             if (verification.ok) {
-                if (verification.upgrade) {
-                    console.warn('🔐 Atualize APP_CONFIG.adminPasswordHash para:', verification.upgrade);
-                }
                 modal.classList.add('fade-out');
                 setTimeout(() => {
                     modal.remove();
@@ -13036,14 +12703,15 @@ async function completeUserRegistration(name, username, control, password, profi
         
         const existingUser = existingUsers[userIndex];
         
-        // Atualizar dados do usuário (hash com PBKDF2 quando nova senha é informada).
-        const newPasswordHash = password ? await window.generateSecureHash(password) : existingUser.password;
+        // O espelho local NAO guarda mais senha. Quem autentica e o Supabase Auth, e
+        // manter um hash aqui so criava uma segunda copia da credencial no navegador --
+        // copia que ninguem verificava desde que o login virou Supabase-only.
+        const { password: _senhaAntiga, ...semSenha } = existingUser;
         existingUsers[userIndex] = {
-            ...existingUser,
+            ...semSenha,
             name: name,
             control: control,
             profileImage: profileImage,
-            password: newPasswordHash,
             updatedAt: new Date().toISOString(),
             updatedBy: window.currentUser
         };
@@ -13121,15 +12789,14 @@ async function completeUserRegistration(name, username, control, password, profi
             }
         }
 
-        // 2) Só agora grava o espelho local (preserva fluxos legados que dependem de
-        //    registeredUsers). Hash PBKDF2-SHA-256 da senha.
-        const hashedPassword = await window.generateSecureHash(password);
+        // 2) Só agora grava o espelho local, que serve para LISTAR (nome, foto,
+        //    permissao) -- nunca para autenticar. Sem campo de senha: a credencial vive
+        //    exclusivamente em auth.users desde 2026-09-16.
         const newUser = {
             id: Date.now(),
             name: name,
             username: username,
             control: control,
-            password: hashedPassword,
             profileImage: profileImage,
             createdAt: new Date().toISOString(),
             createdBy: window.currentUser

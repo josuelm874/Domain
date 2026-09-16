@@ -5,14 +5,11 @@
  * Setup inicial:
  *   1. Configurar SUPABASE_CONFIG (URL/key abaixo).
  *   2. Configurar APP_CONFIG.passwordSalt (gerar string aleatória ≥ 32 chars).
- *   3. Gerar `adminPasswordHash` para o fallback admin local:
- *        - Abra Dominium.html no navegador.
- *        - DevTools (F12) → Console:  await window.generateSecureHash('SUA_SENHA')
- *        - Copie o resultado (formato "pbkdf2$...").
- *   4. Criar primeiro admin no Supabase Auth:
+ *   3. Criar o primeiro admin no Supabase Auth (é o ÚNICO caminho de login —
+ *      o fallback local saiu em 2026-09-16):
  *        - Supabase Dashboard → Authentication → Add user.
  *        - Email: admin@softtech-fiscal.local   (padrão: <username>@softtech-fiscal.local)
- *        - Password: a mesma do passo 3.
+ *        - Password: a que a pessoa vai usar para entrar.
  *        - User metadata (JSON):
  *            { "username": "admin", "full_name": "Administrador", "control": "administrador" }
  *        - Auto Confirm User: ON.
@@ -23,12 +20,9 @@
 
 // ----- Hash + admin local -----
 window.APP_CONFIG = {
-    // Salt usado em PBKDF2. Defina UMA VEZ — trocar invalida hashes existentes.
+    // Salt do PBKDF2. Já NÃO vale para login (isso é Supabase Auth agora); sobrou
+    // só para o hash do cadastro de contribuinte. Defina UMA VEZ.
     passwordSalt: 'TROQUE_PARA_UM_SALT_UNICO_DESTA_INSTANCIA_min_32_chars',
-
-    // Hash do super-admin local (fallback). Necessário enquanto a UI ainda dá fallback
-    // a auth local; após migração completa para Supabase Auth, pode ser removido.
-    adminPasswordHash: 'pbkdf2$COLE_AQUI_O_HASH_GERADO',
 
     // URL base da API Python de ICMS ST. Local: http://localhost:5000/api/icms.
     // Em produção, apontar para o serviço hospedado
