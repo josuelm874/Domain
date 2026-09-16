@@ -7,7 +7,6 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Sharp" rel="stylesheet">
     <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/main.css">
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -24,85 +23,49 @@
 <body>
     <!-- Login Section -->
     <div class="login-container" id="dominium-login">
-        <div class="login">
-            <img src="assets/images/Background.jpg" alt="login background" class="login__img">
-            
-            <form id="login-form" class="login__form">
-                <h1 class="login__title">Login</h1>
+        <div class="login-scene" aria-hidden="true"></div>
 
-                <div class="login__content">
-                    <div class="login__box">
-                        <i class="bx bx-lock-alt"></i>
-                        
-                        <div class="login__box-input">
-                            <input type="text" id="login-username" required class="login__input" placeholder="" autocomplete="username">
-                            <label for="login-username" class="login__label">Username</label>
-                        </div>
-                    </div>
+        <main class="login-card">
+            <img src="assets/images/logo.gif" alt="" class="login-card__mark">
 
-                    <div class="login__box">
-                        <i class="ri-lock-2-line login__icon"></i>
+            <h1 class="login-card__title">Entrar</h1>
+            <p class="login-card__subtitle">Informe seus dados para acessar o sistema.</p>
 
-                        <div class="login__box-input">
-                            <input type="password" id="login-password" required class="login__input" placeholder="" autocomplete="current-password">
-                            <label for="login-password" class="login__label">Password</label>
-                            <i class="ri-eye-off-line login__eye" id="login-eye"></i>
-                        </div>
-                    </div>
+            <form id="login-form" class="login-card__form" novalidate>
+                <div class="login-field">
+                    <label for="login-username" class="sr-only">Usu&aacute;rio</label>
+                    <input type="text" id="login-username" class="login-field__input" required
+                           autocomplete="username" placeholder="Usu&aacute;rio">
                 </div>
 
-                <div class="login__check">
-                    <div class="login__check-group">
-                        <input type="checkbox" id="rememberMe" class="login__check-input">
-                        <label for="rememberMe" class="login__check-label">Lembrar de mim</label>
-                    </div>
+                <div class="login-field">
+                    <label for="login-password" class="sr-only">Senha</label>
+                    <input type="password" id="login-password" class="login-field__input" required
+                           autocomplete="current-password" placeholder="Senha">
+                    <button type="button" class="login-field__eye" id="login-eye"
+                            aria-label="Mostrar senha" aria-pressed="false">
+                        <span class="material-icons-sharp">visibility_off</span>
+                    </button>
                 </div>
 
-                <button type="submit" class="login__button" id="login-button">Login</button>
+                <p class="login-card__hint">Esqueceu a senha? Fale com o administrador.</p>
+
+                <label class="login-remember">
+                    <input type="checkbox" id="rememberMe">
+                    <span>Lembrar meu usu&aacute;rio neste computador</span>
+                </label>
+
+                <button type="submit" class="login-card__button" id="login-button">Entrar</button>
             </form>
-        </div>
-        
-        <!-- Admin Login (oculto por padrão, pode ser ativado se necessário) -->
-        <div class="admin-login-container" id="admin-login-container" style="display: none;">
-            <div class="login">
-                <img src="assets/images/Background.jpg" alt="login background" class="login__img">
-                
-                <form id="admin-form" class="login__form">
-                    <h1 class="login__title">Administrador</h1>
 
-                    <div class="login__content">
-                        <div class="login__box">
-                            <i class="bx bx-lock-alt"></i>
-                            
-                            <div class="login__box-input">
-                                <input type="text" id="admin-username" value="ADM" required readonly class="login__input" placeholder="" autocomplete="username">
-                                <label for="admin-username" class="login__label">Username</label>
-                            </div>
-                        </div>
-
-                        <div class="login__box">
-                            <i class="ri-lock-2-line login__icon"></i>
-
-                            <div class="login__box-input">
-                                <input type="password" id="admin-password" required class="login__input" placeholder="" autocomplete="current-password">
-                                <label for="admin-password" class="login__label">Password</label>
-                                <i class="ri-eye-off-line login__eye" id="admin-eye"></i>
-                            </div>
-                        </div>
-                    </div>
-
-                    <button type="submit" class="login__button">Acessar Sistema</button>
-                    
-                    <div style="text-align: center; margin-top: 1rem;">
-                        <a href="#" class="SignInLink" style="color: var(--white-color); text-decoration: none; font-size: var(--small-font-size);">Retornar para o Login de Auxiliar</a>
-                    </div>
-                </form>
-            </div>
-        </div>
+            <p class="login-card__footer">
+                Acesso restrito &agrave; equipe. Novos usu&aacute;rios s&atilde;o criados pelo administrador.
+            </p>
+        </main>
     </div>
 
     <!-- Dashboard Section -->
-    <div class="dashboard-container" style="display: none; position: relative; width: 100%; min-height: 100vh; background-color: var(--color-background, #f6f6f9);">
+    <div class="dashboard-container" data-page="dashboard" style="display: none; position: relative; width: 100%; min-height: 100vh; background-color: var(--color-background, #f6f6f9);">
         <div class="container">
             <!-- Sidebar Section -->
             <aside>
@@ -110,36 +73,39 @@
                     <div class="logo">
                         <img src="assets/images/logo.gif" alt="Logo" class="sidebar-logo-img logo-dark">
                         <img src="assets/images/logo-light.gif" alt="Logo" class="sidebar-logo-img logo-light">
-                        <h2>Josue<span class="danger">Prog</span></h2>
+                        <div class="logo-text">
+                            <h2>Josue<span class="danger">Prog</span></h2>
+                            <small>Automa&ccedil;&atilde;o Cont&aacute;bil e Fiscal</small>
+                        </div>
                     </div>
                     <div class="close" id="close-btn">
                         <span class="material-icons-sharp">close</span>
                     </div>
                 </div>
-                <div class="sidebar">
+                <nav class="sidebar" aria-label="Navega&ccedil;&atilde;o principal">
                     <a href="#" data-page="dashboard" class="active">
-                        <span class="material-icons-sharp">dashboard</span>
-                        <h3>Dashboard</h3>
+                        <span class="material-icons-sharp">home</span>
+                        <h3>Vis&atilde;o Geral</h3>
                     </a>
                     <a href="#" data-page="analytics">
                         <span class="material-icons-sharp">insights</span>
-                        <h3>Analytics</h3>
+                        <h3>Indicadores</h3>
                     </a>
                     <a href="#" data-page="apuration">
-                        <span class="material-icons-sharp">person_outline</span>
-                        <h3>Apuration</h3>
+                        <span class="material-icons-sharp">fact_check</span>
+                        <h3>Apura&ccedil;&atilde;o</h3>
                     </a>
                     <a href="#" data-page="fortes-correction">
-                        <span class="material-icons-sharp">report_gmailerrorred</span>
-                        <h3>Fortes Correction</h3>
+                        <span class="material-icons-sharp">build_circle</span>
+                        <h3>Corre&ccedil;&atilde;o Fortes</h3>
                     </a>
                     <a href="#" data-page="nfe-cfe-comparison">
                         <span class="material-icons-sharp">compare_arrows</span>
-                        <h3>NFe | NFCe Comparison</h3>
+                        <h3>NFe &times; NFCe</h3>
                     </a>
                     <a href="#" data-page="icms-withholding">
                         <span class="material-icons-sharp">receipt_long</span>
-                        <h3>ICMS Withholding</h3>
+                        <h3>ICMS ST</h3>
                     </a>
                     <a href="#" data-page="dirbi">
                         <span class="material-icons-sharp">request_quote</span>
@@ -150,119 +116,154 @@
                         <h3>SPED</h3>
                     </a>
                     <a href="#" data-page="corretor-fiscal">
-                        <span class="material-icons-sharp">build_circle</span>
+                        <span class="material-icons-sharp">healing</span>
                         <h3>Corretor Fiscal</h3>
                     </a>
                     <a href="#" data-page="settings">
                         <span class="material-icons-sharp">settings</span>
-                        <h3>Settings</h3>
+                        <h3>Configura&ccedil;&otilde;es</h3>
                     </a>
                     <a href="#" class="logout">
                         <span class="material-icons-sharp">logout</span>
-                        <h3>Logout</h3>
+                        <h3>Sair</h3>
                     </a>
-                </div>
+                </nav>
             </aside>
             <!-- End of Sidebar Section -->
 
-            <!-- Main Content -->
-            <main id="main-content">
-                <!-- Conteúdo será gerado dinamicamente pelo JavaScript -->
-            </main>
-            <!-- End of Main Content -->
-
-            <!-- Right Section -->
-            <div class="right-section">
-                <div class="nav">
-                    <button id="menu-btn">
+            <!-- Coluna de conteudo: topbar + pagina -->
+            <div class="app-main">
+                <header class="topbar">
+                    <button id="menu-btn" aria-label="Abrir menu">
                         <span class="material-icons-sharp">menu</span>
                     </button>
-                    <div class="dark-mode">
-                        <span class="material-icons-sharp active">light_mode</span>
-                        <span class="material-icons-sharp">dark_mode</span>
-                    </div>
-                    <div class="profile">
-                        <div class="info">
-                            <h3 id="user-greeting">Hey, <span id="current-user-name"></span></h3>
-                            <small id="admin-label" class="text-muted">Admin</small>
-                        </div>
-                        <div class="profile-photo">
-                            <img id="profile-image" src="assets/images/profile-2.png" alt="Profile Photo">
+
+                    <div class="topbar__greeting">
+                        <span class="topbar__greeting-icon" aria-hidden="true">
+                            <span class="material-icons-sharp">dashboard_customize</span>
+                        </span>
+                        <div class="topbar__greeting-text">
+                            <h3 id="user-greeting">Ol&aacute;, <span id="current-user-name"></span></h3>
+                            <small class="topbar__sub">Aqui est&aacute; o resumo da sua opera&ccedil;&atilde;o fiscal de hoje.</small>
                         </div>
                     </div>
-                </div>
-                <!-- End of Nav -->
 
-                <div class="user-profile">
-                    <img src="assets/images/logo.gif" alt="Logo" class="user-profile-gif logo-dark">
-                    <img src="assets/images/logo-light.gif" alt="Logo" class="user-profile-gif logo-light">
-                    <div class="user-profile-title">
-                        <h2>JosueProg</h2>
-                        <p>Fullstack Web Developer</p>
+                    <div class="topbar__search" role="search">
+                        <span class="material-icons-sharp topbar__search-icon" aria-hidden="true">search</span>
+                        <input type="text" id="global-search" autocomplete="off" spellcheck="false"
+                               placeholder="Buscar p&aacute;gina, ferramenta ou contribuinte..."
+                               aria-label="Buscar no sistema" aria-expanded="false"
+                               aria-controls="global-search-results" role="combobox" aria-autocomplete="list">
+                        <kbd class="topbar__kbd">Ctrl K</kbd>
+                        <div class="search-results" id="global-search-results" role="listbox" hidden></div>
                     </div>
-                </div>
 
-                <div class="reminders">
+                    <div class="topbar__actions">
+                        <div class="company-select" id="company-select">
+                            <button type="button" class="company-select__trigger" id="company-trigger"
+                                    aria-haspopup="listbox" aria-expanded="false" aria-controls="company-menu">
+                                <span class="material-icons-sharp" aria-hidden="true">apartment</span>
+                                <span class="company-select__label" id="company-label">Todas as empresas</span>
+                                <span class="material-icons-sharp company-select__caret" aria-hidden="true">expand_more</span>
+                            </button>
+                            <div class="company-select__menu" id="company-menu" role="listbox" hidden
+                                 aria-label="Escolher empresa em foco">
+                                <div class="company-select__search">
+                                    <span class="material-icons-sharp" aria-hidden="true">search</span>
+                                    <input type="text" id="company-filter" autocomplete="off" spellcheck="false"
+                                           placeholder="Filtrar por raz&atilde;o social ou CNPJ" aria-label="Filtrar empresas">
+                                </div>
+                                <div class="company-select__list" id="company-list"></div>
+                            </div>
+                        </div>
+                        <div class="dark-mode" role="switch" tabindex="0" aria-label="Alternar tema claro e escuro">
+                            <span class="material-icons-sharp active">light_mode</span>
+                            <span class="material-icons-sharp">dark_mode</span>
+                        </div>
+                        <button class="icon-btn" id="alerts-btn" aria-label="Ver vencimentos">
+                            <span class="material-icons-sharp">notifications_none</span>
+                            <span class="icon-btn__badge" id="alerts-count" hidden>0</span>
+                        </button>
+                        <div class="profile">
+                            <div class="info">
+                                <small id="admin-label" class="text-muted">Admin</small>
+                            </div>
+                            <div class="profile-photo">
+                                <img id="profile-image" src="assets/images/profile-2.png" alt="Foto de perfil">
+                            </div>
+                        </div>
+                    </div>
+                </header>
+
+                <main id="main-content">
+                    <!-- Conteudo gerado dinamicamente pelo JavaScript -->
+                </main>
+
+                <!-- Painel de vencimentos: visivel apenas na Visao Geral (CSS por data-page) -->
+                <section class="reminders" aria-label="Vencimentos e lembretes">
                     <div class="header">
-                        <h2>Reminders</h2>
-                        <span class="material-icons-sharp">notifications_none</span>
+                        <h2>Vencimentos e lembretes</h2>
+                        <span class="material-icons-sharp" role="button" tabindex="0" aria-label="Abrir agenda fiscal">notifications_none</span>
                     </div>
-                    <div class="notification notification-envio deactive">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>Envio de Impostos</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                    <div class="reminders-list">
+                        <div class="notification notification-envio deactive">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
-                        </div>
-                    </div>
-                    <div class="notification notification-icms deactive">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>ICMS ST</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>Envio de Impostos</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
                         </div>
-                    </div>
-                    <div class="notification notification-dirbi">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>DIRBI</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                        <div class="notification notification-icms deactive">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
-                        </div>
-                    </div>
-                    <div class="notification notification-dctfweb">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>DCTFWeb</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>ICMS ST</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
+                        </div>
+                        <div class="notification notification-dirbi">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
+                            </div>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>DIRBI</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
+                            </div>
+                        </div>
+                        <div class="notification notification-dctfweb">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
+                            </div>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>DCTFWeb</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
+                            </div>
+                        </div>
+                        <div class="notification add-reminder" role="button" tabindex="0">
+                            <div>
+                                <span class="material-icons-sharp">add</span>
+                                <h3>Adicionar lembrete</h3>
+                            </div>
                         </div>
                     </div>
-                    <div class="notification add-reminder">
-                        <div>
-                            <span class="material-icons-sharp">add</span>
-                            <h3>Add Reminder</h3>
-                        </div>
-                    </div>
-                </div>
+                </section>
             </div>
+            <!-- End of Coluna de conteudo -->
         </div>
     </div>
 
@@ -294,45 +295,36 @@
         });
     </script>
     
-    <!-- Script para mostrar/esconder senha -->
+    <!-- Mostrar/esconder senha. O gatilho agora e um <button> com icone
+         Material, nao um <i> do Remix: precisa anunciar o estado (aria-pressed)
+         porque revelar a senha na tela e uma acao com consequencia. -->
     <script>
-        /*--================== Show Hidden - Password =================*/
-        const showHiddenPass = (loginPass, LoginEye) => {
-            const input = document.getElementById(loginPass);
-            const iconEye = document.getElementById(LoginEye);
-            
-            if (!input || !iconEye) return;
-            
-            iconEye.addEventListener('click', () => {
-                // change password to text 
-                if (input.type === 'password') {
-                    // switch to text 
-                    input.type = 'text';
-                    
-                    // Icon change
-                    iconEye.classList.add('ri-eye-line');
-                    iconEye.classList.remove('ri-eye-off-line');
-                } else {
-                    // change to password
+        (function () {
+            const input = document.getElementById('login-password');
+            const botao = document.getElementById('login-eye');
+            if (!input || !botao) return;
+
+            botao.addEventListener('click', function () {
+                const revelando = input.type === 'password';
+                input.type = revelando ? 'text' : 'password';
+                botao.setAttribute('aria-pressed', revelando ? 'true' : 'false');
+                botao.setAttribute('aria-label', revelando ? 'Ocultar senha' : 'Mostrar senha');
+                const icone = botao.querySelector('span');
+                if (icone) icone.textContent = revelando ? 'visibility' : 'visibility_off';
+            });
+
+            // Enviar o formulario nao pode deixar a senha visivel na tela.
+            const form = document.getElementById('login-form');
+            if (form) {
+                form.addEventListener('submit', function () {
                     input.type = 'password';
-                    
-                    // Icon change 
-                    iconEye.classList.remove('ri-eye-line');
-                    iconEye.classList.add('ri-eye-off-line');
-                }
-            });
-        };
-        
-        // Inicializar quando o DOM estiver pronto
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => {
-                showHiddenPass('login-password', 'login-eye');
-                showHiddenPass('admin-password', 'admin-eye');
-            });
-        } else {
-            showHiddenPass('login-password', 'login-eye');
-            showHiddenPass('admin-password', 'admin-eye');
-        }
+                    botao.setAttribute('aria-pressed', 'false');
+                    botao.setAttribute('aria-label', 'Mostrar senha');
+                    const icone = botao.querySelector('span');
+                    if (icone) icone.textContent = 'visibility_off';
+                });
+            }
+        })();
     </script>
 </body>
 </html>

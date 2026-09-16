@@ -59,3 +59,6 @@ assets/js/config.js
 # credenciais do Ambiente Seguro — NUNCA versionar
 .softtech-ambiente-seguro.json
 *ambiente-seguro*.json
+
+# Cache do hook de design (ferramenta local)
+.impeccable/

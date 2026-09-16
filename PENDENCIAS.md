@@ -436,6 +436,38 @@ concluiu "195 logins", o oposto do que os dados diziam. Corrigido.
 node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2
 ```
 
+### P10 — Redesign: o que ficou de fora da fatia do esqueleto
+
+O esqueleto (topbar, sidebar, faixa de KPI, cartao, sub-aba, campo de formulario,
+dropzone) foi ao ar em 2026-09-16. Sobrou, em ordem de valor:
+
+- ~~**Seletor de empresa na topbar.**~~ **Feito em 2026-09-16.** Le e escreve
+  `empresaAtiva_<usuario>`; consumido pela faixa de KPI e pelas Pendencias (que passam
+  a nascer carimbadas com a empresa em foco). **Falta ampliar os consumidores:** as
+  telas de download e de apuracao ainda descobrem o CNPJ pelo arquivo que recebem e
+  ignoram o foco. Enquanto isso, o foco recorta o painel, nao o processamento.
+- **Tela de login reconstruida em 2026-09-16.** Ficou de fora da imagem de referencia,
+  de proposito: "Continue with Google" (o projeto so tem auth por e-mail/senha no
+  Supabase) e "Sign up" (usuario aqui e criado pelo administrador). "Esqueceu a senha?"
+  virou texto em vez de link porque nao existe fluxo de recuperacao.
+- **Largura das telas de upload.** ICMS ST, SPED, DIRBI, Fortes e NFe x NFCe ainda
+  centralizam o conteudo em ~800px com estilo inline na propria pagina. Em monitor
+  largo sobra area morta dos dois lados. Resolver exige mexer no container de cada uma
+  das cinco, nao so no CSS comum.
+- **Animacao de saida nos modais.** Eles entram com `fadeInUp` e somem com `.remove()`
+  seco. Quem fecha um modal grande ve a tela piscar.
+- **Barra de progresso anima `width`.** `main.css` (`.progress-container .progress-bar`)
+  e o progresso do SPED. Sao barras de 8-20px de altura, entao o custo de layout e
+  desprezivel; trocar por `transform: scaleX()` exigiria um elemento interno para o
+  raio nao distorcer. Registrado como excecao consciente, nao como esquecimento.
+- **Rotulo flutuante do login anima `top`.** Mesmo caso, na tela de login, que tem
+  desenho proprio e nao entrou nesta fatia.
+
+Verificado e OK (nao precisa mexer): contraste WCAG AA nos dois temas (12 pares
+medidos, 12 passam), foco visivel em 21/21 controles focaveis do painel,
+`prefers-reduced-motion` degradando de fato (0.4s vira 0.00001s), 12 abas x 2 temas
+sem erro de console e sem rolagem horizontal em 375/768/1024/1600.
+
 ## Resolvido
 
 ### ✓ Baixar NFCe pelo worker — FUNCIONANDO de ponta a ponta (2026-09-10)
