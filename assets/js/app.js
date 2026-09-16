@@ -1445,16 +1445,88 @@
             }
         } 
         else if (page === 'apuration') {
+            const empApur = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+            const escopo = empApur
+                ? `<div class="foco-escopo" data-tone="ativo">
+                       <span class="material-icons-sharp" aria-hidden="true">apartment</span>
+                       <div class="foco-escopo__texto">
+                           <strong>${escapeHtml(empApur.razaoSocial)}</strong>
+                           <span>${escapeHtml(formatarCnpjCurto(empApur.cnpj))}${empApur.regime ? ' · ' + escapeHtml(empApur.regime) : ''}</span>
+                       </div>
+                       <small>Empresa em foco</small>
+                   </div>`
+                : `<div class="foco-escopo">
+                       <span class="material-icons-sharp" aria-hidden="true">select_all</span>
+                       <div class="foco-escopo__texto">
+                           <strong>Todas as empresas</strong>
+                           <span>Escolha uma empresa na barra do topo para recortar a apuração.</span>
+                       </div>
+                   </div>`;
+
             mainContent.innerHTML = `
                 <div class="page-header">
-            <div>
-                <h1>Apuração</h1>
-                <p>Acompanhamento das apurações do período.</p>
-            </div>
-        </div>
-                <div class="apuration-box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 400px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
+                    <div>
+                        <h1>Apuração</h1>
+                        <p>Ferramentas de apuração do período${empApur ? ', com recorte por empresa' : ''}.</p>
+                    </div>
+                </div>
+                ${escopo}
+                <h2 class="section-title">Ferramentas de apuração</h2>
+                <div class="dashboard-grid">
+                    <div class="box animate-section apur-icms" role="button" tabindex="0" style="animation-delay: 0s;">
+                        <div class="box-content">
+                            <div class="box-icon" data-tone="primary">
+                                <span class="material-icons-sharp">receipt_long</span>
+                            </div>
+                            <div class="box-info">
+                                <h3>ICMS ST</h3>
+                                <p>Processar XMLs e gerar a planilha de retenção por empresa</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="box animate-section apur-dirbi" role="button" tabindex="0" style="animation-delay: 0.05s;">
+                        <div class="box-content">
+                            <div class="box-icon" data-tone="warning">
+                                <span class="material-icons-sharp">request_quote</span>
+                            </div>
+                            <div class="box-info">
+                                <h3>DIRBI</h3>
+                                <p>Apurar os benefícios fiscais a declarar no período</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="box animate-section apur-sped" role="button" tabindex="0" style="animation-delay: 0.1s;">
+                        <div class="box-content">
+                            <div class="box-icon" data-tone="accent">
+                                <span class="material-icons-sharp">inventory</span>
+                            </div>
+                            <div class="box-info">
+                                <h3>SPED</h3>
+                                <p>Ajuste automático de SPED Fiscal e Contribuições</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="box animate-section apur-piscofins" role="button" tabindex="0" style="animation-delay: 0.15s;">
+                        <div class="box-content">
+                            <div class="box-icon" data-tone="success">
+                                <span class="material-icons-sharp">calculate</span>
+                            </div>
+                            <div class="box-info">
+                                <h3>PIS/COFINS + MIT</h3>
+                                <p>Calcular PIS/COFINS e gerar os JSONs MIT a partir das apurações</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             `;
+
+            const irPara = { '.apur-icms': 'icms-withholding', '.apur-dirbi': 'dirbi', '.apur-sped': 'sped' };
+            for (const [sel, destino] of Object.entries(irPara)) {
+                const el = document.querySelector(sel);
+                if (el) el.addEventListener('click', () => navigateTo(destino));
+            }
+            const pisBox = document.querySelector('.apur-piscofins');
+            if (pisBox) pisBox.addEventListener('click', () => showPisCofinsModal());
         }
         else if (page === 'fortes-correction') {
             createFortesCorrectionPage(mainContent);
@@ -2849,6 +2921,10 @@ function createIcmsWithholdingPage(mainContent) {
                     <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem;">info</span>
                     Selecione um modelo para começar.
                 </p>
+                <label id="icms-foco-wrap" class="foco-opcao" style="display: none;">
+                    <input type="checkbox" id="icms-foco-only">
+                    <span id="icms-foco-label"></span>
+                </label>
             </div>
             
             <!-- Box de Upload de XMLs -->
@@ -2890,6 +2966,25 @@ function createIcmsWithholdingPage(mainContent) {
     const icmsProcessBtn = document.getElementById('icms-process-btn');
     const icmsStatus = document.getElementById('icms-status');
     const icmsStatusText = document.getElementById('icms-status-text');
+
+    // Recorte por empresa. So aparece com foco ativo, e nasce DESMARCADO: descartar
+    // XML por padrao geraria planilha incompleta sem o usuario ter pedido.
+    function pintarFocoIcms() {
+        const wrap = document.getElementById('icms-foco-wrap');
+        const rotulo = document.getElementById('icms-foco-label');
+        const caixa = document.getElementById('icms-foco-only');
+        const empresa = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+        if (!wrap || !rotulo) return;
+        if (!empresa) {
+            wrap.style.display = 'none';
+            if (caixa) caixa.checked = false; // sem foco nao ha o que recortar
+            return;
+        }
+        wrap.style.display = 'flex';
+        rotulo.textContent = 'Processar só os XMLs de ' + empresa.razaoSocial;
+    }
+    pintarFocoIcms();
+    aoMudarEmpresa('icms-foco-wrap', pintarFocoIcms);
 
     // Habilita o botão Processar só quando há modelo funcional carregado E XMLs escolhidos.
     function atualizarBotaoProcessar() {
@@ -3142,8 +3237,30 @@ async function processIcmsXmls() {
         }
     }
 
-    const cnpjs = Object.keys(empresas);
+    let cnpjs = Object.keys(empresas);
     if (!cnpjs.length) throw new Error('nenhum XML válido de NF-e encontrado.');
+
+    // Empresa em foco. Recorta SO se o usuario marcou a opcao; caso contrario apenas
+    // avisa. O CNPJ aqui vem do XML, e o XML e a fonte da verdade -- o foco confere,
+    // nao sobrescreve.
+    const focoIcms = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+    const soFoco = !!(document.getElementById('icms-foco-only') || {}).checked;
+    if (focoIcms && soFoco) {
+        const doFoco = cnpjs.filter((c) => String(c).replace(/\D/g, '') === focoIcms.cnpj);
+        if (!doFoco.length) {
+            throw new Error(`nenhum XML de ${focoIcms.razaoSocial} neste lote. Desmarque o recorte por empresa para gerar as demais.`);
+        }
+        const descartadas = cnpjs.length - doFoco.length;
+        cnpjs = doFoco;
+        if (descartadas && statusText) {
+            statusText.textContent = `${descartadas} empresa(s) fora do foco ignorada(s).`;
+        }
+    } else if (focoIcms) {
+        const res = conferirFocoEmpresa(cnpjs);
+        if (res && statusText) {
+            statusText.textContent = `Atenção: ${res.fora.length} empresa(s) fora de ${focoIcms.razaoSocial} no lote — todas serão geradas.`;
+        }
+    }
 
     if (statusText) statusText.textContent = `Gerando ${cnpjs.length} planilha(s)...`;
     const arquivos = [];
@@ -9345,6 +9462,7 @@ function createBaixarNfcePage(mainContent) {
         </style>
         <div class="bn-shell">
             <div id="bn-stage-select" style="display: flex; flex-direction: column; gap: 1.2rem;">
+                <div id="bn-foco"></div>
                 <div id="bn-dropzone" class="bn-dropzone">
                     <div id="bn-dz-empty" class="bn-dz-empty">
                         <span class="material-icons-sharp">cloud_upload</span>
@@ -9735,9 +9853,12 @@ function createBaixarNfcePage(mainContent) {
         const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
         reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
         const perCompany = !globalModeChk.checked;
+        const focoAtual = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
         reportGrid.innerHTML = reports.map((r, i) => {
             const cnpj = r.keys.length ? cnpjFromKey(r.keys[0]) : '';
             const emp = (cnpj && contributorsByCnpj.get(cnpj)) || (cnpj ? 'CNPJ ' + cnpj : '');
+            // Relatorio de outra empresa continua na fila; so fica marcado.
+            const foraDoFoco = !!(focoAtual && cnpj && cnpj !== focoAtual.cnpj);
             const nKeys = r.keys.length;
             const tokBox = perCompany
                 ? '<textarea class="bn-rc-token" data-rid="' + r.id + '" rows="2" placeholder="Token JWT desta empresa…">' + escapeHtml(r.token || '') + '</textarea>' +
@@ -9754,7 +9875,7 @@ function createBaixarNfcePage(mainContent) {
                     (i === reports.length - 1 ? ' disabled' : '') + ' title="Descer na fila" aria-label="Descer na fila">' +
                     '<span class="material-icons-sharp">keyboard_arrow_down</span></button>' +
                 '</div>';
-            return '<div class="bn-report-card">' +
+            return '<div class="bn-report-card' + (foraDoFoco ? ' bn-fora-foco' : '') + '">' +
                 ord +
                 '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
                 '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + '</div>' +
@@ -9764,6 +9885,31 @@ function createBaixarNfcePage(mainContent) {
         }).join('');
         wireCardOrder();
         if (perCompany) wireCardTokens();
+        renderAvisoFoco();
+    }
+
+    aoMudarEmpresa('bn-foco', () => renderReportCards());
+
+    // Faixa de conferencia contra a empresa em foco. So aparece quando ha foco E
+    // o lote traz outra empresa -- avisar quando esta tudo certo seria ruido.
+    function renderAvisoFoco() {
+        const alvo = document.getElementById('bn-foco');
+        if (!alvo) return;
+        const res = conferirFocoEmpresa(reports.map((r) => (r.keys.length ? cnpjFromKey(r.keys[0]) : '')));
+        if (!res) { alvo.innerHTML = ''; return; }
+        alvo.innerHTML = bannerForaDoFoco(res, {
+            mapa: contributorsByCnpj,
+            acaoId: 'bn-foco-filtrar',
+            acaoTexto: 'Manter só ' + res.empresa.razaoSocial,
+        });
+        const btn = document.getElementById('bn-foco-filtrar');
+        if (btn) {
+            btn.addEventListener('click', () => {
+                reports = reports.filter((r) => r.keys.length && cnpjFromKey(r.keys[0]) === res.empresa.cnpj);
+                renderReportCards();
+                updateStartButton();
+            });
+        }
     }
 
     // Reordena a fila. Troca vizinhos no array `reports` — nada mais precisa saber da
@@ -10761,6 +10907,7 @@ function createBaixarNfePage(mainContent) {
         </style>
         <div class="bn-shell">
             <div id="bn-stage-select" style="display: flex; flex-direction: column; gap: 1.2rem;">
+                <div id="bn-foco"></div>
                 <div id="bn-dropzone" class="bn-dropzone">
                     <div id="bn-dz-empty" class="bn-dz-empty">
                         <span class="material-icons-sharp">cloud_upload</span>
@@ -11005,6 +11152,7 @@ function createBaixarNfePage(mainContent) {
         const n = reports.length;
         const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
         reportGrid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+        const focoAtual = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
         reportGrid.innerHTML = reports.map((r) => {
             // Emitentes das notas — 1 sugere saídas, vários sugerem entradas. Não é a
             // empresa dona do certificado: essa é escolhida no card do certificado.
@@ -11014,12 +11162,50 @@ function createBaixarNfePage(mainContent) {
                 ? (contributorsByCnpj.get(Array.from(emitentes)[0]) || cnpjLabel(Array.from(emitentes)[0]))
                 : (nEmit ? nEmit + ' emitentes distintos' : '');
             const nKeys = r.keys.length;
-            return '<div class="bn-report-card">' +
+            // Relatorio de ENTRADA traz varios emitentes e nenhum e a empresa em foco --
+            // isso e normal aqui, entao so marca quando o relatorio inteiro e de UMA
+            // outra empresa (o caso de ter pego o arquivo errado).
+            const foraDoFoco = !!(focoAtual && nEmit === 1 && Array.from(emitentes)[0] !== focoAtual.cnpj);
+            return '<div class="bn-report-card' + (foraDoFoco ? ' bn-fora-foco' : '') + '">' +
                 '<div class="bn-rc-name">' + escapeHtml(r.fileName) + '</div>' +
                 '<div class="bn-rc-count">' + nKeys + ' ' + (nKeys === 1 ? 'chave' : 'chaves') + ' modelo 55</div>' +
                 (emp ? '<div class="bn-rc-emp">' + escapeHtml(emp) + '</div>' : '') +
                 '</div>';
         }).join('');
+        renderAvisoFoco();
+    }
+
+    aoMudarEmpresa('bn-foco', () => renderReportCards());
+
+    // Conferencia contra a empresa em foco. Aqui so conta relatorio de emitente unico:
+    // relatorio de entrada tem dezenas de emitentes de terceiros por natureza, e
+    // apontar todos como "fora do foco" seria alarme que sempre dispara.
+    function renderAvisoFoco() {
+        const alvo = document.getElementById('bn-foco');
+        if (!alvo) return;
+        const unicos = reports
+            .map((r) => { const e = cnpjsDoRelatorio(r); return e.size === 1 ? Array.from(e)[0] : null; })
+            .filter(Boolean);
+        const res = unicos.length ? conferirFocoEmpresa(unicos) : null;
+        if (!res) { alvo.innerHTML = ''; return; }
+        alvo.innerHTML = bannerForaDoFoco(res, {
+            mapa: contributorsByCnpj,
+            acaoId: 'bn-foco-filtrar',
+            acaoTexto: 'Manter só ' + res.empresa.razaoSocial,
+        });
+        const btn = document.getElementById('bn-foco-filtrar');
+        if (btn) {
+            btn.addEventListener('click', () => {
+                reports = reports.filter((r) => {
+                    const e = cnpjsDoRelatorio(r);
+                    return e.size !== 1 || Array.from(e)[0] === res.empresa.cnpj;
+                });
+                rebuildCertGroups();
+                renderReportCards();
+                renderCertGroups();
+                updateStartButton();
+            });
+        }
     }
 
     // CNPJs distintos que aparecem nas chaves do relatório (emitentes das notas).
@@ -15303,12 +15489,40 @@ function setEmpresaAtiva(empresa) {
     }
     pintarGatilhoEmpresa();
     renderListaEmpresas();
-    // A Visao Geral é a única tela cujo conteúdo muda com o escopo.
     const container = document.querySelector('.dashboard-container');
     if (container && container.dataset.page === 'dashboard') renderDashboardKpis();
     const lista = document.getElementById('pendencias-list');
     if (lista) renderPendenciasList();
+
+    // As telas de download e de apuracao reagem sozinhas. Evento em vez de chamada
+    // direta porque elas vivem dentro de closures (createBaixarNfcePage e cia) --
+    // e porque re-navegar apagaria os relatorios que o usuario ja soltou na tela.
+    document.dispatchEvent(new CustomEvent('empresa:mudou', { detail: empresa }));
+
+    // A Apuracao nao guarda nada do usuario, entao pode remontar inteira.
+    if (container && container.dataset.page === 'apuration' && typeof window.navigateTo === 'function') {
+        window.navigateTo('apuration');
+    }
 }
+
+/**
+ * Reage a troca de empresa enquanto uma tela estiver montada.
+ * O listener se remove sozinho quando a ancora sai do DOM -- sem isso cada
+ * visita a aba deixaria um listener preso a um <div> que nao existe mais.
+ * @param {string} ancoraId id de um elemento da tela
+ * @param {Function} fn
+ */
+function aoMudarEmpresa(ancoraId, fn) {
+    const handler = () => {
+        if (!document.getElementById(ancoraId)) {
+            document.removeEventListener('empresa:mudou', handler);
+            return;
+        }
+        fn();
+    };
+    document.addEventListener('empresa:mudou', handler);
+}
+window.aoMudarEmpresa = aoMudarEmpresa;
 
 function pintarGatilhoEmpresa() {
     const rotulo = document.getElementById('company-label');
@@ -15433,3 +15647,80 @@ function ligarSeletorEmpresa() {
 window.getEmpresaAtiva = getEmpresaAtiva;
 window.setEmpresaAtiva = setEmpresaAtiva;
 window.carregarEmpresas = carregarEmpresas;
+
+// ============================================================================
+// FOCO DE EMPRESA NAS TELAS DE PROCESSAMENTO
+//
+// As telas de download e de apuracao descobrem o CNPJ pelo ARQUIVO que
+// recebem -- da chave de 44 digitos, no caso dos relatorios, ou do XML, no caso
+// do ICMS ST. O foco da topbar nao pode simplesmente sobrescrever isso: o dado
+// que manda e o do arquivo.
+//
+// Entao o foco entra aqui como CONFERENCIA, nao como filtro silencioso: avisa
+// quando o lote nao bate com a empresa escolhida, e o descarte so acontece se o
+// usuario pedir. Descartar nota sem avisar seria pior que nao ter foco nenhum --
+// a planilha sairia incompleta e ninguem saberia por que.
+// ============================================================================
+
+/**
+ * Confere um conjunto de CNPJs contra a empresa em foco.
+ * @param {Iterable<string>} cnpjs CNPJs com ou sem mascara
+ * @returns {{empresa: object, dentro: string[], fora: string[]}|null}
+ *   null quando nao ha foco OU quando tudo no lote e da empresa em foco.
+ */
+function conferirFocoEmpresa(cnpjs) {
+    const empresa = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+    if (!empresa) return null;
+
+    const dentro = [];
+    const fora = [];
+    const vistos = new Set();
+    for (const bruto of cnpjs || []) {
+        const c = String(bruto || '').replace(/\D/g, '');
+        if (!c || vistos.has(c)) continue;
+        vistos.add(c);
+        (c === empresa.cnpj ? dentro : fora).push(c);
+    }
+    if (!fora.length) return null;
+    return { empresa, dentro, fora };
+}
+
+/**
+ * Nome legivel de um CNPJ: razao social cadastrada, ou o proprio CNPJ formatado.
+ * @param {string} cnpj
+ * @param {Map<string,string>} [mapa] CNPJ(14) -> razao social
+ */
+function rotularCnpj(cnpj, mapa) {
+    const c = String(cnpj || '').replace(/\D/g, '');
+    const nome = mapa && mapa.get ? mapa.get(c) : null;
+    return nome || formatarCnpjCurto(c);
+}
+
+/**
+ * Faixa de aviso para lote que nao bate com a empresa em foco.
+ * @param {{empresa: object, dentro: string[], fora: string[]}} res
+ * @param {{mapa?: Map<string,string>, acaoId?: string, acaoTexto?: string}} [opts]
+ * @returns {string} HTML
+ */
+function bannerForaDoFoco(res, opts) {
+    const o = opts || {};
+    const lista = res.fora.slice(0, 4).map((c) => escapeHtml(rotularCnpj(c, o.mapa))).join(', ');
+    const resto = res.fora.length > 4 ? ` e mais ${res.fora.length - 4}` : '';
+    const acao = o.acaoId
+        ? `<button type="button" id="${o.acaoId}" class="foco-aviso__acao">${escapeHtml(o.acaoTexto || 'Manter só a empresa em foco')}</button>`
+        : '';
+    const nenhumaDentro = !res.dentro.length;
+    return `
+        <div class="foco-aviso" role="status">
+            <span class="material-icons-sharp" aria-hidden="true">filter_alt_off</span>
+            <div class="foco-aviso__texto">
+                <strong>${nenhumaDentro ? 'Nada aqui é de' : 'Há dados fora de'} ${escapeHtml(res.empresa.razaoSocial)}</strong>
+                <span>${res.fora.length} ${res.fora.length === 1 ? 'empresa' : 'empresas'} no lote fora do foco: ${lista}${resto}. Nada foi descartado.</span>
+            </div>
+            ${acao}
+        </div>`;
+}
+
+window.conferirFocoEmpresa = conferirFocoEmpresa;
+window.bannerForaDoFoco = bannerForaDoFoco;
+window.rotularCnpj = rotularCnpj;
