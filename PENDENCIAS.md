@@ -442,10 +442,21 @@ O esqueleto (topbar, sidebar, faixa de KPI, cartao, sub-aba, campo de formulario
 dropzone) foi ao ar em 2026-09-16. Sobrou, em ordem de valor:
 
 - ~~**Seletor de empresa na topbar.**~~ **Feito em 2026-09-16.** Le e escreve
-  `empresaAtiva_<usuario>`; consumido pela faixa de KPI e pelas Pendencias (que passam
-  a nascer carimbadas com a empresa em foco). **Falta ampliar os consumidores:** as
-  telas de download e de apuracao ainda descobrem o CNPJ pelo arquivo que recebem e
-  ignoram o foco. Enquanto isso, o foco recorta o painel, nao o processamento.
+  `empresaAtiva_<usuario>`. Consumidores: faixa de KPI, Pendencias (nascem carimbadas),
+  Baixar NFCe, Baixar NFe, ICMS ST e Apuracao.
+  **Regra que vale nas telas de processamento:** o CNPJ vem do ARQUIVO (chave de 44
+  digitos ou XML), e o arquivo e a fonte da verdade. O foco CONFERE e avisa; descarte
+  so acontece se o usuario clicar ("Manter so X" no download) ou marcar a opcao
+  ("Processar so os XMLs de X" no ICMS ST, que nasce DESMARCADA). Descartar nota em
+  silencio geraria planilha incompleta sem ninguem saber por que.
+  Checagem da regra: `node scripts/check-foco-empresa.mjs`.
+- **A aba Apuracao ainda nao apura.** Virou o ponto de partida (empresa em foco +
+  atalhos para ICMS ST, DIRBI, SPED e PIS/COFINS), no lugar do cartao vazio que era
+  antes. O CSS `.apuration-table` / `.apuration-modal` continua sem dono: existe uma
+  planilha de apuracao desenhada e nunca construida. Construir ou apagar.
+- **Telas que ainda ignoram o foco:** Correcao Fortes, NFe x NFCe, SPED, DIRBI e
+  Checagem de Transferencias. Nelas o CNPJ tambem vem do arquivo, entao o mesmo
+  `conferirFocoEmpresa` serve -- e so plugar onde cada uma agrupa por empresa.
 - **Tela de login reconstruida em 2026-09-16.** Ficou de fora da imagem de referencia,
   de proposito: "Continue with Google" (o projeto so tem auth por e-mail/senha no
   Supabase) e "Sign up" (usuario aqui e criado pelo administrador). "Esqueceu a senha?"
