@@ -38,6 +38,51 @@ if (missing.length) {
 // rejeita a URL ("Invalid supabaseUrl") quando o valor foi copiado junto com as aspas.
 const clean = (v) => (v == null ? '' : String(v).trim().replace(/^(['"])([\s\S]*)\1$/, '$2').trim());
 
+// Presença não basta. Em 2026-09-16 o deploy subiu com APP_ADMIN_PASSWORD_HASH
+// contendo a URL da API de ICMS — o mesmo valor de ICMS_API_URL, colado na
+// variável errada. A checagem acima passou (a var existia), o build passou, e o
+// login do super-admin `adm` ficou impossível em produção: `verifyPassword`
+// comparava a senha digitada contra uma URL e sempre devolvia "Senha incorreta".
+//
+// Mesma regra que motivou este arquivo — deploy quebrado visível é melhor que
+// auth quebrada silenciosa — agora aplicada ao FORMATO, não só à presença.
+const formatos = [
+    {
+        nome: 'APP_ADMIN_PASSWORD_HASH',
+        valor: clean(process.env.APP_ADMIN_PASSWORD_HASH),
+        // 'pbkdf2$' + base64 de 32 bytes (44 chars com o padding '=')
+        ok: (v) => /^pbkdf2\$[A-Za-z0-9+/]{42,44}={0,2}$/.test(v),
+        comoGerar: 'gere com: node scripts/gerar-hash-admin.mjs',
+    },
+    {
+        nome: 'APP_PASSWORD_SALT',
+        valor: clean(process.env.APP_PASSWORD_SALT),
+        ok: (v) => v.length >= 32,
+        comoGerar: 'string aleatória de 32+ caracteres (trocar invalida os hashes existentes)',
+    },
+    {
+        nome: 'SUPABASE_URL',
+        valor: clean(process.env.SUPABASE_URL),
+        ok: (v) => /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(v),
+        comoGerar: 'Project Settings → API → Project URL',
+    },
+];
+
+const invalidas = formatos.filter((f) => !f.ok(f.valor));
+if (invalidas.length) {
+    console.error('[gen-config] env var com FORMATO inválido (existe, mas o valor não serve):');
+    for (const f of invalidas) {
+        // Nunca imprime o valor — só o que dá para dizer sem vazá-lo.
+        const pista = /^https?:\/\//.test(f.valor)
+            ? 'parece uma URL; provavelmente o valor de outra variável foi colado aqui'
+            : f.valor.length + ' caractere(s), fora do formato esperado';
+        console.error('  - ' + f.nome + ': ' + pista);
+        console.error('    ' + f.comoGerar);
+    }
+    console.error('[gen-config] corrija em Project → Settings → Environment Variables e refaça o deploy.');
+    process.exit(1);
+}
+
 // JSON.stringify escapa cada valor como string-literal JS válida (evita quebra/injeção).
 const cfg = `// GERADO no build do Vercel por scripts/gen-config.js — não editar à mão.
 window.APP_CONFIG = {

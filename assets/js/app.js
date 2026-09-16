@@ -647,6 +647,24 @@
             // e legacy (com upgrade silencioso).
             const adminHash = (window.APP_CONFIG && window.APP_CONFIG.adminPasswordHash) || null;
 
+            // Hash presente mas fora do formato = variavel de ambiente com o valor
+            // errado, nao senha errada. Em producao isso ja aconteceu (a URL da API
+            // de ICMS foi colada em APP_ADMIN_PASSWORD_HASH) e a tela dizia "Senha
+            // incorreta" -- mandando o usuario tentar de novo uma senha que nunca
+            // ia funcionar. O build agora barra isso (scripts/gen-config.js), e aqui
+            // fica a rede: se passar, pelo menos diz a verdade.
+            if (adminHash && !/^pbkdf2\$[A-Za-z0-9+/]{42,44}={0,2}$/.test(adminHash)) {
+                console.error('❌ adminPasswordHash com formato inválido. Esperado "pbkdf2$..." — veja scripts/gerar-hash-admin.mjs.');
+                if (loginForm) {
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'error-message';
+                    errorDiv.textContent = 'Acesso de administrador mal configurado neste ambiente. Não é a sua senha — avise o responsável.';
+                    loginForm.appendChild(errorDiv);
+                    setTimeout(() => errorDiv.remove(), 6000);
+                }
+                return;
+            }
+
             if (!adminHash) {
                 console.error('❌ adminPasswordHash não configurado em window.APP_CONFIG. Veja config.example.js.');
                 if (loginForm) {
@@ -5297,12 +5315,12 @@ function createFortesCorrectionPage(mainContent) {
             </div>
             
             <!-- Stack: Relatório de Valores (frente) + Instruções de Ajuste (verso) -->
-            <div class="fortes-stack" style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
+            <div class="fortes-stack">
                 <button id="fortes-toggle-cards" type="button" title="Alternar Relatório / Instruções" style="position: absolute; top: -0.6rem; right: -0.6rem; background: var(--color-primary); color: #fff; border: none; border-radius: 50%; width: 42px; height: 42px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: var(--box-shadow); z-index: 20;">
                     <span class="material-icons-sharp">swap_vert</span>
                 </button>
                 <!-- Card Relatório (frente) -->
-                <div role="button" tabindex="0" aria-label="Selecionar relatorio de valores" class="dropzone box fortes-report-box" id="fortes-report-box" style=" position: relative; transition: transform 0.4s ease, opacity 0.4s ease; z-index: 2;">
+                <div role="button" tabindex="0" aria-label="Selecionar relatorio de valores" class="dropzone box fortes-report-box" id="fortes-report-box" style="z-index: 2;">
 
                     <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">request_quote</span></span>
                     <p class="dropzone__title" id="fortes-report-label">Solte o relatório de valores aqui</p>
@@ -5315,7 +5333,7 @@ function createFortesCorrectionPage(mainContent) {
                     </div>
             </div>
                 <!-- Card Instruções (verso) -->
-                <div class="box animate-section fortes-instructions-box" id="fortes-instructions-box" style="position: absolute; top: 0; left: 0; width: 100%; height: 500px; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column; transition: transform 0.4s ease, opacity 0.4s ease; transform: translateY(18px) scale(0.96); opacity: 0; pointer-events: none; z-index: 1;">
+                <div class="box animate-section fortes-instructions-box" id="fortes-instructions-box" style="transform: translateY(18px) scale(0.96); opacity: 0; pointer-events: none; z-index: 1;">
                 <label for="fortes-adjustments-textarea" style="font-size: 1.1rem; font-weight: 600; color: var(--color-dark); margin-bottom: 1rem;">
                     <span class="material-icons-sharp" style="vertical-align: middle; margin-right: 0.5rem;">edit_note</span>
                     Instruções de Ajuste
@@ -5444,14 +5462,16 @@ function createFortesCorrectionPage(mainContent) {
     }
 
     // Stack: define qual card fica na frente (relativo, opaco) e qual no verso (absoluto, esmaecido).
+    // Os dois cards ocupam a mesma celula da grade (.fortes-stack no main.css),
+    // entao a troca e so visual: transform, opacidade, clique e ordem. A versao
+    // anterior alternava `position` entre relative e absolute -- e era isso que
+    // deixava a pilha com a altura de um card e o outro vazando 300px por baixo,
+    // por cima dos botoes de processar.
     function setStackFront(front, back) {
-        front.style.position = 'relative';
         front.style.transform = 'translateY(0) scale(1)';
         front.style.opacity = '1';
         front.style.pointerEvents = 'auto';
         front.style.zIndex = '2';
-        back.style.position = 'absolute';
-        back.style.top = '0'; back.style.left = '0';
         back.style.transform = 'translateY(18px) scale(0.96)';
         back.style.opacity = '0';
         back.style.pointerEvents = 'none';
