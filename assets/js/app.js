@@ -2928,15 +2928,17 @@ function createIcmsWithholdingPage(mainContent) {
             </div>
             
             <!-- Box de Upload de XMLs -->
-            <div role="button" tabindex="0" aria-label="Selecionar XMLs de ICMS ST" class="dropzone box animate-section icms-xml-box" style="animation-delay: 0s; height: 300px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="icms-xml-box">
-                <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">cloud_upload</span>
-                <span class="box-label" id="icms-xml-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Arraste e solte os XML (ou .zip) aqui</span>
-                <span style="font-size: 0.9rem; color: var(--color-dark-variant);">múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip se houver mais de uma)</span>
-                <input type="file" id="icms-xml-input" accept=".xml,.zip" multiple style="display: none;">
-                <div id="icms-xml-info" style="display: none; margin-top: 1rem; text-align: center; max-width: 100%; overflow-x: auto;">
-                    <span class="material-icons-sharp" style="font-size: 2rem; color: var(--color-success);">check_circle</span>
-                    <p id="icms-xml-count" style="margin-top: 0.5rem; color: var(--color-success); font-weight: 500;"></p>
-                    <div id="icms-xml-list" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--color-dark-variant); max-height: 100px; overflow-y: auto;"></div>
+            <div role="button" tabindex="0" aria-label="Selecionar XMLs de ICMS ST" class="dropzone box animate-section icms-xml-box" style="animation-delay: 0s; position: relative;" id="icms-xml-box">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">description</span></span>
+                <p class="dropzone__title" id="icms-xml-label">Solte os XMLs das notas aqui</p>
+                <p class="dropzone__hint">Cada CNPJ vira uma planilha; havendo mais de um, sai um .zip.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.xml</span><span>.zip</span></div>
+                <input type="file" id="icms-xml-input" accept=".xml,.zip" multiple hidden>
+                <div class="dropzone__state" id="icms-xml-info" hidden>
+                    <span class="material-icons-sharp">check_circle</span>
+                    <p class="dropzone__count" id="icms-xml-count"></p>
+                    <div class="dropzone__files" id="icms-xml-list"></div>
                 </div>
             </div>
             
@@ -4261,11 +4263,13 @@ function createCorretorFiscalPage(mainContent) {
             </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
-            <div id="cf-drop" role="button" tabindex="0" aria-label="Selecionar arquivo a corrigir" class="dropzone dirbi-box animate-section" style="animation-delay:0s; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
-                <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">build_circle</span>
-                <p id="cf-drop-label" style="font-weight:600;">Selecione o arquivo a corrigir (SPED .txt ou Arquivo FS .fs)</p>
-                <small style="color:var(--color-dark-variant);">O tipo é detectado pelo conteúdo. A correção roda no navegador; o encoding original (ANSI/latin1 ou UTF-8) é preservado.</small>
-                <input type="file" id="cf-file-input" accept=".txt,.fs,.FS" style="display:none;">
+            <div id="cf-drop" role="button" tabindex="0" aria-label="Selecionar arquivo a corrigir" class="dropzone dirbi-box animate-section" style="animation-delay:0s;">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">healing</span></span>
+                <p class="dropzone__title" id="cf-drop-label">Solte o arquivo a corrigir aqui</p>
+                <p class="dropzone__hint">O tipo é detectado pelo conteúdo. A correção roda no navegador e preserva o encoding original (ANSI/latin1 ou UTF-8).</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.txt (SPED)</span><span>.fs (Fortes)</span></div>
+                <input type="file" id="cf-file-input" accept=".txt,.fs,.FS" hidden>
             </div>
 
             <div id="cf-report-row" style="display:none; max-width:800px; margin:0 auto; width:100%; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:0.9rem 1rem;">
@@ -4317,11 +4321,15 @@ function createCorretorFiscalPage(mainContent) {
             }
             state.texto = texto; state.nome = file.name; state.tipo = tipo;
             dropLabel.textContent = file.name + '  (' + (tipo === 'sped' ? 'SPED' : 'Arquivo FS') + ' detectado)';
+            // O SPED diz de quem ele e no registro |0000|. Se nao bate com a empresa
+            // em foco, e quase sempre arquivo trocado -- avisa antes de corrigir.
+            const cnpjArquivo = tipo === 'sped' ? cnpjDoSped(texto) : '';
+            state.avisoFoco = cnpjArquivo ? avisoFocoInline([cnpjArquivo]) : '';
             // FS pode ter duplicados -> mostra o anexo de relatório. SPED não usa.
             reportRow.style.display = tipo === 'fs' ? 'block' : 'none';
-            setStatus(tipo === 'fs'
+            setStatus((tipo === 'fs'
                 ? 'Arquivo FS pronto. Anexe o relatório de erros para remover duplicados (opcional) e clique em Corrigir.'
-                : 'Arquivo SPED pronto. Clique em Corrigir.');
+                : 'Arquivo SPED pronto. Clique em Corrigir.') + (state.avisoFoco ? '<br>' + state.avisoFoco : ''));
             atualizarRun();
         } catch (e) {
             setStatus('<span style="color:var(--color-danger);">Falha ao ler: ' + escapeHtml(e.message || String(e)) + '</span>');
@@ -4387,12 +4395,18 @@ function createDirbiPage(mainContent) {
                 <div id="dirbi-template-warn" style="display:none; color:var(--color-danger); font-size:0.8rem;"></div>
                 <button id="dirbi-node-btn" type="button" style="align-self:flex-start; padding:0.7rem 1.4rem; border:none; border-radius:0.6rem; background:var(--color-success); color:#fff; font-weight:700; cursor:pointer;">Processar inbox (Node)</button>
             </div>
-            <div id="dirbi-drop" role="button" tabindex="0" aria-label="Selecionar arquivos da DIRBI" class="dropzone dirbi-box animate-section" style="animation-delay:0s; min-height:240px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
-                <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">request_quote</span>
-                <p id="dirbi-drop-label" style="font-weight:600;">Selecione os XML das NFC-e (ou arquivos .zip)</p>
-                <small style="color:var(--color-dark-variant);">Aceita XML avulsos e .zip. Múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip quando houver mais de uma). As fórmulas de Pis/Cofins são preservadas.</small>
-                <input type="file" id="dirbi-file-input" accept=".xml,.zip" multiple style="display:none;">
+            <div id="dirbi-drop" role="button" tabindex="0" aria-label="Selecionar arquivos da DIRBI" class="dropzone dirbi-box animate-section" style="animation-delay:0s;">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">request_quote</span></span>
+                <p class="dropzone__title" id="dirbi-drop-label">Solte os XMLs das NFC-e aqui</p>
+                <p class="dropzone__hint">Cada CNPJ vira uma planilha, com as fórmulas de PIS/COFINS preservadas.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.xml</span><span>.zip</span></div>
+                <input type="file" id="dirbi-file-input" accept=".xml,.zip" multiple hidden>
             </div>
+            <label id="dirbi-foco-wrap" class="foco-opcao" style="display:none; max-width:56rem; margin:0 auto; width:100%;">
+                <input type="checkbox" id="dirbi-foco-only">
+                <span id="dirbi-foco-label"></span>
+            </label>
             <div id="dirbi-worker-hint" style="max-width:800px; margin:0 auto; width:100%; display:none;"></div>
             <div id="dirbi-status" style="max-width:800px; margin:0 auto; width:100%; color:var(--color-dark-variant);"></div>
         </div>
@@ -4401,6 +4415,21 @@ function createDirbiPage(mainContent) {
     const box = document.getElementById('dirbi-drop');
     const input = document.getElementById('dirbi-file-input');
     const dropLabel = document.getElementById('dirbi-drop-label');
+
+    // Recorte por empresa. Nasce desmarcado: a DIRBI gera uma planilha por CNPJ,
+    // e descartar XML por padrao entregaria menos planilhas do que o lote tem.
+    function pintarFocoDirbi() {
+        const wrap = document.getElementById('dirbi-foco-wrap');
+        const rotulo = document.getElementById('dirbi-foco-label');
+        const caixa = document.getElementById('dirbi-foco-only');
+        const empresa = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+        if (!wrap || !rotulo) return;
+        if (!empresa) { wrap.style.display = 'none'; if (caixa) caixa.checked = false; return; }
+        wrap.style.display = 'flex';
+        rotulo.textContent = 'Processar só os XMLs de ' + empresa.razaoSocial;
+    }
+    pintarFocoDirbi();
+    if (typeof aoMudarEmpresa === 'function') aoMudarEmpresa('dirbi-foco-wrap', pintarFocoDirbi);
     if (!box || !input) return;
 
     box.addEventListener('click', () => input.click());
@@ -4575,8 +4604,22 @@ async function processDirbiXmls(fileList) {
             }
         }
 
-        const cnpjs = Object.keys(empresas);
+        let cnpjs = Object.keys(empresas);
         if (!cnpjs.length) throw new Error('nenhum XML válido de NFC-e encontrado.');
+
+        // Mesma regra do ICMS ST: o CNPJ vem do XML; o foco confere e so recorta
+        // se o usuario marcou a opcao.
+        const focoDirbi = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+        if (focoDirbi && (document.getElementById('dirbi-foco-only') || {}).checked) {
+            const doFoco = cnpjs.filter((c) => String(c).replace(/\D/g, '') === focoDirbi.cnpj);
+            if (!doFoco.length) {
+                throw new Error(`nenhum XML de ${focoDirbi.razaoSocial} neste lote. Desmarque o recorte por empresa para gerar as demais.`);
+            }
+            cnpjs = doFoco;
+        } else if (focoDirbi) {
+            const nota = avisoFocoInline(cnpjs);
+            if (nota) setStatus(nota);
+        }
 
         setStatus(`Gerando ${cnpjs.length} planilha(s)...`);
         const arquivos = [];
@@ -4782,8 +4825,13 @@ function createSpedPage(mainContent) {
                 <p>Ajuste automático de SPED Fiscal e Contribuições.</p>
             </div>
         </div>
-        <div role="button" tabindex="0" aria-label="Selecionar arquivos SPED" class="dropzone sped-box animate-section" style="animation-delay: 0s; height: 400px; display: flex; align-items: center; justify-content: center; pointer-events: auto !important; z-index: 1000;">
-            <p>Arquivos SPED (.txt)</p>
+        <div role="button" tabindex="0" aria-label="Selecionar arquivos SPED" class="dropzone sped-box animate-section" style="animation-delay: 0s;">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">inventory</span></span>
+                <p class="dropzone__title">Solte os arquivos SPED aqui</p>
+                <p class="dropzone__hint">Fiscal e Contribuições. O ajuste roda no navegador e devolve o arquivo corrigido.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.txt</span></div>
+            
         </div>
     `;
 
@@ -5235,14 +5283,16 @@ function createFortesCorrectionPage(mainContent) {
         </div>
         <div class="fortes-correction-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
             <!-- Box Superior: Upload de Arquivo .fs -->
-            <div role="button" tabindex="0" aria-label="Selecionar arquivo .fs do Fortes" class="dropzone box animate-section fortes-file-box" style="animation-delay: 0s; height: 250px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="fortes-file-box">
-                <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">cloud_upload</span>
-                <span class="box-label" id="fortes-file-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Arraste e solte o arquivo .fs aqui</span>
-                <span style="font-size: 0.9rem; color: var(--color-dark-variant);">ou clique para selecionar</span>
-                <input type="file" id="fortes-file-input" accept=".fs" style="display: none;">
-                <div id="fortes-file-info" style="display: none; margin-top: 1rem; text-align: center;">
-                    <span class="material-icons-sharp" style="font-size: 2rem; color: var(--color-success);">check_circle</span>
-                    <p id="fortes-file-name" style="margin-top: 0.5rem; color: var(--color-success); font-weight: 500;"></p>
+            <div role="button" tabindex="0" aria-label="Selecionar arquivo .fs do Fortes" class="dropzone box animate-section fortes-file-box" style="animation-delay: 0s; position: relative;" id="fortes-file-box">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">build_circle</span></span>
+                <p class="dropzone__title" id="fortes-file-label">Solte o arquivo .fs do Fortes aqui</p>
+                <p class="dropzone__hint">É o arquivo que o relatório de inconsistências aponta. As correções são aplicadas sobre ele.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.fs</span></div>
+                <input type="file" id="fortes-file-input" accept=".fs" hidden>
+                <div class="dropzone__state" id="fortes-file-info" hidden>
+                    <span class="material-icons-sharp">check_circle</span>
+                    <p class="dropzone__count" id="fortes-file-name"></p>
                 </div>
             </div>
             
@@ -5252,16 +5302,18 @@ function createFortesCorrectionPage(mainContent) {
                     <span class="material-icons-sharp">swap_vert</span>
                 </button>
                 <!-- Card Relatório (frente) -->
-                <div role="button" tabindex="0" aria-label="Selecionar relatorio de valores" class="dropzone box fortes-report-box" id="fortes-report-box" style=" height: 500px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform 0.4s ease, opacity 0.4s ease; z-index: 2;">
-                    <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">request_quote</span>
-                    <span id="fortes-report-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Solte o relatório de valores (CSV / XLSX)</span>
-                    <span style="font-size: 0.9rem; color: var(--color-dark-variant); text-align: center; max-width: 90%;">SIGA — colunas "Chave NF-e" e "Valor R$". Fonte de verdade dos valores.</span>
-                    <input type="file" id="fortes-report-input" accept=".csv,.xls,.xlsx,.txt" style="display: none;">
-                    <div id="fortes-report-info" style="display: none; margin-top: 1rem; text-align: center;">
-                        <span class="material-icons-sharp" style="font-size: 2rem; color: var(--color-success);">check_circle</span>
-                        <p id="fortes-report-name" style="margin-top: 0.5rem; color: var(--color-success); font-weight: 500;"></p>
+                <div role="button" tabindex="0" aria-label="Selecionar relatorio de valores" class="dropzone box fortes-report-box" id="fortes-report-box" style=" position: relative; transition: transform 0.4s ease, opacity 0.4s ease; z-index: 2;">
+
+                    <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">request_quote</span></span>
+                    <p class="dropzone__title" id="fortes-report-label">Solte o relatório de valores aqui</p>
+                    <p class="dropzone__hint">SIGA, com as colunas &quot;Chave NF-e&quot; e &quot;Valor R$&quot;. É a fonte de verdade dos valores.</p>
+                    <div class="dropzone__formats" aria-hidden="true"><span>.csv</span><span>.xlsx</span><span>.xls</span><span>.txt</span></div>
+                    <input type="file" id="fortes-report-input" accept=".csv,.xls,.xlsx,.txt" hidden>
+                    <div class="dropzone__state" id="fortes-report-info" hidden>
+                        <span class="material-icons-sharp">check_circle</span>
+                        <p class="dropzone__count" id="fortes-report-name"></p>
                     </div>
-                </div>
+            </div>
                 <!-- Card Instruções (verso) -->
                 <div class="box animate-section fortes-instructions-box" id="fortes-instructions-box" style="position: absolute; top: 0; left: 0; width: 100%; height: 500px; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); display: flex; flex-direction: column; transition: transform 0.4s ease, opacity 0.4s ease; transform: translateY(18px) scale(0.96); opacity: 0; pointer-events: none; z-index: 1;">
                 <label for="fortes-adjustments-textarea" style="font-size: 1.1rem; font-weight: 600; color: var(--color-dark); margin-bottom: 1rem;">
@@ -5371,7 +5423,12 @@ function createFortesCorrectionPage(mainContent) {
             if (fortesReportMap) {
                 if (fortesReportLabel) { fortesReportLabel.textContent = 'Relatório carregado!'; fortesReportLabel.style.color = 'var(--color-success)'; }
                 if (fortesReportInfo) fortesReportInfo.style.display = 'block';
-                if (fortesReportName) fortesReportName.textContent = `${file.name} — ${fortesReportMap.size} nota(s)`;
+                if (fortesReportName) {
+                    // As chaves do relatorio dizem de quem sao as notas: confere contra o foco.
+                    const nota = avisoFocoInline(cnpjsDeChaves(Array.from(fortesReportMap.keys())));
+                    fortesReportName.innerHTML = `${escapeHtml(file.name)} — ${fortesReportMap.size} nota(s)` +
+                        (nota ? '<br>' + nota : '');
+                }
                 if (fortesFileData && fortesProcessBtn) fortesProcessBtn.disabled = false;
             } else {
                 alert('Não encontrei colunas "Chave NF-e" e "Valor" no relatório.');
@@ -8347,20 +8404,29 @@ function createNfeCfeComparisonPage(mainContent) {
                 <p>Conferir documentos emitidos contra o que a SEFAZ registrou.</p>
             </div>
         </div>
+        <div id="nfe-foco-aviso" style="max-width: 1200px; margin: 0 auto 1rem;"></div>
         <div class="nfe-cfe-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
-            <div role="button" tabindex="0" aria-label="Selecionar arquivos do SIGA" class="dropzone box animate-section" style="animation-delay: 0s; height: 300px; position: relative; display: flex; align-items: center; justify-content: center;" id="siget-box">
-                <span class="box-label" id="siget-label">SIGA</span>
-                <svg id="siget-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+            <div role="button" tabindex="0" aria-label="Selecionar arquivos do SIGA" class="dropzone box animate-section" style="animation-delay: 0s; position: relative;" id="siget-box">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">table_view</span></span>
+                <p class="dropzone__title" id="siget-label">Solte o relatório do SIGA aqui</p>
+                <p class="dropzone__hint">Relatório do SIGA com as notas do período.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.xlsx</span><span>.csv</span><span>.txt</span><span>.pdf</span><span>.xml</span></div>
+                <input type="file" id="siget-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple hidden>
+                <svg id="siget-check" class="dropzone__check" width="44" height="44" viewBox="0 0 24 24" fill="none" style="display: none;">
                     <path d="M20 6L9 17L4 12" stroke="var(--color-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
-                <input type="file" id="siget-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple style="display: none;">
             </div>
-            <div role="button" tabindex="0" aria-label="Selecionar arquivos do Fortes" class="dropzone box animate-section" style="animation-delay: 0.1s; height: 300px; position: relative; display: flex; align-items: center; justify-content: center;" id="fortes-box">
-                <span class="box-label" id="fortes-label">Fortes</span>
-                <svg id="fortes-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+            <div role="button" tabindex="0" aria-label="Selecionar arquivos do Fortes" class="dropzone box animate-section" style="animation-delay: 0.1s; position: relative;" id="fortes-box">
+
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">table_view</span></span>
+                <p class="dropzone__title" id="fortes-label">Solte o relatório do Fortes aqui</p>
+                <p class="dropzone__hint">Relatório do Fortes com as notas escrituradas.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.xlsx</span><span>.csv</span><span>.txt</span><span>.pdf</span><span>.xml</span></div>
+                <input type="file" id="fortes-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple hidden>
+                <svg id="fortes-check" class="dropzone__check" width="44" height="44" viewBox="0 0 24 24" fill="none" style="display: none;">
                     <path d="M20 6L9 17L4 12" stroke="var(--color-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
-                <input type="file" id="fortes-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple style="display: none;">
             </div>
         </div>
     `;
@@ -9252,6 +9318,13 @@ function createNfeCfeComparisonPage(mainContent) {
 
         const sigetSet = sigetMap; // Map também responde .has() em O(1)
         const fortesSet = fortesMap;
+
+        // Conferencia contra a empresa em foco: as chaves dizem de quem sao as notas.
+        const notaFoco = avisoFocoInline(cnpjsDeChaves(
+            sigetData.map((i) => i.key).concat(fortesData.map((i) => i.key))
+        ));
+        const barraFoco = document.getElementById('nfe-foco-aviso');
+        if (barraFoco) barraFoco.innerHTML = notaFoco;
 
         const sigetOnly = sigetData.filter(item => !fortesSet.has(item.key));
         const fortesOnly = fortesData.filter(item => !sigetSet.has(item.key));
@@ -15724,3 +15797,54 @@ function bannerForaDoFoco(res, opts) {
 window.conferirFocoEmpresa = conferirFocoEmpresa;
 window.bannerForaDoFoco = bannerForaDoFoco;
 window.rotularCnpj = rotularCnpj;
+
+/**
+ * CNPJs emitentes contidos em chaves de acesso de 44 digitos.
+ * A chave carrega o CNPJ do emitente nas posicoes 7 a 20 (1-based), entao
+ * qualquer tela que leia chave ja sabe de quem e a nota -- nao precisa abrir
+ * o XML nem consultar cadastro.
+ * @param {Iterable<string>} chaves
+ * @returns {string[]} CNPJs distintos, so digitos
+ */
+function cnpjsDeChaves(chaves) {
+    const s = new Set();
+    for (const bruta of chaves || []) {
+        const k = String(bruta || '').replace(/\D/g, '');
+        if (k.length !== 44) continue;
+        s.add(k.substring(6, 20));
+    }
+    return Array.from(s);
+}
+
+/**
+ * CNPJ do registro |0000| de um arquivo SPED (campo 7).
+ * Layout: |0000|COD_VER|COD_FIN|DT_INI|DT_FIN|NOME|CNPJ|...
+ * @param {string} texto conteudo do arquivo
+ * @returns {string} CNPJ com 14 digitos, ou '' se nao achou
+ */
+function cnpjDoSped(texto) {
+    const linha = String(texto || '').split(/\r?\n/).find((l) => l.startsWith('|0000|'));
+    if (!linha) return '';
+    const campos = linha.split('|');
+    const cnpj = String(campos[7] || '').replace(/\D/g, '');
+    return cnpj.length === 14 ? cnpj : '';
+}
+
+/**
+ * Frase curta de conferencia para telas que so avisam (nao recortam).
+ * @param {Iterable<string>} cnpjs
+ * @returns {string} HTML, ou '' quando nao ha nada a dizer
+ */
+function avisoFocoInline(cnpjs) {
+    const res = typeof conferirFocoEmpresa === 'function' ? conferirFocoEmpresa(cnpjs) : null;
+    if (!res) return '';
+    const quem = res.fora.slice(0, 3).map((c) => escapeHtml(formatarCnpjCurto(c))).join(', ');
+    const resto = res.fora.length > 3 ? ' e mais ' + (res.fora.length - 3) : '';
+    return '<span class="foco-inline"><span class="material-icons-sharp">filter_alt_off</span>' +
+        'Fora de <strong>' + escapeHtml(res.empresa.razaoSocial) + '</strong>: ' + quem + resto +
+        '. Nada foi descartado.</span>';
+}
+
+window.cnpjsDeChaves = cnpjsDeChaves;
+window.cnpjDoSped = cnpjDoSped;
+window.avisoFocoInline = avisoFocoInline;
