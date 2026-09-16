@@ -489,6 +489,35 @@ medidos, 12 passam), foco visivel em 21/21 controles focaveis do painel,
 `prefers-reduced-motion` degradando de fato (0.4s vira 0.00001s), 12 abas x 2 temas
 sem erro de console e sem rolagem horizontal em 375/768/1024/1600.
 
+### P11 — APP_ADMIN_PASSWORD_HASH na Vercel esta com a URL da API de ICMS
+
+**Acao do usuario, nao do codigo.** Diagnosticado em 2026-09-16 lendo o
+`window.APP_CONFIG` servido em producao: `adminPasswordHash` tem 47 caracteres,
+nao comeca com `pbkdf2$` e e **identico a `icmsApiUrl`** -- o valor de
+`ICMS_API_URL` foi colado na variavel errada.
+
+Efeito: o login do super-admin `adm` nunca funciona em producao.
+`verifyPassword` cai no ramo legacy, compara a senha digitada contra uma URL e
+sempre devolve "Senha incorreta". Login normal da equipe vai por Supabase Auth
+e nao depende disso.
+
+**Como corrigir (so o dono da senha pode):**
+
+```bash
+node scripts/gerar-hash-admin.mjs
+```
+
+Pede o `APP_PASSWORD_SALT` (o MESMO que esta na Vercel) e a senha, que nao
+aparece na tela nem fica no historico do shell. Imprime o `pbkdf2$...` para
+colar em Project -> Settings -> Environment Variables -> APP_ADMIN_PASSWORD_HASH,
+e refazer o deploy.
+
+**Ja blindado no codigo:** `scripts/gen-config.js` agora valida o FORMATO das
+env vars, nao so a presenca -- com o valor de hoje o build FALHA dizendo
+"parece uma URL; provavelmente o valor de outra variavel foi colado aqui".
+E o login, se algo passar, diz "Acesso de administrador mal configurado neste
+ambiente" em vez de "Senha incorreta".
+
 ## Resolvido
 
 ### ✓ Baixar NFCe pelo worker — FUNCIONANDO de ponta a ponta (2026-09-10)

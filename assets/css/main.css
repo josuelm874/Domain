@@ -5744,3 +5744,47 @@ body.dark-mode-variables .dashboard-container .logo-light { display: none !impor
 .foco-inline strong {
     color: var(--color-dark);
 }
+
+/* =====================================================================
+   PILHA DE CARDS DA CORRECAO FORTES (relatorio de valores / instrucoes).
+   Grade com UMA celula: os dois cards ficam em `grid-area: 1/1`, entao a
+   pilha mede o mais alto e nenhum dos dois escapa dela. Antes o card de
+   tras era `position:absolute; height:500px` dentro de uma pilha de 208px
+   -- vazava 312px e cobria os botoes de processar.
+   ===================================================================== */
+.dashboard-container .fortes-stack {
+    position: relative;
+    display: grid;
+    width: 100%;
+    max-width: 56rem;
+    min-height: 22rem;
+    margin: 0 auto;
+}
+.dashboard-container .fortes-stack > #fortes-report-box,
+.dashboard-container .fortes-stack > #fortes-instructions-box {
+    grid-area: 1 / 1;
+    width: 100%;
+    height: auto;
+    max-width: none;
+    margin: 0;
+    transition: transform var(--dur-base) var(--ease-out),
+                opacity var(--dur-base) var(--ease-out);
+}
+.dashboard-container .fortes-stack > #fortes-instructions-box {
+    display: flex;
+    flex-direction: column;
+    padding: var(--card-padding);
+    background-color: var(--color-white);
+    border: 1px solid var(--color-border);
+    border-radius: var(--card-border-radius);
+}
+.dashboard-container .fortes-stack #fortes-adjustments-textarea {
+    flex: 1 1 auto;
+    min-height: 14rem;
+}
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-container .fortes-stack > #fortes-report-box,
+    .dashboard-container .fortes-stack > #fortes-instructions-box {
+        transition-duration: 0.01ms;
+    }
+}
