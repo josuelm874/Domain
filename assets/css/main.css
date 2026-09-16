@@ -1870,25 +1870,20 @@ body.dark-mode-variables .dashboard-container .logo-light { display: none !impor
     stroke: var(--color-success) !important; /* Forçar cor do traço */
     visibility: visible !important; /* Forçar visibilidade do path */
 }
+.nfe-cfe-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+    gap: var(--space-4) !important;
+    padding: 0 !important;
+}
 .nfe-cfe-grid .box {
-    display: flex;
-    align-items: center;
-    justify-content: center;
     position: relative;
     cursor: pointer;
-    transition: background-color 0.3s;
 }
-
-.nfe-cfe-grid .box-label {
-    font-family: 'Poppins', sans-serif;
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: var(--color-dark);
-    transition: opacity 0.3s;
-}
-
-.dark .nfe-cfe-grid .box-label {
-    color: var(--color-light);
+@media screen and (max-width: 768px) {
+    .nfe-cfe-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .nfe-cfe-grid .box:hover,
@@ -5266,26 +5261,40 @@ body.dark-mode-variables .dashboard-container .logo-light { display: none !impor
 }
 
 /* =====================================================================
-   DROPZONE — as nove areas de "arraste o arquivo aqui" do sistema.
-   Antes: <div> com estilo inline repetido, sem role e sem foco. O contorno
-   tracejado tambem faltava: a area parecia um card informativo, nao um alvo
-   de arrastar. Uma classe resolve desenho, estado e teclado nas nove.
+   DROPZONE — a area de arquivo das sete telas de processamento.
+
+   Antes cada tela desenhava a sua: o ICMS tinha icone, titulo e dica; o SPED
+   tinha `<p>Arquivos SPED (.txt)</p>` sozinho num retangulo de 400px; o
+   NFe x NFCe tinha so a palavra "SIGA". Quem nunca usou nao sabia o que
+   soltar nem em que formato.
+
+   Anatomia unica: ladrilho de icone, titulo (o que fazer), dica (o porque),
+   formatos aceitos como etiquetas e area de confirmacao. Altura MINIMA, nao
+   fixa: a caixa cresce quando a lista de arquivos aparece, em vez de deixar
+   200px de vazio quando nao ha nada.
    ===================================================================== */
 .dashboard-container .dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
     width: 100%;
     max-width: 56rem;
+    min-height: 13rem;
     margin: 0 auto;
+    padding: var(--space-5) var(--card-padding);
     background-color: var(--color-white);
     border: 1px dashed var(--color-field-border);
     border-radius: var(--card-border-radius);
-    padding: var(--card-padding);
     cursor: pointer;
     text-align: center;
     transition: border-color var(--dur-fast) var(--ease-out),
                 background-color var(--dur-fast) var(--ease-out);
 }
 .dashboard-container .dropzone:hover,
-.dashboard-container .dropzone.dragover {
+.dashboard-container .dropzone.dragover,
+.dashboard-container .dropzone.bn-dragover {
     border-color: var(--color-primary);
     background-color: var(--color-primary-soft);
 }
@@ -5294,12 +5303,111 @@ body.dark-mode-variables .dashboard-container .logo-light { display: none !impor
     outline-offset: 2px;
     border-color: var(--color-primary);
 }
+
+.dashboard-container .dropzone__icon {
+    display: grid;
+    place-items: center;
+    width: 3rem;
+    height: 3rem;
+    flex: 0 0 auto;
+    border-radius: var(--border-radius-2);
+    background-color: var(--color-light);
+    color: var(--color-dark-variant);
+    transition: background-color var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out);
+}
+.dashboard-container .dropzone__icon span.material-icons-sharp {
+    font-size: 1.5rem;
+}
+.dashboard-container .dropzone:hover .dropzone__icon,
+.dashboard-container .dropzone.dragover .dropzone__icon {
+    background-color: var(--color-primary-soft);
+    color: var(--color-primary-ink);
+}
+
+.dashboard-container .dropzone__title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--color-dark);
+    margin: 0;
+}
+.dashboard-container .dropzone__hint {
+    max-width: 34rem;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--color-info-dark);
+    margin: 0;
+}
+
+/* Formatos aceitos. Eram a informacao que mais faltava: o `accept` do input
+   so aparece na janela de arquivo, depois que a pessoa ja clicou. */
+.dashboard-container .dropzone__formats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem;
+    margin-top: 0.2rem;
+}
+.dashboard-container .dropzone__formats span {
+    padding: 2px 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background-color: var(--color-surface-2);
+    color: var(--color-dark-variant);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+/* Confirmacao. Os handlers de cada tela mostram com style.display, que ganha
+   do atributo `hidden` -- por isso o markup nasce com `hidden` e nenhum
+   handler precisou mudar. */
+.dashboard-container .dropzone__state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    margin-top: 0.6rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--color-border);
+}
+/* `hidden` e regra do navegador, e regra de autor ganha dela em qualquer
+   especificidade. Sem esta linha o check verde aparecia com a caixa vazia. */
+.dashboard-container .dropzone__state[hidden] {
+    display: none;
+}
+.dashboard-container .dropzone__state > span.material-icons-sharp {
+    font-size: 1.5rem;
+    color: var(--color-success-ink);
+}
+.dashboard-container .dropzone__count {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-success-ink);
+    margin: 0;
+}
+.dashboard-container .dropzone__files {
+    max-width: 100%;
+    max-height: 7rem;
+    overflow-y: auto;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    color: var(--color-info-dark);
+    word-break: break-word;
+}
+.dashboard-container .dropzone__check {
+    margin-top: 0.4rem;
+}
+
 /* Arquivo ja escolhido: o tracejado vira solido e verde -- o estado "pronto"
    precisa ser lido sem depender so do texto. */
 .dashboard-container .dropzone.has-file {
     border-style: solid;
     border-color: var(--color-success);
 }
+
 
 /* =====================================================================
    SELETOR DE EMPRESA — o recorte por contribuinte, na topbar.
@@ -5613,4 +5721,26 @@ body.dark-mode-variables .dashboard-container .logo-light { display: none !impor
         max-width: none;
         width: 100%;
     }
+}
+
+/* Conferencia de foco em linha, para telas que so avisam (sem recorte). */
+.foco-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--color-warning);
+    border-radius: var(--border-radius-1);
+    background-color: var(--color-warning-soft);
+    color: var(--color-dark-variant);
+    font-size: 0.76rem;
+    line-height: 1.4;
+}
+.foco-inline span.material-icons-sharp {
+    font-size: 0.95rem;
+    color: var(--color-warning-ink);
+    flex: 0 0 auto;
+}
+.foco-inline strong {
+    color: var(--color-dark);
 }

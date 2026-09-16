@@ -454,9 +454,19 @@ dropzone) foi ao ar em 2026-09-16. Sobrou, em ordem de valor:
   atalhos para ICMS ST, DIRBI, SPED e PIS/COFINS), no lugar do cartao vazio que era
   antes. O CSS `.apuration-table` / `.apuration-modal` continua sem dono: existe uma
   planilha de apuracao desenhada e nunca construida. Construir ou apagar.
-- **Telas que ainda ignoram o foco:** Correcao Fortes, NFe x NFCe, SPED, DIRBI e
-  Checagem de Transferencias. Nelas o CNPJ tambem vem do arquivo, entao o mesmo
-  `conferirFocoEmpresa` serve -- e so plugar onde cada uma agrupa por empresa.
+- ~~**Telas que ainda ignoram o foco.**~~ **Fechadas em 2026-09-16.** As nove telas de
+  processamento conferem contra a empresa em foco. Fonte do CNPJ em cada uma:
+  emit>CNPJ do XML (ICMS ST, DIRBI), chave de 44 digitos nas posicoes 7-20 (Baixar NFCe,
+  Baixar NFe, NFe x NFCe, Correcao Fortes, Transferencias) e registro `|0000|` campo 7
+  (Corretor Fiscal, para SPED). Recorte com opt-in so onde a tela gera uma saida POR
+  empresa (ICMS ST e DIRBI); nas demais e aviso.
+  **Fica de fora, e e fronteira, nao lacuna:** arquivo `.fs` do Fortes nao expoe CNPJ em
+  lugar conhecido, entao a Correcao Fortes so confere pelo relatorio SIGA (que tem
+  chave). O SPED dentro do Corretor Fiscal confere; o `.fs`, nao.
+- **Area de arquivo redesenhada em 2026-09-16.** As nove dropzones tinham miolos
+  diferentes -- o SPED era `<p>Arquivos SPED (.txt)</p>` num retangulo de 400px e o
+  NFe x NFCe era so a palavra "SIGA". Agora todas tem a mesma anatomia (icone, titulo,
+  dica, formatos aceitos, area de confirmacao) e altura MINIMA em vez de fixa.
 - **Tela de login reconstruida em 2026-09-16.** Ficou de fora da imagem de referencia,
   de proposito: "Continue with Google" (o projeto so tem auth por e-mail/senha no
   Supabase) e "Sign up" (usuario aqui e criado pelo administrador). "Esqueceu a senha?"

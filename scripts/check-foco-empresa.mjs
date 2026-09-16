@@ -63,4 +63,39 @@ empresaEmFoco = { cnpj: ALFA, razaoSocial: 'ALFA' };
 assert.equal(conferirFocoEmpresa(['', null, undefined, '   ', ALFA]), null,
     'lixo + só o CNPJ do foco deveria devolver null');
 
-console.log('OK — conferirFocoEmpresa passou nas 5 checagens.');
+// ---------------------------------------------------------------------------
+// Extratores de CNPJ que alimentam a conferência nas telas de processamento.
+// ---------------------------------------------------------------------------
+const cnpjsDeChaves = eval(`(${extrairFuncao('cnpjsDeChaves')})`);
+const cnpjDoSped = eval(`(${extrairFuncao('cnpjDoSped')})`);
+
+// 6. A chave de acesso carrega o CNPJ do emitente nas posições 7-20 (1-based).
+const chaveAlfa = '23' + '2608' + ALFA + '65' + '001' + '000000001' + '1' + '12345678' + '0';
+assert.equal(chaveAlfa.length, 44, 'chave de teste precisa ter 44 dígitos');
+assert.deepEqual(cnpjsDeChaves([chaveAlfa]), [ALFA], 'CNPJ deveria sair das posições 7-20');
+
+// 7. Chave com máscara e chave curta: uma entra limpa, a outra é descartada.
+assert.deepEqual(
+    cnpjsDeChaves([chaveAlfa.replace(/(\d{4})/g, '$1 '), '123', '']),
+    [ALFA],
+    'máscara deveria ser tolerada e chave curta descartada');
+
+// 8. Duas notas da mesma empresa contam como uma empresa só.
+const chaveAlfa2 = '23' + '2608' + ALFA + '65' + '001' + '000000002' + '1' + '87654321' + '0';
+assert.deepEqual(cnpjsDeChaves([chaveAlfa, chaveAlfa2]), [ALFA]);
+
+// 9. SPED: o CNPJ é o campo 7 do registro |0000|.
+const sped = [
+    '|0000|017|0|01012026|31012026|EMPRESA EXEMPLO LTDA|' + ALFA + '||CE|0612345|2304400|||A|1|',
+    '|0001|0|',
+].join('\n');
+assert.equal(cnpjDoSped(sped), ALFA, 'CNPJ deveria sair do campo 7 do |0000|');
+
+// Terminação Windows (\r\n) é o caso comum de SPED e não pode sujar o CNPJ.
+assert.equal(cnpjDoSped(sped.replace(/\n/g, '\r\n')), ALFA, 'CRLF deveria ser tolerado');
+
+// 10. Arquivo sem |0000| (ou .fs) devolve vazio — e vazio não vira aviso.
+assert.equal(cnpjDoSped('|C100|0|1|\n|C170|1|'), '', 'sem |0000| deveria devolver vazio');
+assert.equal(cnpjDoSped(''), '');
+
+console.log('OK — conferirFocoEmpresa, cnpjsDeChaves e cnpjDoSped passaram nas 10 checagens.');

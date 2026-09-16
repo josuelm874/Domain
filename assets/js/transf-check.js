@@ -278,11 +278,14 @@
     function caixa(id, titulo, delay) {
         return `
             <div role="button" tabindex="0" aria-label="Selecionar arquivos: ${titulo}" class="dropzone box animate-section" style="animation-delay: ${delay}; height: 300px; position: relative; display: flex; align-items: center; justify-content: center;" id="${id}-box">
-                <span class="box-label" id="${id}-label">${titulo}</span>
-                <svg id="${id}-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+                <span class="dropzone__icon" aria-hidden="true"><span class="material-icons-sharp">compare_arrows</span></span>
+                <p class="dropzone__title" id="${id}-label">Solte o relatório de ${titulo} aqui</p>
+                <p class="dropzone__hint">Relatório de Notas Fiscais Eletrônicas com Chave, CFOP e Valor.</p>
+                <div class="dropzone__formats" aria-hidden="true"><span>.xlsx</span><span>.xls</span><span>.csv</span></div>
+                <input type="file" id="${id}-file-input" accept=".xls,.xlsx,.csv" multiple hidden>
+                <svg id="${id}-check" class="dropzone__check" width="44" height="44" viewBox="0 0 24 24" fill="none" style="display: none;">
                     <path d="M20 6L9 17L4 12" stroke="var(--color-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
-                <input type="file" id="${id}-file-input" accept=".xls,.xlsx,.csv" multiple style="display: none;">
             </div>`;
     }
 
@@ -437,6 +440,13 @@
             const r = compararTransferencias(saidaRows, entradaRows);
             console.log('Resultado da checagem de transferências:', r);
 
+            // A chave eletronica carrega o CNPJ do emitente: da para conferir o lote
+            // contra a empresa em foco sem abrir nenhum XML.
+            const avisoFoco = (typeof window.avisoFocoInline === 'function' && typeof window.cnpjsDeChaves === 'function')
+                ? window.avisoFocoInline(window.cnpjsDeChaves(
+                    saidaRows.map((x) => x.chave).concat(entradaRows.map((x) => x.chave))))
+                : '';
+
             const modal = document.createElement('div');
             modal.classList.add('modal-overlay');
 
@@ -450,20 +460,22 @@
             // e ela também hospeda os botões de exportar (mesmo layout da aba NFe|NFCe).
             const barra = `
                 <div class="tabs">
-                    ${semAbas ? '<span></span>' : `<div class="tab active" data-tab="transf-faltantes">
-                        Ausentes na Entrada <span class="column-count">(${r.faltantes.length})</span>
-                    </div>`}
-                    <div class="export-buttons">
-                        <button class="export-btn pdf-btn" id="transf-export-pdf" title="Exportar para PDF">
-                            <img width="24" height="24" src="https://img.icons8.com/fluency/48/pdf--v1.png" alt="PDF"/>
+                    <div class="tabs__group" role="tablist">
+                        ${semAbas ? '' : `<button type="button" class="tab active" role="tab" aria-selected="true" data-tab="transf-faltantes">
+                            Ausentes na Entrada <span class="column-count">(${r.faltantes.length})</span>
                         </button>
-                        <button class="export-btn xlsx-btn" id="transf-export-xlsx" title="Exportar para XLSX">
-                            <img width="24" height="24" src="https://img.icons8.com/color/48/microsoft-excel-2019--v1.png" alt="XLSX"/>
+                        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="transf-divergentes">
+                            Divergências <span class="column-count">(${r.divergentes.length})</span>
+                        </button>`}
+                    </div>
+                    <div class="export-buttons">
+                        <button class="export-btn pdf-btn" id="transf-export-pdf" title="Exportar para PDF" aria-label="Exportar para PDF">
+                            <span class="material-icons-sharp">picture_as_pdf</span>
+                        </button>
+                        <button class="export-btn xlsx-btn" id="transf-export-xlsx" title="Exportar para XLSX" aria-label="Exportar para XLSX">
+                            <span class="material-icons-sharp">table_view</span>
                         </button>
                     </div>
-                    ${semAbas ? '<span></span>' : `<div class="tab" data-tab="transf-divergentes">
-                        Divergências <span class="column-count">(${r.divergentes.length})</span>
-                    </div>`}
                 </div>`;
 
             const faltaLado = [!saidaRows.length && 'SAÍDA', !entradaRows.length && 'ENTRADA'].filter(Boolean).join(' e ');
@@ -522,9 +534,10 @@
 
             modal.innerHTML = `<div class="modal-content">
                 ${barra}
-                <p style="text-align:center; margin: 4rem 0 1rem;">
+                <p style="text-align:center; margin: 4rem 0 0.5rem;">
                     ${r.totalTransferencias} transferência(s) na saída · ${r.ok} conferida(s) sem divergência${canceladas ? ` · ${canceladas} nota(s) cancelada(s) ignorada(s)` : ''}
                 </p>
+                ${avisoFoco ? `<p style="text-align:center; margin: 0 0 1rem;">${avisoFoco}</p>` : ''}
                 ${bannerAvisos}
                 ${corpo}
             </div>`;
