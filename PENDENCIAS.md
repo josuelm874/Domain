@@ -441,11 +441,15 @@ node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2
 O esqueleto (topbar, sidebar, faixa de KPI, cartao, sub-aba, campo de formulario,
 dropzone) foi ao ar em 2026-09-16. Sobrou, em ordem de valor:
 
-- **Seletor de empresa na topbar.** O design de referencia tem um. Nao foi feito porque
-  hoje nada no sistema consome uma "empresa ativa": cada tela descobre o CNPJ pelo
-  arquivo que recebe. Um seletor que nao filtra nada e um controle morto. Para valer,
-  precisa primeiro de um `empresaAtiva` que a Visao Geral, as Pendencias e os
-  downloads leiam.
+- ~~**Seletor de empresa na topbar.**~~ **Feito em 2026-09-16.** Le e escreve
+  `empresaAtiva_<usuario>`; consumido pela faixa de KPI e pelas Pendencias (que passam
+  a nascer carimbadas com a empresa em foco). **Falta ampliar os consumidores:** as
+  telas de download e de apuracao ainda descobrem o CNPJ pelo arquivo que recebem e
+  ignoram o foco. Enquanto isso, o foco recorta o painel, nao o processamento.
+- **Tela de login reconstruida em 2026-09-16.** Ficou de fora da imagem de referencia,
+  de proposito: "Continue with Google" (o projeto so tem auth por e-mail/senha no
+  Supabase) e "Sign up" (usuario aqui e criado pelo administrador). "Esqueceu a senha?"
+  virou texto em vez de link porque nao existe fluxo de recuperacao.
 - **Largura das telas de upload.** ICMS ST, SPED, DIRBI, Fortes e NFe x NFCe ainda
   centralizam o conteudo em ~800px com estilo inline na propria pagina. Em monitor
   largo sobra area morta dos dois lados. Resolver exige mexer no container de cada uma

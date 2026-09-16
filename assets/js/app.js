@@ -1041,7 +1041,13 @@
                 if (typeof safeUpdateTaxReminders === 'function') {
                     safeUpdateTaxReminders();
                 }
-                
+
+                // O foco de empresa e salvo por usuario, entao so agora da para
+                // saber qual restaurar -- antes do login a chave seria a de "anon".
+                if (typeof carregarEmpresas === 'function') {
+                    carregarEmpresas().catch((e) => console.warn('Seletor de empresa:', e));
+                }
+
                 console.log('✅ ========== showDashboardAfterLogin CONCLUÍDO ==========');
             }, 300);
         }, 100);
@@ -12998,7 +13004,8 @@ async function showPendenciasModal() {
                     </form>
                 </div>
                 <div class="users-section">
-                    <h3 style="margin-bottom:1rem;">Pendências cadastradas</h3>
+                    <h3 style="margin-bottom:0.25rem;">Pendências cadastradas</h3>
+                    <p id="pendencias-escopo" class="pendencias-escopo"></p>
                     <div id="pendencias-list" class="users-list"></div>
                 </div>
             </div>
@@ -13028,6 +13035,10 @@ async function handleAddPendencia(e) {
         if (tituloInput) tituloInput.focus();
         return;
     }
+    // Carimba a empresa em foco. Sem foco fica sem empresa, e uma pendencia sem
+    // empresa aparece em qualquer recorte -- e o que se espera de uma tarefa do
+    // escritorio que nao e de um cliente especifico.
+    const empresaFoco = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
     const pendencia = {
         id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         titulo,
@@ -13035,6 +13046,8 @@ async function handleAddPendencia(e) {
         done: false,
         completedAt: null,
         createdAt: new Date().toISOString(),
+        empresaCnpj: empresaFoco ? empresaFoco.cnpj : null,
+        empresaNome: empresaFoco ? empresaFoco.razaoSocial : null,
     };
     pendenciasState.items.unshift(pendencia);
     await saveDataSync('pendencias', pendenciasState.items);
@@ -13064,12 +13077,26 @@ function renderPendenciasList() {
     const list = document.getElementById('pendencias-list');
     if (!list) return;
 
-    if (!pendenciasState.items.length) {
-        list.innerHTML = '<p class="no-users">Nenhuma pendência cadastrada ainda.</p>';
+    const empresa = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+    const itens = empresa
+        ? pendenciasState.items.filter((p) => !p.empresaCnpj || p.empresaCnpj === empresa.cnpj)
+        : pendenciasState.items;
+
+    const escopo = document.getElementById('pendencias-escopo');
+    if (escopo) {
+        escopo.textContent = empresa
+            ? `Mostrando as de ${empresa.razaoSocial} e as do escritório.`
+            : 'Mostrando as pendências de todas as empresas.';
+    }
+
+    if (!itens.length) {
+        list.innerHTML = empresa
+            ? '<p class="no-users">Nenhuma pendência para esta empresa.</p>'
+            : '<p class="no-users">Nenhuma pendência cadastrada ainda.</p>';
         return;
     }
 
-    list.innerHTML = pendenciasState.items.map((p) => {
+    list.innerHTML = itens.map((p) => {
         const expanded = pendenciasExpanded.has(p.id);
         const concluida = p.done
             ? `<div class="pendencia-concluida" style="font-size:0.8rem; color:var(--color-success); margin-top:0.5rem;">Concluída em ${escapeHtml(formatPendenciaDateTime(p.completedAt))}</div>`
@@ -13080,7 +13107,7 @@ function renderPendenciasList() {
         return `
         <div class="pendencia-item" data-id="${escapeHtml(p.id)}" style="border:1px solid var(--color-info-light); border-radius:var(--border-radius-1); padding:0.75rem 1rem; margin-bottom:0.75rem; background:var(--color-white);">
             <div class="pendencia-header" style="display:flex; justify-content:space-between; align-items:center; gap:1rem; cursor:pointer;">
-                <span class="pendencia-titulo" style="text-align:left; flex:1; font-weight:600; ${p.done ? 'text-decoration:line-through; opacity:0.6;' : ''}">${escapeHtml(p.titulo)}</span>
+                <span class="pendencia-titulo" style="text-align:left; flex:1; font-weight:600; ${p.done ? 'text-decoration:line-through; opacity:0.6;' : ''}">${escapeHtml(p.titulo)}${p.empresaNome ? `<small class="pendencia-empresa">${escapeHtml(p.empresaNome)}</small>` : ''}</span>
                 <input type="checkbox" class="pendencia-check" data-id="${escapeHtml(p.id)}" ${p.done ? 'checked' : ''} style="width:1.2rem; height:1.2rem; cursor:pointer; flex-shrink:0;">
             </div>
             <div class="pendencia-body" style="display:${expanded ? 'block' : 'none'}; margin-top:0.5rem; padding-top:0.5rem; border-top:1px dashed var(--color-info-light);">
@@ -14866,7 +14893,13 @@ async function renderDashboardKpis() {
         console.warn('KPIs: falha ao carregar dados, exibindo estado vazio.', e);
     }
 
-    const lista = Array.isArray(pendencias) ? pendencias : [];
+    // Recorte pela empresa em foco. Pendencia sem `empresaCnpj` e anterior ao
+    // seletor: conta em qualquer recorte, senao some trabalho ja registrado.
+    const empresa = typeof getEmpresaAtiva === 'function' ? getEmpresaAtiva() : null;
+    const todas = Array.isArray(pendencias) ? pendencias : [];
+    const lista = empresa
+        ? todas.filter((p) => !p.empresaCnpj || p.empresaCnpj === empresa.cnpj)
+        : todas;
     const abertas = lista.filter((p) => !p.done).length;
     const concluidas = lista.filter((p) => p.done).length;
 
@@ -14894,13 +14927,21 @@ async function renderDashboardKpis() {
             value: String(concluidasMes),
             meta: inicioMes.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }),
         },
-        {
-            tone: 'accent',
-            icon: 'apartment',
-            label: 'Contribuintes',
-            value: String(Array.isArray(contribuintes) ? contribuintes.length : 0),
-            meta: 'Cadastrados no sistema',
-        },
+        empresa
+            ? {
+                  tone: 'accent',
+                  icon: 'apartment',
+                  label: 'Empresa em foco',
+                  value: formatarCnpjCurto(empresa.cnpj),
+                  meta: empresa.razaoSocial,
+              }
+            : {
+                  tone: 'accent',
+                  icon: 'apartment',
+                  label: 'Contribuintes',
+                  value: String(Array.isArray(contribuintes) ? contribuintes.length : 0),
+                  meta: 'Cadastrados no sistema',
+              },
         {
             key: 'vencimento',
             tone: proximo && proximo.dias <= 3 ? 'danger' : 'primary',
@@ -15158,6 +15199,7 @@ function ligarBuscaGlobal() {
 document.addEventListener('DOMContentLoaded', () => {
     ligarBuscaGlobal();
     montarIndiceBusca().catch(() => {});
+    ligarSeletorEmpresa();
 
     const sino = document.getElementById('alerts-btn');
     if (sino) {
@@ -15205,3 +15247,189 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window.renderDashboardKpis = renderDashboardKpis;
 window.atualizarBadgeVencimentos = atualizarBadgeVencimentos;
+
+// ============================================================================
+// EMPRESA EM FOCO — o seletor da topbar.
+//
+// Ele NAO e um filtro cosmetico. Quem le `empresaAtiva` hoje:
+//   - a faixa de KPI da Visao Geral (pendencias e o cartao de contribuinte);
+//   - o cadastro de pendencia, que carimba a empresa na hora de criar;
+//   - a lista de pendencias, que mostra so as da empresa mais as sem empresa.
+// Pendencia criada antes desta versao nao tem `empresaCnpj` e por isso conta
+// como "de todas" -- some-la num filtro seria perder trabalho ja registrado.
+//
+// O escopo vive por usuario (`empresaAtiva_<login>`): duas pessoas no mesmo
+// navegador nao herdam o foco uma da outra.
+// ============================================================================
+
+const empresaState = { atual: null, lista: [], aberto: false };
+
+/** Chave de persistencia do usuario logado. */
+function chaveEmpresaAtiva() {
+    // `window.currentUser` vem primeiro de proposito: `getCurrentUser()` le
+    // localStorage('currentUser'), que o login do super-admin nao grava e que
+    // devolve 'Unknown' -- o foco ficaria num balde compartilhado.
+    const u = window.currentUser
+        || (typeof getCurrentUser === 'function' ? getCurrentUser() : null)
+        || 'anon';
+    return 'empresaAtiva_' + u;
+}
+
+/** Só dígitos, para comparar CNPJ digitado com CNPJ salvo. */
+function digitosCnpj(v) {
+    return String(v || '').replace(/\D/g, '');
+}
+
+/**
+ * Empresa em foco no momento, ou null para "todas".
+ * @returns {{cnpj: string, razaoSocial: string, regime?: string}|null}
+ */
+function getEmpresaAtiva() {
+    return empresaState.atual;
+}
+
+/**
+ * Troca a empresa em foco, persiste e repinta quem depende dela.
+ * @param {{cnpj: string, razaoSocial: string, regime?: string}|null} empresa
+ */
+function setEmpresaAtiva(empresa) {
+    empresaState.atual = empresa;
+    window.empresaAtiva = empresa;
+    try {
+        if (empresa) localStorage.setItem(chaveEmpresaAtiva(), JSON.stringify(empresa));
+        else localStorage.removeItem(chaveEmpresaAtiva());
+    } catch (e) {
+        console.warn('Não consegui persistir a empresa em foco:', e);
+    }
+    pintarGatilhoEmpresa();
+    renderListaEmpresas();
+    // A Visao Geral é a única tela cujo conteúdo muda com o escopo.
+    const container = document.querySelector('.dashboard-container');
+    if (container && container.dataset.page === 'dashboard') renderDashboardKpis();
+    const lista = document.getElementById('pendencias-list');
+    if (lista) renderPendenciasList();
+}
+
+function pintarGatilhoEmpresa() {
+    const rotulo = document.getElementById('company-label');
+    const gatilho = document.getElementById('company-trigger');
+    if (!rotulo || !gatilho) return;
+    const e = empresaState.atual;
+    rotulo.textContent = e ? e.razaoSocial : 'Todas as empresas';
+    gatilho.title = e ? `${e.razaoSocial} — ${formatarCnpjCurto(e.cnpj)}` : 'Nenhuma empresa em foco';
+    gatilho.classList.toggle('is-active', !!e);
+}
+
+/** Carrega os contribuintes cadastrados e restaura o foco salvo. */
+async function carregarEmpresas() {
+    try {
+        const lista = await loadDataSync('contributors', []);
+        empresaState.lista = (Array.isArray(lista) ? lista : [])
+            .filter((c) => c && (c.razaoSocial || c.cnpj))
+            .map((c) => ({
+                cnpj: digitosCnpj(c.cnpj),
+                razaoSocial: c.razaoSocial || formatarCnpjCurto(c.cnpj),
+                regime: c.regime || '',
+            }))
+            .sort((a, b) => a.razaoSocial.localeCompare(b.razaoSocial, 'pt-BR'));
+    } catch (e) {
+        console.warn('Seletor de empresa: contribuintes indisponíveis.', e);
+        empresaState.lista = [];
+    }
+
+    // Restaura o foco salvo, mas só se a empresa ainda existir no cadastro.
+    let salva = null;
+    try {
+        const bruto = localStorage.getItem(chaveEmpresaAtiva());
+        if (bruto) salva = JSON.parse(bruto);
+    } catch (e) { /* JSON corrompido: cai em "todas" */ }
+    const aindaExiste = salva && empresaState.lista.some((e) => e.cnpj === digitosCnpj(salva.cnpj));
+    setEmpresaAtiva(aindaExiste ? empresaState.lista.find((e) => e.cnpj === digitosCnpj(salva.cnpj)) : null);
+}
+
+function renderListaEmpresas() {
+    const alvo = document.getElementById('company-list');
+    if (!alvo) return;
+    const filtro = chaveBusca((document.getElementById('company-filter') || {}).value || '').trim();
+    const visiveis = empresaState.lista.filter(
+        (e) => !filtro || chaveBusca(e.razaoSocial).includes(filtro) || e.cnpj.includes(filtro.replace(/\D/g, ''))
+    );
+    const atualCnpj = empresaState.atual ? empresaState.atual.cnpj : '';
+
+    const todas = `
+        <button type="button" class="company-select__item" role="option" data-cnpj=""
+                aria-selected="${atualCnpj ? 'false' : 'true'}">
+            <span class="material-icons-sharp">select_all</span>
+            <span class="company-select__item-text"><strong>Todas as empresas</strong>
+                <small>Sem recorte por contribuinte</small></span>
+            ${atualCnpj ? '' : '<span class="material-icons-sharp company-select__check">check</span>'}
+        </button>`;
+
+    if (!empresaState.lista.length) {
+        alvo.innerHTML = todas +
+            '<p class="company-select__empty">Nenhum contribuinte cadastrado. Cadastre em Configurações → Cadastrar Contribuinte.</p>';
+        return;
+    }
+
+    alvo.innerHTML = todas + (visiveis.length
+        ? visiveis.map((e) => `
+            <button type="button" class="company-select__item" role="option" data-cnpj="${escapeHtml(e.cnpj)}"
+                    aria-selected="${e.cnpj === atualCnpj ? 'true' : 'false'}">
+                <span class="material-icons-sharp">apartment</span>
+                <span class="company-select__item-text"><strong>${escapeHtml(e.razaoSocial)}</strong>
+                    <small>${escapeHtml(formatarCnpjCurto(e.cnpj))}${e.regime ? ' · ' + escapeHtml(e.regime) : ''}</small></span>
+                ${e.cnpj === atualCnpj ? '<span class="material-icons-sharp company-select__check">check</span>' : ''}
+            </button>`).join('')
+        : '<p class="company-select__empty">Nenhuma empresa bate com esse filtro.</p>');
+}
+
+function abrirMenuEmpresa(abrir) {
+    const menu = document.getElementById('company-menu');
+    const gatilho = document.getElementById('company-trigger');
+    const filtro = document.getElementById('company-filter');
+    if (!menu || !gatilho) return;
+    empresaState.aberto = abrir;
+    menu.hidden = !abrir;
+    gatilho.setAttribute('aria-expanded', abrir ? 'true' : 'false');
+    if (abrir) {
+        renderListaEmpresas();
+        if (filtro) { filtro.value = ''; filtro.focus(); }
+    }
+}
+
+function ligarSeletorEmpresa() {
+    const gatilho = document.getElementById('company-trigger');
+    const menu = document.getElementById('company-menu');
+    const filtro = document.getElementById('company-filter');
+    if (!gatilho || !menu) return;
+
+    gatilho.addEventListener('click', (e) => {
+        e.stopPropagation();
+        abrirMenuEmpresa(!empresaState.aberto);
+    });
+
+    if (filtro) filtro.addEventListener('input', renderListaEmpresas);
+
+    menu.addEventListener('click', (e) => {
+        const item = e.target.closest('.company-select__item');
+        if (!item) return;
+        const cnpj = item.dataset.cnpj;
+        setEmpresaAtiva(cnpj ? empresaState.lista.find((x) => x.cnpj === cnpj) || null : null);
+        abrirMenuEmpresa(false);
+        gatilho.focus();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (empresaState.aberto && !e.target.closest('#company-select')) abrirMenuEmpresa(false);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && empresaState.aberto) {
+            abrirMenuEmpresa(false);
+            gatilho.focus();
+        }
+    });
+}
+
+window.getEmpresaAtiva = getEmpresaAtiva;
+window.setEmpresaAtiva = setEmpresaAtiva;
+window.carregarEmpresas = carregarEmpresas;

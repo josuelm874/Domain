@@ -7,7 +7,6 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Sharp" rel="stylesheet">
     <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/main.css">
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -24,81 +23,45 @@
 <body>
     <!-- Login Section -->
     <div class="login-container" id="dominium-login">
-        <div class="login">
-            <img src="assets/images/Background.jpg" alt="login background" class="login__img">
-            
-            <form id="login-form" class="login__form">
-                <h1 class="login__title">Login</h1>
+        <div class="login-scene" aria-hidden="true"></div>
 
-                <div class="login__content">
-                    <div class="login__box">
-                        <i class="bx bx-lock-alt"></i>
-                        
-                        <div class="login__box-input">
-                            <input type="text" id="login-username" required class="login__input" placeholder="" autocomplete="username">
-                            <label for="login-username" class="login__label">Username</label>
-                        </div>
-                    </div>
+        <main class="login-card">
+            <img src="assets/images/logo.gif" alt="" class="login-card__mark">
 
-                    <div class="login__box">
-                        <i class="ri-lock-2-line login__icon"></i>
+            <h1 class="login-card__title">Entrar</h1>
+            <p class="login-card__subtitle">Informe seus dados para acessar o sistema.</p>
 
-                        <div class="login__box-input">
-                            <input type="password" id="login-password" required class="login__input" placeholder="" autocomplete="current-password">
-                            <label for="login-password" class="login__label">Password</label>
-                            <i class="ri-eye-off-line login__eye" id="login-eye"></i>
-                        </div>
-                    </div>
+            <form id="login-form" class="login-card__form" novalidate>
+                <div class="login-field">
+                    <label for="login-username" class="sr-only">Usu&aacute;rio</label>
+                    <input type="text" id="login-username" class="login-field__input" required
+                           autocomplete="username" placeholder="Usu&aacute;rio">
                 </div>
 
-                <div class="login__check">
-                    <div class="login__check-group">
-                        <input type="checkbox" id="rememberMe" class="login__check-input">
-                        <label for="rememberMe" class="login__check-label">Lembrar de mim</label>
-                    </div>
+                <div class="login-field">
+                    <label for="login-password" class="sr-only">Senha</label>
+                    <input type="password" id="login-password" class="login-field__input" required
+                           autocomplete="current-password" placeholder="Senha">
+                    <button type="button" class="login-field__eye" id="login-eye"
+                            aria-label="Mostrar senha" aria-pressed="false">
+                        <span class="material-icons-sharp">visibility_off</span>
+                    </button>
                 </div>
 
-                <button type="submit" class="login__button" id="login-button">Login</button>
+                <p class="login-card__hint">Esqueceu a senha? Fale com o administrador.</p>
+
+                <label class="login-remember">
+                    <input type="checkbox" id="rememberMe">
+                    <span>Lembrar meu usu&aacute;rio neste computador</span>
+                </label>
+
+                <button type="submit" class="login-card__button" id="login-button">Entrar</button>
             </form>
-        </div>
-        
-        <!-- Admin Login (oculto por padrão, pode ser ativado se necessário) -->
-        <div class="admin-login-container" id="admin-login-container" style="display: none;">
-            <div class="login">
-                <img src="assets/images/Background.jpg" alt="login background" class="login__img">
-                
-                <form id="admin-form" class="login__form">
-                    <h1 class="login__title">Administrador</h1>
 
-                    <div class="login__content">
-                        <div class="login__box">
-                            <i class="bx bx-lock-alt"></i>
-                            
-                            <div class="login__box-input">
-                                <input type="text" id="admin-username" value="ADM" required readonly class="login__input" placeholder="" autocomplete="username">
-                                <label for="admin-username" class="login__label">Username</label>
-                            </div>
-                        </div>
-
-                        <div class="login__box">
-                            <i class="ri-lock-2-line login__icon"></i>
-
-                            <div class="login__box-input">
-                                <input type="password" id="admin-password" required class="login__input" placeholder="" autocomplete="current-password">
-                                <label for="admin-password" class="login__label">Password</label>
-                                <i class="ri-eye-off-line login__eye" id="admin-eye"></i>
-                            </div>
-                        </div>
-                    </div>
-
-                    <button type="submit" class="login__button">Acessar Sistema</button>
-                    
-                    <div style="text-align: center; margin-top: 1rem;">
-                        <a href="#" class="SignInLink" style="color: var(--white-color); text-decoration: none; font-size: var(--small-font-size);">Retornar para o Login de Auxiliar</a>
-                    </div>
-                </form>
-            </div>
-        </div>
+            <p class="login-card__footer">
+                Acesso restrito &agrave; equipe. Novos usu&aacute;rios s&atilde;o criados pelo administrador.
+            </p>
+        </main>
     </div>
 
     <!-- Dashboard Section -->
@@ -196,6 +159,23 @@
                     </div>
 
                     <div class="topbar__actions">
+                        <div class="company-select" id="company-select">
+                            <button type="button" class="company-select__trigger" id="company-trigger"
+                                    aria-haspopup="listbox" aria-expanded="false" aria-controls="company-menu">
+                                <span class="material-icons-sharp" aria-hidden="true">apartment</span>
+                                <span class="company-select__label" id="company-label">Todas as empresas</span>
+                                <span class="material-icons-sharp company-select__caret" aria-hidden="true">expand_more</span>
+                            </button>
+                            <div class="company-select__menu" id="company-menu" role="listbox" hidden
+                                 aria-label="Escolher empresa em foco">
+                                <div class="company-select__search">
+                                    <span class="material-icons-sharp" aria-hidden="true">search</span>
+                                    <input type="text" id="company-filter" autocomplete="off" spellcheck="false"
+                                           placeholder="Filtrar por raz&atilde;o social ou CNPJ" aria-label="Filtrar empresas">
+                                </div>
+                                <div class="company-select__list" id="company-list"></div>
+                            </div>
+                        </div>
                         <div class="dark-mode" role="switch" tabindex="0" aria-label="Alternar tema claro e escuro">
                             <span class="material-icons-sharp active">light_mode</span>
                             <span class="material-icons-sharp">dark_mode</span>
@@ -315,45 +295,36 @@
         });
     </script>
     
-    <!-- Script para mostrar/esconder senha -->
+    <!-- Mostrar/esconder senha. O gatilho agora e um <button> com icone
+         Material, nao um <i> do Remix: precisa anunciar o estado (aria-pressed)
+         porque revelar a senha na tela e uma acao com consequencia. -->
     <script>
-        /*--================== Show Hidden - Password =================*/
-        const showHiddenPass = (loginPass, LoginEye) => {
-            const input = document.getElementById(loginPass);
-            const iconEye = document.getElementById(LoginEye);
-            
-            if (!input || !iconEye) return;
-            
-            iconEye.addEventListener('click', () => {
-                // change password to text 
-                if (input.type === 'password') {
-                    // switch to text 
-                    input.type = 'text';
-                    
-                    // Icon change
-                    iconEye.classList.add('ri-eye-line');
-                    iconEye.classList.remove('ri-eye-off-line');
-                } else {
-                    // change to password
+        (function () {
+            const input = document.getElementById('login-password');
+            const botao = document.getElementById('login-eye');
+            if (!input || !botao) return;
+
+            botao.addEventListener('click', function () {
+                const revelando = input.type === 'password';
+                input.type = revelando ? 'text' : 'password';
+                botao.setAttribute('aria-pressed', revelando ? 'true' : 'false');
+                botao.setAttribute('aria-label', revelando ? 'Ocultar senha' : 'Mostrar senha');
+                const icone = botao.querySelector('span');
+                if (icone) icone.textContent = revelando ? 'visibility' : 'visibility_off';
+            });
+
+            // Enviar o formulario nao pode deixar a senha visivel na tela.
+            const form = document.getElementById('login-form');
+            if (form) {
+                form.addEventListener('submit', function () {
                     input.type = 'password';
-                    
-                    // Icon change 
-                    iconEye.classList.remove('ri-eye-line');
-                    iconEye.classList.add('ri-eye-off-line');
-                }
-            });
-        };
-        
-        // Inicializar quando o DOM estiver pronto
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => {
-                showHiddenPass('login-password', 'login-eye');
-                showHiddenPass('admin-password', 'admin-eye');
-            });
-        } else {
-            showHiddenPass('login-password', 'login-eye');
-            showHiddenPass('admin-password', 'admin-eye');
-        }
+                    botao.setAttribute('aria-pressed', 'false');
+                    botao.setAttribute('aria-label', 'Mostrar senha');
+                    const icone = botao.querySelector('span');
+                    if (icone) icone.textContent = 'visibility_off';
+                });
+            }
+        })();
     </script>
 </body>
 </html>
