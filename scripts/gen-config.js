@@ -57,8 +57,11 @@ const formatos = [
     {
         nome: 'APP_PASSWORD_SALT',
         valor: clean(process.env.APP_PASSWORD_SALT),
-        ok: (v) => v.length >= 32,
-        comoGerar: 'string aleatória de 32+ caracteres (trocar invalida os hashes existentes)',
+        // `length >= 32` sozinho era frouxo demais: em 2026-09-16 o HASH (51 chars)
+        // foi colado aqui e passou folgado. Salt que começa com "pbkdf2$" é hash.
+        ok: (v) => v.length >= 32 && !v.startsWith('pbkdf2$') && !/^https?:\/\//.test(v),
+        comoGerar: 'string aleatória de 32+ caracteres — NÃO é um hash nem uma URL '
+            + '(trocar invalida TODOS os hashes de senha existentes)',
     },
     {
         nome: 'SUPABASE_URL',
@@ -67,6 +70,30 @@ const formatos = [
         comoGerar: 'Project Settings → API → Project URL',
     },
 ];
+
+// Duas env vars com o mesmo valor é sempre engano de cópia — foi assim duas
+// vezes seguidas no mesmo dia: primeiro a URL da API no hash do admin, depois o
+// hash do admin no salt. Nenhum par aqui tem motivo legítimo para coincidir.
+const todas = [
+    ['APP_ADMIN_PASSWORD_HASH', clean(process.env.APP_ADMIN_PASSWORD_HASH)],
+    ['APP_PASSWORD_SALT', clean(process.env.APP_PASSWORD_SALT)],
+    ['SUPABASE_URL', clean(process.env.SUPABASE_URL)],
+    ['SUPABASE_PUBLISHABLE_KEY', clean(process.env.SUPABASE_PUBLISHABLE_KEY)],
+    ['ICMS_API_URL', clean(process.env.ICMS_API_URL)],
+].filter(([, v]) => v);
+
+const duplicadas = [];
+for (let i = 0; i < todas.length; i++) {
+    for (let j = i + 1; j < todas.length; j++) {
+        if (todas[i][1] === todas[j][1]) duplicadas.push(todas[i][0] + ' e ' + todas[j][0]);
+    }
+}
+if (duplicadas.length) {
+    console.error('[gen-config] env vars com o MESMO valor — uma delas recebeu o valor da outra:');
+    for (const par of duplicadas) console.error('  - ' + par);
+    console.error('[gen-config] corrija em Project → Settings → Environment Variables e refaça o deploy.');
+    process.exit(1);
+}
 
 const invalidas = formatos.filter((f) => !f.ok(f.valor));
 if (invalidas.length) {
