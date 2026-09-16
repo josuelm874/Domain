@@ -436,6 +436,34 @@ concluiu "195 logins", o oposto do que os dados diziam. Corrigido.
 node <worktree>/worker/lib/token-mfe.js --cnpj=<14 dígitos> --dump=C:\temp\mfe2
 ```
 
+### P10 — Redesign: o que ficou de fora da fatia do esqueleto
+
+O esqueleto (topbar, sidebar, faixa de KPI, cartao, sub-aba, campo de formulario,
+dropzone) foi ao ar em 2026-09-16. Sobrou, em ordem de valor:
+
+- **Seletor de empresa na topbar.** O design de referencia tem um. Nao foi feito porque
+  hoje nada no sistema consome uma "empresa ativa": cada tela descobre o CNPJ pelo
+  arquivo que recebe. Um seletor que nao filtra nada e um controle morto. Para valer,
+  precisa primeiro de um `empresaAtiva` que a Visao Geral, as Pendencias e os
+  downloads leiam.
+- **Largura das telas de upload.** ICMS ST, SPED, DIRBI, Fortes e NFe x NFCe ainda
+  centralizam o conteudo em ~800px com estilo inline na propria pagina. Em monitor
+  largo sobra area morta dos dois lados. Resolver exige mexer no container de cada uma
+  das cinco, nao so no CSS comum.
+- **Animacao de saida nos modais.** Eles entram com `fadeInUp` e somem com `.remove()`
+  seco. Quem fecha um modal grande ve a tela piscar.
+- **Barra de progresso anima `width`.** `main.css` (`.progress-container .progress-bar`)
+  e o progresso do SPED. Sao barras de 8-20px de altura, entao o custo de layout e
+  desprezivel; trocar por `transform: scaleX()` exigiria um elemento interno para o
+  raio nao distorcer. Registrado como excecao consciente, nao como esquecimento.
+- **Rotulo flutuante do login anima `top`.** Mesmo caso, na tela de login, que tem
+  desenho proprio e nao entrou nesta fatia.
+
+Verificado e OK (nao precisa mexer): contraste WCAG AA nos dois temas (12 pares
+medidos, 12 passam), foco visivel em 21/21 controles focaveis do painel,
+`prefers-reduced-motion` degradando de fato (0.4s vira 0.00001s), 12 abas x 2 temas
+sem erro de console e sem rolagem horizontal em 375/768/1024/1600.
+
 ## Resolvido
 
 ### ✓ Baixar NFCe pelo worker — FUNCIONANDO de ponta a ponta (2026-09-10)

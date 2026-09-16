@@ -280,7 +280,7 @@
                 }
                 
                 // Restaurar background padrão
-                document.documentElement.style.background = '#25252b';
+                document.documentElement.style.background = 'var(--color-background)';
                 
                 // Limpar qualquer estado pendente
                 if (typeof safeUpdateTaxReminders === 'function') {
@@ -887,18 +887,19 @@
         }
         
         try {
+            // Caminho de recuperação: o dashboard normal não montou. Melhor uma
+            // instrução clara do que uma grade de caixas vazias que parece o produto.
             mainContent.innerHTML = `
-                <h1>Dashboard</h1>
-                <div class="dashboard-grid">
-                    <div class="box animate-section" style="animation-delay: 0s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.05s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.1s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.15s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.2s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.25s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.3s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.35s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.4s"></div>
+                <div class="page-header">
+                    <div>
+                        <h1>Visão Geral</h1>
+                        <p>Ferramentas de automação fiscal e o estado do escritório hoje.</p>
+                    </div>
+                </div>
+                <div class="empty-state">
+                    <span class="material-icons-sharp">hourglass_empty</span>
+                    <h3>Carregando a Visão Geral…</h3>
+                    <p>Se esta mensagem continuar, recarregue a página (Ctrl+F5).</p>
                 </div>
             `;
             // #region agent log
@@ -1064,6 +1065,18 @@
         });
     }
 
+    // No celular a sidebar e uma gaveta sobreposta. Sem isto so o "X" fecha, e
+    // tocar no conteudo atras nao faz nada -- que e o oposto do esperado.
+    const appMain = document.querySelector('.dashboard-container .app-main');
+    if (appMain && sideMenu) {
+        appMain.addEventListener('click', (e) => {
+            // O proprio botao de menu vive dentro da topbar: sem esta guarda o
+            // clique que abre a gaveta borbulha ate aqui e a fecha na hora.
+            if (e.target.closest('#menu-btn')) return;
+            if (sideMenu.style.display === 'block') sideMenu.style.display = 'none';
+        });
+    }
+
     if (darkMode) {
         darkMode.addEventListener('click', () => {
             document.body.classList.toggle('dark-mode-variables');
@@ -1111,7 +1124,7 @@
                 if (loginUsername) loginUsername.value = '';
                 if (loginPassword) loginPassword.value = '';
                 if (adminPassword) adminPassword.value = '';
-                document.documentElement.style.background = '#25252b';
+                document.documentElement.style.background = 'var(--color-background)';
                 currentUser = null;
                 window.currentUser = null;
                 lastPage = 'dashboard';
@@ -1139,6 +1152,10 @@
         if (page !== 'analytics') {
             lastPage = page;
         }
+
+        // O CSS usa este atributo para mostrar o painel de vencimentos só na Visão Geral
+        // e para o cabeçalho de página saber em que contexto está.
+        if (dashboardContainer) dashboardContainer.dataset.page = page;
 
         // Verificar se sidebarLinks existe
         if (typeof sidebarLinks !== 'undefined' && sidebarLinks) {
@@ -1181,11 +1198,25 @@
                 }
                 
                 mainContent.innerHTML = `
-                    <h1>Dashboard</h1>
+                    <div class="page-header">
+                        <div>
+                            <h1>Visão Geral</h1>
+                            <p>Ferramentas de automação fiscal e o estado do escritório hoje.</p>
+                        </div>
+                    </div>
+
+                    <div class="kpi-strip" id="dashboard-kpis" aria-busy="true">
+                        <div class="kpi kpi--loading" aria-hidden="true"></div>
+                        <div class="kpi kpi--loading" aria-hidden="true"></div>
+                        <div class="kpi kpi--loading" aria-hidden="true"></div>
+                        <div class="kpi kpi--loading" aria-hidden="true"></div>
+                    </div>
+
+                    <h2 class="section-title">Ferramentas</h2>
                     <div class="dashboard-grid">
-                        <div class="box animate-section baixar-nfce-box" style="animation-delay: 0s; cursor: pointer;">
+                        <div class="box animate-section baixar-nfce-box" role="button" tabindex="0" style="animation-delay: 0s;">
                             <div class="box-content">
-                                <div class="box-icon">
+                                <div class="box-icon" data-tone="accent">
                                     <span class="material-icons-sharp">receipt_long</span>
                                 </div>
                                 <div class="box-info">
@@ -1194,9 +1225,9 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section baixar-nfe-box" style="animation-delay: 0.05s; cursor: pointer;">
+                        <div class="box animate-section baixar-nfe-box" role="button" tabindex="0" style="animation-delay: 0.05s;">
                             <div class="box-content">
-                                <div class="box-icon">
+                                <div class="box-icon" data-tone="primary">
                                     <span class="material-icons-sharp">request_page</span>
                                 </div>
                                 <div class="box-info">
@@ -1205,9 +1236,9 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section pis-cofins-box" style="animation-delay: 0.05s; cursor: pointer;">
+                        <div class="box animate-section pis-cofins-box" role="button" tabindex="0" style="animation-delay: 0.1s;">
                             <div class="box-content">
-                                <div class="box-icon">
+                                <div class="box-icon" data-tone="success">
                                     <span class="material-icons-sharp">calculate</span>
                                 </div>
                                 <div class="box-info">
@@ -1216,9 +1247,9 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section pendencias-box" style="animation-delay: 0.1s; cursor: pointer;">
+                        <div class="box animate-section pendencias-box" role="button" tabindex="0" style="animation-delay: 0.15s;">
                             <div class="box-content">
-                                <div class="box-icon">
+                                <div class="box-icon" data-tone="warning">
                                     <span class="material-icons-sharp">checklist</span>
                                 </div>
                                 <div class="box-info">
@@ -1227,9 +1258,9 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section transf-check-box" style="animation-delay: 0.15s; cursor: pointer;">
+                        <div class="box animate-section transf-check-box" role="button" tabindex="0" style="animation-delay: 0.2s;">
                             <div class="box-content">
-                                <div class="box-icon">
+                                <div class="box-icon" data-tone="accent">
                                     <span class="material-icons-sharp">swap_horiz</span>
                                 </div>
                                 <div class="box-info">
@@ -1238,13 +1269,12 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="box animate-section" style="animation-delay: 0.2s"></div>
-                        <div class="box animate-section" style="animation-delay: 0.25s"></div>
-                        <div class="box animate-section" style="animation-delay: 0.3s"></div>
-                        <div class="box animate-section" style="animation-delay: 0.35s"></div>
-                        <div class="box animate-section" style="animation-delay: 0.4s"></div>
                     </div>
                 `;
+
+                // KPIs saem de dados reais (pendencias, contribuintes, equipe).
+                // Assincrono de proposito: a grade de ferramentas nao espera a rede.
+                renderDashboardKpis();
 
                 console.log('✅ HTML do dashboard inserido:', mainContent.innerHTML.substring(0, 100) + '...');
                 
@@ -1334,19 +1364,12 @@
                 // Tentar criar conteúdo mínimo mesmo em caso de erro
                 if (mainContent) {
                     mainContent.innerHTML = `
-                        <h1>Dashboard</h1>
-                        <div class="dashboard-grid">
-                            <div class="box animate-section" style="animation-delay: 0s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.05s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.1s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.15s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.2s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.25s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.3s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.35s"></div>
-                            <div class="box animate-section" style="animation-delay: 0.4s"></div>
-                        </div>
-                    `;
+                        <div class="page-header"><div><h1>Visão Geral</h1></div></div>
+                        <div class="empty-state">
+                            <span class="material-icons-sharp">error_outline</span>
+                            <h3>Não foi possível montar a Visão Geral</h3>
+                            <p>Recarregue a página. Se persistir, abra o console (F12) e envie o erro ao suporte.</p>
+                        </div>`;
                 }
             }
 
@@ -1417,7 +1440,12 @@
         } 
         else if (page === 'apuration') {
             mainContent.innerHTML = `
-                <h1>Apuration</h1>
+                <div class="page-header">
+            <div>
+                <h1>Apuração</h1>
+                <p>Acompanhamento das apurações do período.</p>
+            </div>
+        </div>
                 <div class="apuration-box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 400px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
                 </div>
             `;
@@ -1451,11 +1479,16 @@
         }
         else if (page === 'settings') {
             mainContent.innerHTML = `
-                <h1>Settings</h1>
+                <div class="page-header">
+            <div>
+                <h1>Configurações</h1>
+                <p>Cadastros, listas fiscais e ferramentas de administração.</p>
+            </div>
+        </div>
                 <div class="dashboard-grid">
-                    <div class="box animate-section contributor-registration-box" style="animation-delay: 0s; cursor: pointer;">
+                    <div class="box animate-section contributor-registration-box" role="button" tabindex="0" style="animation-delay: 0s; cursor: pointer;">
                         <div class="box-content">
-                            <div class="box-icon">
+                            <div class="box-icon" data-tone="accent">
                                 <span class="material-icons-sharp">business</span>
                             </div>
                             <div class="box-info">
@@ -1464,9 +1497,9 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section user-registration-box" style="animation-delay: 0.05s; cursor: pointer;">
+                    <div class="box animate-section user-registration-box" role="button" tabindex="0" style="animation-delay: 0.05s; cursor: pointer;">
                         <div class="box-content">
-                            <div class="box-icon">
+                            <div class="box-icon" data-tone="success">
                                 <span class="material-icons-sharp">person_add</span>
                             </div>
                             <div class="box-info">
@@ -1475,9 +1508,9 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section cest-box" style="animation-delay: 0.1s; cursor: pointer;">
+                    <div class="box animate-section cest-box" role="button" tabindex="0" style="animation-delay: 0.1s; cursor: pointer;">
                         <div class="box-content">
-                            <div class="box-icon">
+                            <div class="box-icon" data-tone="warning">
                                 <span class="material-icons-sharp">inventory_2</span>
                             </div>
                             <div class="box-info">
@@ -1486,9 +1519,9 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section python-library-box" style="animation-delay: 0.15s; cursor: pointer;">
+                    <div class="box animate-section python-library-box" role="button" tabindex="0" style="animation-delay: 0.15s; cursor: pointer;">
                         <div class="box-content">
-                            <div class="box-icon">
+                            <div class="box-icon" data-tone="primary">
                                 <span class="material-icons-sharp">code</span>
                             </div>
                             <div class="box-info">
@@ -1497,9 +1530,9 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section cfop-cst-box" style="animation-delay: 0.2s; cursor: pointer;">
+                    <div class="box animate-section cfop-cst-box" role="button" tabindex="0" style="animation-delay: 0.2s; cursor: pointer;">
                         <div class="box-content">
-                            <div class="box-icon">
+                            <div class="box-icon" data-tone="accent">
                                 <span class="material-icons-sharp">rule</span>
                             </div>
                             <div class="box-info">
@@ -1508,10 +1541,6 @@
                             </div>
                         </div>
                     </div>
-                    <div class="box animate-section" style="animation-delay: 0.25s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.3s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.35s"></div>
-                    <div class="box animate-section" style="animation-delay: 0.4s"></div>
                 </div>
             `;
             
@@ -1559,7 +1588,12 @@
 
     function loadAnalyticsContent(mainContent) {
         mainContent.innerHTML = `
-            <h1>Analytics</h1>
+            <div class="page-header">
+            <div>
+                <h1>Indicadores</h1>
+                <p>Desempenho do escritório no período.</p>
+            </div>
+        </div>
             <div class="analyse animate-section">
                 <div class="apuracao">
                     <div class="status">
@@ -1913,8 +1947,8 @@
                     <div class="cest-container">
                         <div class="cest-column expired-column" style="grid-column: 1 / -1;">
                             <div class="cest-section">
-                                <h3 style="color: var(--color-danger, #c0392b);">CEST Vencidos (substituição automática no SPED)</h3>
-                                <p style="font-size: 0.85rem; color: var(--color-info-dark, #666); margin-bottom: 0.5rem;">
+                                <h3 style="color: var(--color-danger);">CEST Vencidos (substituição automática no SPED)</h3>
+                                <p style="font-size: 0.85rem; color: var(--color-info-dark); margin-bottom: 0.5rem;">
                                     Códigos CEST listados aqui serão substituídos automaticamente durante o ajuste SPED:
                                     se a descrição do produto contiver "água" (qualquer grafia), vira <strong>0300300</strong>;
                                     caso contrário, vira <strong>2899900</strong>.
@@ -2248,7 +2282,7 @@ function showCfopCstModal() {
                 <div class="cest-container">
                     <div class="cest-column" style="grid-column: 1 / -1;">
                         <div class="cest-section">
-                            <p style="font-size: 0.85rem; color: var(--color-info-dark, #666); margin-bottom: 0.75rem;">
+                            <p style="font-size: 0.85rem; color: var(--color-info-dark); margin-bottom: 0.75rem;">
                                 Por CFOP, define o <strong>CST</strong> e o <strong>CST PIS/COFINS</strong> aplicados
                                 automaticamente na correção do arquivo .fs. Adicionar um CFOP já existente
                                 <strong>sobrescreve</strong> (edição). Compartilhado entre todas as máquinas.
@@ -2305,7 +2339,7 @@ function loadCfopCstData() {
     const cfops = Object.keys(map).sort();
     list.innerHTML = '';
     if (cfops.length === 0) {
-        list.innerHTML = '<p style="color: var(--color-info-dark, #666); padding: 0.5rem;">Nenhum padrão cadastrado ainda.</p>';
+        list.innerHTML = '<p style="color: var(--color-info-dark); padding: 0.5rem;">Nenhum padrão cadastrado ainda.</p>';
         return;
     }
     cfops.forEach(cfop => {
@@ -2791,12 +2825,17 @@ function createIcmsWithholdingPage(mainContent) {
         .map(([k, v]) => `<option value="${k}">${escapeHtml(v.nome)}${v.funcional ? '' : ' — em configuração'}</option>`)
         .join('');
     mainContent.innerHTML = `
-        <h1>ICMS Withholding</h1>
+        <div class="page-header">
+            <div>
+                <h1>ICMS ST</h1>
+                <p>Processar XMLs de retenção e gerar a planilha por empresa.</p>
+            </div>
+        </div>
         <div class="icms-withholding-container" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
             <!-- Seleção do Modelo de Retenção -->
             <div class="box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
                 <label for="icms-modelo-select" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--color-dark);">Modelo de Retenção ICMS ST:</label>
-                <select id="icms-modelo-select" style="width: 100%; max-width: 400px; padding: 0.5rem 0.75rem; border: 1px solid var(--color-info-light, #ccc); border-radius: var(--border-radius-1); font-family: 'Poppins', sans-serif; font-size: 0.9rem; background: var(--color-white); color: var(--color-dark); cursor: pointer;">
+                <select id="icms-modelo-select" style="width: 100%; max-width: 400px; padding: 0.5rem 0.75rem; border: 1px solid var(--color-border); border-radius: var(--border-radius-1); font-family: 'Poppins', sans-serif; font-size: 0.9rem; background: var(--color-white); color: var(--color-dark); cursor: pointer;">
                     <option value="">— Selecione o modelo —</option>
                     ${icmsModeloOptions}
                 </select>
@@ -2807,7 +2846,7 @@ function createIcmsWithholdingPage(mainContent) {
             </div>
             
             <!-- Box de Upload de XMLs -->
-            <div class="box animate-section icms-xml-box" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="icms-xml-box">
+            <div role="button" tabindex="0" aria-label="Selecionar XMLs de ICMS ST" class="dropzone box animate-section icms-xml-box" style="animation-delay: 0s; height: 300px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="icms-xml-box">
                 <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">cloud_upload</span>
                 <span class="box-label" id="icms-xml-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Arraste e solte os XML (ou .zip) aqui</span>
                 <span style="font-size: 0.9rem; color: var(--color-dark-variant);">múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip se houver mais de uma)</span>
@@ -2938,11 +2977,11 @@ function createIcmsWithholdingPage(mainContent) {
 
         if (!modelo.funcional) {
             icmsModeloInfo.innerHTML = `
-                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-warning, #d68910);">warning</span>
+                <span class="material-icons-sharp" style="font-size: 1rem; vertical-align: middle; margin-right: 0.25rem; color: var(--color-warning);">warning</span>
                 <span><strong>${escapeHtml(modelo.nome)}</strong> está em pendência de configuração.
                 As regras de classificação deste modelo ainda não foram definidas — apenas o
                 modelo <strong>Mercadinho</strong> está funcional no momento.</span>`;
-            icmsModeloInfo.style.color = 'var(--color-warning, #d68910)';
+            icmsModeloInfo.style.color = 'var(--color-warning)';
             return;
         }
 
@@ -4092,9 +4131,14 @@ function nomeCorrigido(nome) {
 // relatório de erros (.txt) — necessário só para a regra de documento duplicado.
 function createCorretorFiscalPage(mainContent) {
     mainContent.innerHTML = `
-        <h1>Corretor Fiscal</h1>
+        <div class="page-header">
+            <div>
+                <h1>Corretor Fiscal</h1>
+                <p>Correção automática de arquivos SPED e Fortes (.fs).</p>
+            </div>
+        </div>
         <div style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
-            <div id="cf-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:200px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+            <div id="cf-drop" role="button" tabindex="0" aria-label="Selecionar arquivo a corrigir" class="dropzone dirbi-box animate-section" style="animation-delay:0s; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
                 <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">build_circle</span>
                 <p id="cf-drop-label" style="font-weight:600;">Selecione o arquivo a corrigir (SPED .txt ou Arquivo FS .fs)</p>
                 <small style="color:var(--color-dark-variant);">O tipo é detectado pelo conteúdo. A correção roda no navegador; o encoding original (ANSI/latin1 ou UTF-8) é preservado.</small>
@@ -4206,7 +4250,12 @@ function createCorretorFiscalPage(mainContent) {
 // dropzone do navegador (XML/.zip avulsos).
 function createDirbiPage(mainContent) {
     mainContent.innerHTML = `
-        <h1>DIRBI</h1>
+        <div class="page-header">
+            <div>
+                <h1>DIRBI</h1>
+                <p>Apuração dos benefícios fiscais a declarar no período.</p>
+            </div>
+        </div>
         <div class="dirbi-container" style="display:flex; flex-direction:column; gap:1.2rem; max-width:1000px; margin:0 auto; padding:2rem;">
             <div id="dirbi-node-panel" style="display:none; width:100%; max-width:800px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); flex-direction:column; gap:0.8rem;">
                 <div style="display:flex; align-items:center; gap:0.6rem;"><span class="material-icons-sharp" style="color:var(--color-success);">dns</span><strong>Worker Node detectado</strong></div>
@@ -4215,7 +4264,7 @@ function createDirbiPage(mainContent) {
                 <div id="dirbi-template-warn" style="display:none; color:var(--color-danger); font-size:0.8rem;"></div>
                 <button id="dirbi-node-btn" type="button" style="align-self:flex-start; padding:0.7rem 1.4rem; border:none; border-radius:0.6rem; background:var(--color-success); color:#fff; font-weight:700; cursor:pointer;">Processar inbox (Node)</button>
             </div>
-            <div id="dirbi-drop" class="dirbi-box animate-section" style="animation-delay:0s; width:100%; max-width:800px; min-height:240px; margin:0 auto; background-color:var(--color-white); border-radius:var(--card-border-radius); box-shadow:var(--box-shadow); padding:var(--card-padding); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
+            <div id="dirbi-drop" role="button" tabindex="0" aria-label="Selecionar arquivos da DIRBI" class="dropzone dirbi-box animate-section" style="animation-delay:0s; min-height:240px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem; text-align:center;">
                 <span class="material-icons-sharp" style="font-size:3rem; color:var(--color-primary);">request_quote</span>
                 <p id="dirbi-drop-label" style="font-weight:600;">Selecione os XML das NFC-e (ou arquivos .zip)</p>
                 <small style="color:var(--color-dark-variant);">Aceita XML avulsos e .zip. Múltiplas empresas são separadas por CNPJ — uma planilha por empresa (zip quando houver mais de uma). As fórmulas de Pis/Cofins são preservadas.</small>
@@ -4604,8 +4653,13 @@ function createSpedPage(mainContent) {
     console.log('Dados SPED anteriores limpos');
     
     mainContent.innerHTML = `
-        <h1>SPED</h1>
-        <div class="sped-box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 400px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); cursor: pointer; display: flex; align-items: center; justify-content: center; pointer-events: auto !important; z-index: 1000;">
+        <div class="page-header">
+            <div>
+                <h1>SPED</h1>
+                <p>Ajuste automático de SPED Fiscal e Contribuições.</p>
+            </div>
+        </div>
+        <div role="button" tabindex="0" aria-label="Selecionar arquivos SPED" class="dropzone sped-box animate-section" style="animation-delay: 0s; height: 400px; display: flex; align-items: center; justify-content: center; pointer-events: auto !important; z-index: 1000;">
             <p>Arquivos SPED (.txt)</p>
         </div>
     `;
@@ -4651,7 +4705,12 @@ function createSpedPage(mainContent) {
             console.log('Arquivos selecionados:', files.map(({ file }) => file.name));
 
             mainContent.innerHTML = `
+                <div class="page-header">
+            <div>
                 <h1>SPED</h1>
+                <p>Ajuste automático de SPED Fiscal e Contribuições.</p>
+            </div>
+        </div>
                 <div class="sped-container" style="width: 100%; max-width: 800px; margin: 0 auto;">
                     <div class="sped-box box animate-section" style="animation-delay: 0s; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding);">
                         <h2>Sped Fiscal | Contribuições</h2>
@@ -4664,7 +4723,7 @@ function createSpedPage(mainContent) {
                     </div>
                 </div>
                 <div class="progress-container" id="progress-container" style="width: 100%; max-width: 800px; margin: 1rem auto;">
-                    <div class="progress-bar" id="progress-bar" style="width: 100%; height: 20px; background-color: #e0e0e0; border-radius: 10px; overflow: hidden;">
+                    <div class="progress-bar" id="progress-bar" style="width: 100%; height: 20px; background-color: var(--color-light); border-radius: 10px; overflow: hidden;">
                         <div class="progress-fill" id="progress-fill" style="width: 0%; height: 100%; background-color: var(--color-primary); transition: width 0.3s;"></div>
                     </div>
                     <span class="progress-percentage" id="progress-percentage" style="display: block; text-align: center; margin-top: 0.5rem;">0%</span>
@@ -5045,10 +5104,15 @@ let fortesReportMap = null; // Feature A: Map<chave44, valorTotal> do relatório
 function createFortesCorrectionPage(mainContent) {
     console.log('createFortesCorrectionPage chamado');
     mainContent.innerHTML = `
-        <h1>Fortes Correction</h1>
+        <div class="page-header">
+            <div>
+                <h1>Correção Fortes</h1>
+                <p>Corrigir inconsistências apontadas no relatório do Fortes.</p>
+            </div>
+        </div>
         <div class="fortes-correction-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
             <!-- Box Superior: Upload de Arquivo .fs -->
-            <div class="box animate-section fortes-file-box" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 250px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="fortes-file-box">
+            <div role="button" tabindex="0" aria-label="Selecionar arquivo .fs do Fortes" class="dropzone box animate-section fortes-file-box" style="animation-delay: 0s; height: 250px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;" id="fortes-file-box">
                 <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">cloud_upload</span>
                 <span class="box-label" id="fortes-file-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Arraste e solte o arquivo .fs aqui</span>
                 <span style="font-size: 0.9rem; color: var(--color-dark-variant);">ou clique para selecionar</span>
@@ -5065,7 +5129,7 @@ function createFortesCorrectionPage(mainContent) {
                     <span class="material-icons-sharp">swap_vert</span>
                 </button>
                 <!-- Card Relatório (frente) -->
-                <div class="box fortes-report-box" id="fortes-report-box" style="width: 100%; height: 500px; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform 0.4s ease, opacity 0.4s ease; z-index: 2;">
+                <div role="button" tabindex="0" aria-label="Selecionar relatorio de valores" class="dropzone box fortes-report-box" id="fortes-report-box" style=" height: 500px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform 0.4s ease, opacity 0.4s ease; z-index: 2;">
                     <span class="material-icons-sharp" style="font-size: 3rem; color: var(--color-primary); margin-bottom: 1rem;">request_quote</span>
                     <span id="fortes-report-label" style="font-size: 1.2rem; font-weight: 600; color: var(--color-dark); margin-bottom: 0.5rem;">Solte o relatório de valores (CSV / XLSX)</span>
                     <span style="font-size: 0.9rem; color: var(--color-dark-variant); text-align: center; max-width: 90%;">SIGA — colunas "Chave NF-e" e "Valor R$". Fonte de verdade dos valores.</span>
@@ -8154,19 +8218,24 @@ let fortesData = [];
 function createNfeCfeComparisonPage(mainContent) {
     console.log('createNfeCfeComparisonPage chamado');
     mainContent.innerHTML = `
-        <h1>NFe | NFCe Comparison</h1>
+        <div class="page-header">
+            <div>
+                <h1>NFe × NFCe</h1>
+                <p>Conferir documentos emitidos contra o que a SEFAZ registrou.</p>
+            </div>
+        </div>
         <div class="nfe-cfe-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
-            <div class="box animate-section" style="animation-delay: 0s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center;" id="siget-box">
+            <div role="button" tabindex="0" aria-label="Selecionar arquivos do SIGA" class="dropzone box animate-section" style="animation-delay: 0s; height: 300px; position: relative; display: flex; align-items: center; justify-content: center;" id="siget-box">
                 <span class="box-label" id="siget-label">SIGA</span>
                 <svg id="siget-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
-                    <path d="M20 6L9 17L4 12" stroke="#00ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
+                    <path d="M20 6L9 17L4 12" stroke="var(--color-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
                 <input type="file" id="siget-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple style="display: none;">
             </div>
-            <div class="box animate-section" style="animation-delay: 0.1s; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center;" id="fortes-box">
+            <div role="button" tabindex="0" aria-label="Selecionar arquivos do Fortes" class="dropzone box animate-section" style="animation-delay: 0.1s; height: 300px; position: relative; display: flex; align-items: center; justify-content: center;" id="fortes-box">
                 <span class="box-label" id="fortes-label">Fortes</span>
                 <svg id="fortes-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
-                    <path d="M20 6L9 17L4 12" stroke="#00ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
+                    <path d="M20 6L9 17L4 12" stroke="var(--color-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
                 <input type="file" id="fortes-file-input" accept=".txt,.csv,.xls,.xlsx,.xml,.pdf,.html,.htm,.rtf" multiple style="display: none;">
             </div>
@@ -8965,19 +9034,21 @@ function createNfeCfeComparisonPage(mainContent) {
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="tabs">
-                    <div class="tab active" data-tab="quantidades">
-                        Quantidade de NFe | NFCe
+                    <div class="tabs__group" role="tablist">
+                        <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="quantidades">
+                            Quantidades
+                        </button>
+                        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="valores">
+                            Valores
+                        </button>
                     </div>
                     <div class="export-buttons">
-                        <button class="export-btn pdf-btn" onclick="exportToPDF()" title="Exportar para PDF">
-                            <img width="24" height="24" src="https://img.icons8.com/fluency/48/pdf--v1.png" alt="PDF"/>
+                        <button class="export-btn pdf-btn" onclick="exportToPDF()" title="Exportar para PDF" aria-label="Exportar para PDF">
+                            <span class="material-icons-sharp">picture_as_pdf</span>
                         </button>
-                        <button class="export-btn xlsx-btn" onclick="exportToXLSX()" title="Exportar para XLSX">
-                            <img width="24" height="24" src="https://img.icons8.com/color/48/microsoft-excel-2019--v1.png" alt="XLSX"/>
+                        <button class="export-btn xlsx-btn" onclick="exportToXLSX()" title="Exportar para XLSX" aria-label="Exportar para XLSX">
+                            <span class="material-icons-sharp">table_view</span>
                         </button>
-                    </div>
-                    <div class="tab" data-tab="valores">
-                        Valores de NFe | NFCe
                     </div>
                 </div>
                 <div id="quantidades-tab" class="tab-content">
@@ -9031,8 +9102,12 @@ function createNfeCfeComparisonPage(mainContent) {
         document.querySelectorAll('.tab-content').forEach(tab => tab.style.display = 'none');
         const targetTab = document.getElementById(tabId + '-tab');
         targetTab.style.display = 'block';
-        document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.classList.remove('active');
+            tab.setAttribute('aria-selected', 'false');
+        });
         element.classList.add('active');
+        element.setAttribute('aria-selected', 'true');
         if (tabId === 'quantidades') {
             // O conteúdo já foi renderizado em compareLists() na abertura do modal;
             // trocar de aba só alterna o display. Recomputar/re-renderizar listas
@@ -9168,7 +9243,12 @@ function createBaixarNfcePage(mainContent) {
     const CONCURRENCY = 10; // requisições simultâneas de chave no worker (configurável)
 
     mainContent.innerHTML = `
-        <h1>Baixar NFCe</h1>
+        <div class="page-header">
+            <div>
+                <h1>Baixar NFCe</h1>
+                <p>Download em massa de XMLs de NFC-e na SEFAZ-CE.</p>
+            </div>
+        </div>
         <style>
             .bn-shell { max-width: 920px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.4rem; }
             .bn-dropzone { position: relative; min-height: 240px; border: 2px dashed var(--color-info-dark); border-radius: var(--card-border-radius); background: var(--color-white); box-shadow: var(--box-shadow); padding: 1.2rem; cursor: pointer; transition: border-color .2s ease, background .2s ease; display: flex; }
@@ -9188,7 +9268,7 @@ function createBaixarNfcePage(mainContent) {
             .bn-rc-move:disabled { opacity: 0.25; cursor: default; }
             .bn-rc-move .material-icons-sharp { font-size: 1rem; }
             .bn-ring-item.fila .bn-ring { opacity: 0.4; }
-            .bn-ring-queue { font-size: 0.7rem; font-weight: 700; color: #f5b301; letter-spacing: .02em; min-height: 0.9rem; }
+            .bn-ring-queue { font-size: 0.7rem; font-weight: 700; color: var(--color-warning); letter-spacing: .02em; min-height: 0.9rem; }
             .bn-report-card .bn-rc-count { font-size: 0.82rem; color: var(--color-primary); font-weight: 600; }
             .bn-report-card .bn-rc-emp { font-size: 0.74rem; color: var(--color-info-dark); }
             .bn-rc-token { width: 100%; margin-top: 0.4rem; padding: 0.45rem 0.5rem; border: 1px solid var(--color-info-dark); border-radius: 0.4rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.7rem; resize: vertical; word-break: break-all; }
@@ -9221,7 +9301,7 @@ function createBaixarNfcePage(mainContent) {
             .bn-token-row { display: flex; align-items: center; gap: 0.5rem; }
             .bn-token-row label { font-weight: 600; color: var(--color-dark); }
             .bn-info { width: 1.15rem; height: 1.15rem; border-radius: 50%; border: 1px solid var(--color-info-dark); color: var(--color-info-dark); font-size: 0.78rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; cursor: help; position: relative; }
-            .bn-info::after { content: attr(data-tip); position: absolute; bottom: 140%; left: 50%; transform: translateX(-50%); background: #1f2330; color: #e7e9ee; font-size: 0.72rem; font-weight: 400; line-height: 1.3; padding: 0.45rem 0.6rem; border-radius: 0.45rem; border: 1px solid rgba(255,255,255,0.12); width: 220px; text-align: center; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 20; }
+            .bn-info::after { content: attr(data-tip); position: absolute; bottom: 140%; left: 50%; transform: translateX(-50%); background: var(--color-surface-2); color: var(--color-dark); font-size: 0.72rem; font-weight: 400; line-height: 1.3; padding: 0.45rem 0.6rem; border-radius: 0.45rem; border: 1px solid var(--color-border); width: 220px; text-align: center; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 20; }
             .bn-info:hover::after { opacity: 1; }
             #bn-token { width: 100%; padding: 0.7rem 0.9rem; border: 1px solid var(--color-info-dark); border-radius: 0.5rem; background: transparent; color: var(--color-dark); font-family: monospace; font-size: 0.8rem; resize: vertical; word-break: break-all; }
             #bn-jwt-status { font-size: 0.85rem; min-height: 1.1rem; }
@@ -9238,8 +9318,8 @@ function createBaixarNfcePage(mainContent) {
             .bn-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
             .bn-ring .bn-track { stroke: rgba(125,141,161,0.20); }
             .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .1s linear; }
-            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .1s linear; }
-            .bn-ring-item.done .bn-arc-yellow { stroke: #2bb673; }
+            .bn-ring .bn-arc-yellow { stroke: var(--color-warning); transition: stroke-dashoffset .1s linear; }
+            .bn-ring-item.done .bn-arc-yellow { stroke: var(--color-success); }
             .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
             .bn-ring-pct { font-weight: 700; color: var(--color-dark); font-size: clamp(0.95rem, 18cqw, 1.7rem); }
             .bn-ring-label { font-size: 0.78rem; color: var(--color-dark); text-align: center; line-height: 1.25; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -9251,7 +9331,7 @@ function createBaixarNfcePage(mainContent) {
             .bn-mini-ring circle { fill: none; stroke-width: 5; stroke-linecap: round; }
             .bn-add { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--color-primary); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.18); z-index: 5; display: flex; align-items: center; justify-content: center; transition: transform .12s ease; }
             .bn-add:hover { transform: translateY(-50%) scale(1.1); }
-            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: var(--color-surface-2); color: var(--color-dark-variant); border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
             .bn-unified:hover .bn-tooltip { opacity: 1; }
             .bn-tooltip-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .bn-aux { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -9532,7 +9612,7 @@ function createBaixarNfcePage(mainContent) {
         if (!token) { jwtStatus.textContent = ''; updateStartButton(); return; }
         const v = validateJwt(token);
         jwtStatus.textContent = v.message;
-        jwtStatus.style.color = v.ok ? (v.warning ? '#c47f00' : 'var(--color-success)') : 'var(--color-danger)';
+        jwtStatus.style.color = v.ok ? (v.warning ? 'var(--color-warning)' : 'var(--color-success)') : 'var(--color-danger)';
         updateStartButton();
     }
 
@@ -9804,7 +9884,7 @@ function createBaixarNfcePage(mainContent) {
         miniRingWrap.innerHTML = '<svg viewBox="0 0 40 40">' +
             '<circle cx="20" cy="20" r="' + MINI_R + '" style="stroke:rgba(125,141,161,0.20)"></circle>' +
             '<circle class="mb" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-primary)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
-            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:#f5b301" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-warning)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
             '</svg>';
         miniBlue = miniRingWrap.querySelector('.mb');
         miniYellow = miniRingWrap.querySelector('.my');
@@ -10608,7 +10688,12 @@ function createBaixarNfePage(mainContent) {
     const CONCURRENCY = 2; // SEFAZ limita consumo por CNPJ — conservador (ver Task 6)
 
     mainContent.innerHTML = `
-        <h1>Baixar NFe (XML)</h1>
+        <div class="page-header">
+            <div>
+                <h1>Baixar NFe</h1>
+                <p>Download de XMLs de NFe modelo 55 via certificado A1.</p>
+            </div>
+        </div>
         <style>
             .bn-shell { max-width: 920px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.4rem; }
             .bn-dropzone { position: relative; min-height: 200px; border: 2px dashed var(--color-info-dark); border-radius: var(--card-border-radius); background: var(--color-white); box-shadow: var(--box-shadow); padding: 1.2rem; cursor: pointer; transition: border-color .2s ease, background .2s ease; display: flex; }
@@ -10653,8 +10738,8 @@ function createBaixarNfePage(mainContent) {
             .bn-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
             .bn-ring .bn-track { stroke: rgba(125,141,161,0.20); }
             .bn-ring .bn-arc-blue { stroke: var(--color-primary); transition: stroke-dashoffset .1s linear; }
-            .bn-ring .bn-arc-yellow { stroke: #f5b301; transition: stroke-dashoffset .1s linear; }
-            .bn-ring-item.done .bn-arc-yellow { stroke: #2bb673; }
+            .bn-ring .bn-arc-yellow { stroke: var(--color-warning); transition: stroke-dashoffset .1s linear; }
+            .bn-ring-item.done .bn-arc-yellow { stroke: var(--color-success); }
             .bn-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
             .bn-ring-pct { font-weight: 700; color: var(--color-dark); font-size: clamp(0.95rem, 18cqw, 1.7rem); }
             .bn-ring-label { font-size: 0.78rem; color: var(--color-dark); text-align: center; line-height: 1.25; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -10664,7 +10749,7 @@ function createBaixarNfePage(mainContent) {
             .bn-mini-ring { position: relative; width: 34px; height: 34px; flex: 0 0 auto; }
             .bn-mini-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
             .bn-mini-ring circle { fill: none; stroke-width: 5; stroke-linecap: round; }
-            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: #1f2330; color: #d7dae3; border: 1px solid rgba(255,255,255,0.12); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+            .bn-tooltip { position: absolute; bottom: 3.4rem; right: 0.9rem; background: var(--color-surface-2); color: var(--color-dark-variant); border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.55rem 0.7rem; font-size: 0.68rem; line-height: 1.45; max-width: 260px; opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 15; box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
             .bn-unified:hover .bn-tooltip { opacity: 1; }
             .bn-tooltip-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         </style>
@@ -11084,7 +11169,7 @@ function createBaixarNfePage(mainContent) {
         const maior = Math.max(0, ...porEmpresa.values());
         if (maior <= MAX_CONSULTAS_HORA) { el.innerHTML = ''; return; }
         const horas = Math.ceil(maior / MAX_CONSULTAS_HORA);
-        el.innerHTML = '<span style="color:var(--color-warning, #f5b301); font-weight:600;">⚠ ' +
+        el.innerHTML = '<span style="color:var(--color-warning); font-weight:600;">⚠ ' +
             'A SEFAZ libera ' + MAX_CONSULTAS_HORA + ' consultas por hora por CNPJ, e cada nota gasta uma. ' +
             'A empresa com mais chaves tem ' + maior + ': virão ' + MAX_CONSULTAS_HORA +
             ' por rodada — o lote inteiro levaria cerca de ' + horas + ' ' + (horas === 1 ? 'hora' : 'horas') +
@@ -11173,7 +11258,7 @@ function createBaixarNfePage(mainContent) {
         miniRingWrap.innerHTML = '<svg viewBox="0 0 40 40">' +
             '<circle cx="20" cy="20" r="' + MINI_R + '" style="stroke:rgba(125,141,161,0.20)"></circle>' +
             '<circle class="mb" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-primary)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
-            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:#f5b301" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
+            '<circle class="my" cx="20" cy="20" r="' + MINI_R + '" style="stroke:var(--color-warning)" stroke-dasharray="' + MINI_C + '" stroke-dashoffset="' + MINI_C + '"></circle>' +
             '</svg>';
         miniBlue = miniRingWrap.querySelector('.mb');
         miniYellow = miniRingWrap.querySelector('.my');
@@ -12130,7 +12215,8 @@ function showGoalListModal() {
 }
 
 function addGoalNotification(goalName) {
-    const remindersSection = document.querySelector('.dashboard-container .right-section .reminders');
+    // A lista é o pai real dos cards; inserir na <section> quebraria o insertBefore.
+    const remindersSection = document.querySelector('.dashboard-container .reminders .reminders-list');
     if (!remindersSection) {
         console.warn('Seção de reminders não encontrada');
         return;
@@ -13323,7 +13409,7 @@ function showPisCofinsModal() {
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
                         <h3>Resultado</h3>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                            <button type="button" id="pis-cofins-copy-mult-btn" class="btn-cancel" style="background:#3498db; color:#fff; padding:0.5rem 1rem; font-size:0.85rem;" disabled>
+                            <button type="button" id="pis-cofins-copy-mult-btn" class="btn-cancel" style="background:var(--color-accent); color:#fff; padding:0.5rem 1rem; font-size:0.85rem;" disabled>
                                 Copiar Multiplicadores
                             </button>
                             <button type="button" id="pis-cofins-gen-mit-btn" class="btn-cancel" style="background:var(--color-success); color:#fff; padding:0.5rem 1rem; font-size:0.85rem;" disabled>
@@ -13529,7 +13615,7 @@ function showContributorRegistrationModal() {
                 <div class="form-section">
                     <h3 id="contributor-form-title">Cadastrar Novo Contribuinte</h3>
                     <div class="contributor-bulk-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
-                        <button type="button" id="contributor-download-template" class="btn-cancel" style="background:#3498db; color:#fff; padding:0.5rem 1rem; font-size:0.85rem; display:flex; align-items:center; gap:0.4rem;">
+                        <button type="button" id="contributor-download-template" class="btn-cancel" style="background:var(--color-accent); color:#fff; padding:0.5rem 1rem; font-size:0.85rem; display:flex; align-items:center; gap:0.4rem;">
                             <span class="material-icons-sharp" style="font-size:1.1rem;">download</span> Baixar modelo
                         </button>
                         <button type="button" id="contributor-import-btn" class="btn-cancel" style="background:var(--color-success); color:#fff; padding:0.5rem 1rem; font-size:0.85rem; display:flex; align-items:center; gap:0.4rem;">
@@ -14410,7 +14496,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await initializeSync();
     
     const currentUser = getCurrentUser();
-    const remindersSection = document.querySelector('.dashboard-container .right-section .reminders');
+    const remindersSection = document.querySelector('.dashboard-container .reminders');
     if (remindersSection) {
         // Filtrar notificações existentes para o usuário atual (já garante visibilidade exclusiva)
         document.querySelectorAll('.notification[data-id]').forEach(notification => {
@@ -14433,7 +14519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('Seção de reminders não encontrada no DOM');
     }
 
-    const remindersIcon = document.querySelector('.dashboard-container .right-section .reminders .header span');
+    const remindersIcon = document.querySelector('.dashboard-container .reminders .header span');
     if (remindersIcon) {
         remindersIcon.addEventListener('click', () => {
             console.log('Ícone de Reminders clicado');
@@ -14443,7 +14529,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('Ícone de Reminders não encontrado no DOM');
     }
 
-    const addReminderButton = document.querySelector('.dashboard-container .right-section .reminders .add-reminder');
+    const addReminderButton = document.querySelector('.dashboard-container .reminders .add-reminder');
     if (addReminderButton) {
         addReminderButton.addEventListener('click', () => {
             console.log('Botão Add Reminder clicado na página principal');
@@ -14724,3 +14810,398 @@ window.updateTaxReminders = updateTaxReminders;
 window.safeUpdateTaxReminders = safeUpdateTaxReminders;
 
 // ==================== FIM SISTEMA DE REMINDERS DO TAX AGENDA ====================
+// ============================================================================
+// TOPBAR — KPIs da Visão Geral, busca global e contador de vencimentos.
+//
+// Regra que vale para as três: nada aqui inventa número. O KPI só aparece se
+// existir dado real por trás (pendências, contribuintes, equipe); a busca só
+// lista destino que existe; o badge conta vencimento que está de fato no DOM.
+// Um indicador decorativo num sistema fiscal é pior que indicador nenhum.
+// ============================================================================
+
+/**
+ * Lê uma data brasileira "DD/MM" ou "DD/MM/AAAA" e devolve Date (ou null).
+ * O ano omitido assume o ano corrente — é o formato que o próprio app escreve.
+ * @param {string} texto
+ * @returns {Date|null}
+ */
+function parseDataBr(texto) {
+    const m = String(texto || '').match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+    if (!m) return null;
+    const dia = Number(m[1]);
+    const mes = Number(m[2]) - 1;
+    const ano = m[3] ? Number(m[3]) : new Date().getFullYear();
+    const d = new Date(ano, mes, dia);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+/** Dias inteiros entre hoje (00:00) e `data`. Negativo = vencido. */
+function diasAte(data) {
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const alvo = new Date(data);
+    alvo.setHours(0, 0, 0, 0);
+    return Math.round((alvo - hoje) / 86400000);
+}
+
+/**
+ * Preenche a faixa de KPIs da Visão Geral com dados reais.
+ * Silencioso por design: se a carga falhar, mostra o estado vazio em vez de
+ * um número inventado.
+ */
+async function renderDashboardKpis() {
+    const strip = document.getElementById('dashboard-kpis');
+    if (!strip) return;
+
+    let pendencias = [];
+    let contribuintes = [];
+    let equipe = [];
+    try {
+        [pendencias, contribuintes, equipe] = await Promise.all([
+            loadDataSync('pendencias', []),
+            loadDataSync('contributors', []),
+            loadDataSync('registeredUsers', []),
+        ]);
+    } catch (e) {
+        console.warn('KPIs: falha ao carregar dados, exibindo estado vazio.', e);
+    }
+
+    const lista = Array.isArray(pendencias) ? pendencias : [];
+    const abertas = lista.filter((p) => !p.done).length;
+    const concluidas = lista.filter((p) => p.done).length;
+
+    const inicioMes = new Date();
+    inicioMes.setDate(1);
+    inicioMes.setHours(0, 0, 0, 0);
+    const concluidasMes = lista.filter(
+        (p) => p.done && p.completedAt && new Date(p.completedAt) >= inicioMes
+    ).length;
+
+    const proximo = proximoVencimento();
+
+    const cards = [
+        {
+            tone: abertas > 0 ? 'warning' : 'success',
+            icon: 'checklist',
+            label: 'Pendências abertas',
+            value: String(abertas),
+            meta: concluidas ? `${concluidas} já concluídas` : 'Nenhuma concluída ainda',
+        },
+        {
+            tone: 'success',
+            icon: 'task_alt',
+            label: 'Concluídas no mês',
+            value: String(concluidasMes),
+            meta: inicioMes.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }),
+        },
+        {
+            tone: 'accent',
+            icon: 'apartment',
+            label: 'Contribuintes',
+            value: String(Array.isArray(contribuintes) ? contribuintes.length : 0),
+            meta: 'Cadastrados no sistema',
+        },
+        {
+            key: 'vencimento',
+            tone: proximo && proximo.dias <= 3 ? 'danger' : 'primary',
+            icon: 'event',
+            label: 'Próximo vencimento',
+            value: proximo ? proximo.rotulo : '—',
+            meta: proximo ? proximo.nome : 'Agenda ainda calculando',
+        },
+        {
+            tone: 'primary',
+            icon: 'group',
+            label: 'Equipe',
+            value: String(Array.isArray(equipe) ? equipe.length : 0),
+            meta: 'Usuários com acesso',
+        },
+    ];
+
+    strip.innerHTML = cards
+        .map(
+            (c) => `
+        <article class="kpi" data-tone="${c.tone}"${c.key ? ` data-kpi="${c.key}"` : ''}>
+            <span class="kpi__icon"><span class="material-icons-sharp">${c.icon}</span></span>
+            <h3 class="kpi__label">${escapeHtml(c.label)}</h3>
+            <p class="kpi__value">${escapeHtml(c.value)}</p>
+            <small class="kpi__meta">${escapeHtml(c.meta)}</small>
+        </article>`
+        )
+        .join('');
+    strip.setAttribute('aria-busy', 'false');
+}
+
+/**
+ * Menor prazo entre os vencimentos que estão no painel de lembretes.
+ * Lê o DOM porque é lá que a agenda fiscal já publicou as datas calculadas —
+ * recalcular aqui duplicaria a regra e as duas versões divergiriam.
+ * @returns {{nome: string, dias: number, rotulo: string}|null}
+ */
+function proximoVencimento() {
+    const nodes = document.querySelectorAll('.dashboard-container .reminders .notification[class*="notification-"]');
+    let melhor = null;
+    nodes.forEach((n) => {
+        const nome = (n.querySelector('.info h3') || {}).textContent || '';
+        const data = parseDataBr((n.querySelector('.info small') || {}).textContent || '');
+        if (!data) return;
+        const dias = diasAte(data);
+        if (dias < 0) return;
+        if (!melhor || dias < melhor.dias) {
+            melhor = {
+                nome: nome.trim(),
+                dias,
+                rotulo: dias === 0 ? 'Hoje' : dias === 1 ? 'Amanhã' : `${dias} dias`,
+            };
+        }
+    });
+    return melhor;
+}
+
+/**
+ * Repinta só o KPI "Próximo vencimento" a partir do que já está no painel.
+ * Existe porque a agenda fiscal preenche as datas depois que a grade montou:
+ * rodar `renderDashboardKpis` de novo custaria uma ida à rede por atualização.
+ */
+function atualizarKpiVencimento() {
+    const card = document.querySelector('.kpi[data-kpi="vencimento"]');
+    if (!card) return;
+    const proximo = proximoVencimento();
+    const valor = card.querySelector('.kpi__value');
+    const meta = card.querySelector('.kpi__meta');
+    if (valor) valor.textContent = proximo ? proximo.rotulo : '—';
+    if (meta) meta.textContent = proximo ? proximo.nome : 'Agenda ainda calculando';
+    card.setAttribute('data-tone', proximo && proximo.dias <= 3 ? 'danger' : 'primary');
+}
+
+/**
+ * Atualiza o contador do sino: vencimentos nos próximos 7 dias.
+ * Zero esconde o badge — badge com "0" é ruído.
+ */
+function atualizarBadgeVencimentos() {
+    const badge = document.getElementById('alerts-count');
+    if (!badge) return;
+    let n = 0;
+    document
+        .querySelectorAll('.dashboard-container .reminders .notification[class*="notification-"]')
+        .forEach((node) => {
+            const data = parseDataBr((node.querySelector('.info small') || {}).textContent || '');
+            if (!data) return;
+            const dias = diasAte(data);
+            if (dias >= 0 && dias <= 7) n += 1;
+        });
+    badge.textContent = String(n);
+    badge.hidden = n === 0;
+}
+
+// ---------------------------------------------------------------- BUSCA ----
+const buscaGlobal = { itens: [], indice: -1, visiveis: [] };
+
+/** Monta o índice de destinos: abas do menu + contribuintes cadastrados. */
+async function montarIndiceBusca() {
+    const itens = [];
+    document.querySelectorAll('.dashboard-container .sidebar a[data-page]').forEach((a) => {
+        itens.push({
+            titulo: (a.querySelector('h3') || {}).textContent || '',
+            icone: (a.querySelector('span') || {}).textContent || 'chevron_right',
+            tipo: 'Aba',
+            page: a.getAttribute('data-page'),
+        });
+    });
+
+    try {
+        const contribuintes = await loadDataSync('contributors', []);
+        (Array.isArray(contribuintes) ? contribuintes : []).forEach((c) => {
+            const nome = c.razaoSocial || c.razao_social || c.nome || c.name;
+            if (!nome) return;
+            itens.push({
+                titulo: nome,
+                icone: 'apartment',
+                tipo: c.cnpj ? formatarCnpjCurto(c.cnpj) : 'Contribuinte',
+                page: 'settings',
+            });
+        });
+    } catch (e) {
+        console.warn('Busca: contribuintes indisponíveis.', e);
+    }
+
+    buscaGlobal.itens = itens;
+}
+
+/** 00.000.000/0000-00 a partir de 14 dígitos; devolve o original se não bater. */
+function formatarCnpjCurto(cnpj) {
+    const d = String(cnpj).replace(/\D/g, '');
+    if (d.length !== 14) return String(cnpj);
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+}
+
+/** Normaliza para comparar sem acento e sem caixa. */
+function chaveBusca(s) {
+    return String(s || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase();
+}
+
+function renderResultadosBusca(termo) {
+    const caixa = document.getElementById('global-search-results');
+    const input = document.getElementById('global-search');
+    if (!caixa || !input) return;
+
+    const q = chaveBusca(termo).trim();
+    if (!q) {
+        fecharBusca();
+        return;
+    }
+
+    buscaGlobal.visiveis = buscaGlobal.itens
+        .filter((i) => chaveBusca(i.titulo).includes(q) || chaveBusca(i.tipo).includes(q))
+        .slice(0, 8);
+    buscaGlobal.indice = buscaGlobal.visiveis.length ? 0 : -1;
+
+    caixa.innerHTML = buscaGlobal.visiveis.length
+        ? buscaGlobal.visiveis
+              .map(
+                  (i, idx) => `
+        <button type="button" class="search-results__item" role="option"
+                aria-selected="${idx === 0 ? 'true' : 'false'}" data-idx="${idx}">
+            <span class="material-icons-sharp">${escapeHtml(i.icone)}</span>
+            <span>${escapeHtml(i.titulo)}</span>
+            <small>${escapeHtml(i.tipo)}</small>
+        </button>`
+              )
+              .join('')
+        : '<p class="search-results__empty">Nada encontrado para essa busca.</p>';
+
+    caixa.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+}
+
+function fecharBusca() {
+    const caixa = document.getElementById('global-search-results');
+    const input = document.getElementById('global-search');
+    if (caixa) {
+        caixa.hidden = true;
+        caixa.innerHTML = '';
+    }
+    if (input) input.setAttribute('aria-expanded', 'false');
+    buscaGlobal.indice = -1;
+    buscaGlobal.visiveis = [];
+}
+
+function marcarResultado(delta) {
+    if (!buscaGlobal.visiveis.length) return;
+    const total = buscaGlobal.visiveis.length;
+    buscaGlobal.indice = (buscaGlobal.indice + delta + total) % total;
+    document.querySelectorAll('.search-results__item').forEach((el, i) => {
+        el.setAttribute('aria-selected', i === buscaGlobal.indice ? 'true' : 'false');
+        if (i === buscaGlobal.indice) el.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+function abrirResultado(idx) {
+    const alvo = buscaGlobal.visiveis[idx];
+    if (!alvo) return;
+    const input = document.getElementById('global-search');
+    if (input) input.value = '';
+    fecharBusca();
+    if (typeof window.navigateTo === 'function') window.navigateTo(alvo.page);
+}
+
+function ligarBuscaGlobal() {
+    const input = document.getElementById('global-search');
+    const caixa = document.getElementById('global-search-results');
+    if (!input || !caixa) return;
+
+    input.addEventListener('input', () => renderResultadosBusca(input.value));
+    input.addEventListener('focus', () => {
+        if (input.value.trim()) renderResultadosBusca(input.value);
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            marcarResultado(1);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            marcarResultado(-1);
+        } else if (e.key === 'Enter') {
+            if (buscaGlobal.indice >= 0) {
+                e.preventDefault();
+                abrirResultado(buscaGlobal.indice);
+            }
+        } else if (e.key === 'Escape') {
+            input.value = '';
+            fecharBusca();
+            input.blur();
+        }
+    });
+
+    caixa.addEventListener('click', (e) => {
+        const item = e.target.closest('.search-results__item');
+        if (item) abrirResultado(Number(item.dataset.idx));
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.topbar__search')) fecharBusca();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            input.focus();
+            input.select();
+        }
+    });
+}
+
+// ------------------------------------------------------------ INICIALIZAÇÃO -
+document.addEventListener('DOMContentLoaded', () => {
+    ligarBuscaGlobal();
+    montarIndiceBusca().catch(() => {});
+
+    const sino = document.getElementById('alerts-btn');
+    if (sino) {
+        sino.addEventListener('click', () => {
+            if (typeof showRemindersModal === 'function') showRemindersModal();
+        });
+    }
+
+    // O painel de vencimentos é preenchido em etapas (cálculo local, depois a
+    // agenda fiscal). Observar é mais barato que agendar polling e nunca fica
+    // dessincronizado do que está na tela.
+    const painel = document.querySelector('.dashboard-container .reminders .reminders-list');
+    if (painel && 'MutationObserver' in window) {
+        const obs = new MutationObserver(() => {
+            atualizarBadgeVencimentos();
+            atualizarKpiVencimento();
+        });
+        obs.observe(painel, { childList: true, subtree: true, characterData: true });
+    }
+    setTimeout(() => {
+        atualizarBadgeVencimentos();
+        atualizarKpiVencimento();
+    }, 800);
+
+    // Tecla no toggle de tema: role="switch" precisa responder a Enter/Espaço.
+    const toggleTema = document.querySelector('.dashboard-container .dark-mode');
+    if (toggleTema) {
+        toggleTema.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleTema.click();
+            }
+        });
+    }
+
+    // Cards de ferramenta são role="button": teclado precisa disparar o clique.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const alvo = e.target.closest('.dropzone[role="button"], .box[role="button"], .add-reminder[role="button"], .reminders .header span[role="button"]');
+        if (!alvo) return;
+        e.preventDefault();
+        alvo.click();
+    });
+});
+
+window.renderDashboardKpis = renderDashboardKpis;
+window.atualizarBadgeVencimentos = atualizarBadgeVencimentos;

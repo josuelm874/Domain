@@ -277,10 +277,10 @@
 
     function caixa(id, titulo, delay) {
         return `
-            <div class="box animate-section" style="animation-delay: ${delay}; width: 100%; max-width: 800px; height: 300px; margin: 0 auto; background-color: var(--color-white); border-radius: var(--card-border-radius); box-shadow: var(--box-shadow); padding: var(--card-padding); position: relative; cursor: pointer; display: flex; align-items: center; justify-content: center;" id="${id}-box">
+            <div role="button" tabindex="0" aria-label="Selecionar arquivos: ${titulo}" class="dropzone box animate-section" style="animation-delay: ${delay}; height: 300px; position: relative; display: flex; align-items: center; justify-content: center;" id="${id}-box">
                 <span class="box-label" id="${id}-label">${titulo}</span>
                 <svg id="${id}-check" width="60" height="60" viewBox="0 0 24 24" fill="none" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
-                    <path d="M20 6L9 17L4 12" stroke="#00ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
+                    <path d="M20 6L9 17L4 12" stroke="var(--color-success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30"/>
                 </svg>
                 <input type="file" id="${id}-file-input" accept=".xls,.xlsx,.csv" multiple style="display: none;">
             </div>`;
@@ -377,7 +377,12 @@
     function createChecagemTransferenciasPage(mainContent) {
         console.log('createChecagemTransferenciasPage chamado');
         mainContent.innerHTML = `
-            <h1>Checagem de Transferências</h1>
+            <div class="page-header">
+            <div>
+                <h1>Checagem de Transferências</h1>
+                <p>Conferir transferências entre matriz e filiais (CFOP, CST e valor).</p>
+            </div>
+        </div>
             <div class="nfe-cfe-grid" style="display: flex; flex-direction: column; gap: 1.6rem; max-width: 1200px; margin: 0 auto; padding: 2rem;">
                 ${caixa('transf-saida', 'Saída', '0s')}
                 ${caixa('transf-entrada', 'Entrada', '0.1s')}
@@ -463,7 +468,7 @@
 
             const faltaLado = [!saidaRows.length && 'SAÍDA', !entradaRows.length && 'ENTRADA'].filter(Boolean).join(' e ');
             const corpo = nadaLido
-                ? `<p class="success-message" style="color:#c0392b;">Nenhuma nota lida da ${faltaLado}</p>
+                ? `<p class="success-message" style="color:var(--color-danger);">Nenhuma nota lida da ${faltaLado}</p>
                    <p style="text-align:center;">A checagem não foi executada. Veja os avisos acima para saber qual arquivo foi recusado e por quê.</p>`
                 : tudoOk
                 ? `<p class="success-message">Transferências Compatíveis</p>
@@ -507,7 +512,7 @@
             // execucao, treinaria o usuario a ignorar o banner junto com o aviso que importa.
             // Nome de arquivo e a unica string arbitraria que entra aqui -- dai o escapeHtml.
             const bannerAvisos = avisos.length
-                ? `<div style="max-width: 900px; margin: 0 auto 1.2rem; padding: 0.9rem 1.1rem; border-left: 4px solid #e0a800; background: rgba(224,168,0,0.10); border-radius: 6px; text-align: left;">
+                ? `<div style="max-width: 900px; margin: 0 auto 1.2rem; padding: 0.9rem 1.1rem; border-left: 4px solid var(--color-warning); background: var(--color-warning-soft); border-radius: 6px; text-align: left;">
                        <strong style="display:block; margin-bottom: 0.4rem;">Avisos de leitura (${avisos.length})</strong>
                        <ul style="margin: 0; padding-left: 1.2rem;">
                            ${avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join('')}

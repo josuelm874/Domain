@@ -102,7 +102,7 @@
     </div>
 
     <!-- Dashboard Section -->
-    <div class="dashboard-container" style="display: none; position: relative; width: 100%; min-height: 100vh; background-color: var(--color-background, #f6f6f9);">
+    <div class="dashboard-container" data-page="dashboard" style="display: none; position: relative; width: 100%; min-height: 100vh; background-color: var(--color-background, #f6f6f9);">
         <div class="container">
             <!-- Sidebar Section -->
             <aside>
@@ -110,36 +110,39 @@
                     <div class="logo">
                         <img src="assets/images/logo.gif" alt="Logo" class="sidebar-logo-img logo-dark">
                         <img src="assets/images/logo-light.gif" alt="Logo" class="sidebar-logo-img logo-light">
-                        <h2>Josue<span class="danger">Prog</span></h2>
+                        <div class="logo-text">
+                            <h2>Josue<span class="danger">Prog</span></h2>
+                            <small>Automa&ccedil;&atilde;o Cont&aacute;bil e Fiscal</small>
+                        </div>
                     </div>
                     <div class="close" id="close-btn">
                         <span class="material-icons-sharp">close</span>
                     </div>
                 </div>
-                <div class="sidebar">
+                <nav class="sidebar" aria-label="Navega&ccedil;&atilde;o principal">
                     <a href="#" data-page="dashboard" class="active">
-                        <span class="material-icons-sharp">dashboard</span>
-                        <h3>Dashboard</h3>
+                        <span class="material-icons-sharp">home</span>
+                        <h3>Vis&atilde;o Geral</h3>
                     </a>
                     <a href="#" data-page="analytics">
                         <span class="material-icons-sharp">insights</span>
-                        <h3>Analytics</h3>
+                        <h3>Indicadores</h3>
                     </a>
                     <a href="#" data-page="apuration">
-                        <span class="material-icons-sharp">person_outline</span>
-                        <h3>Apuration</h3>
+                        <span class="material-icons-sharp">fact_check</span>
+                        <h3>Apura&ccedil;&atilde;o</h3>
                     </a>
                     <a href="#" data-page="fortes-correction">
-                        <span class="material-icons-sharp">report_gmailerrorred</span>
-                        <h3>Fortes Correction</h3>
+                        <span class="material-icons-sharp">build_circle</span>
+                        <h3>Corre&ccedil;&atilde;o Fortes</h3>
                     </a>
                     <a href="#" data-page="nfe-cfe-comparison">
                         <span class="material-icons-sharp">compare_arrows</span>
-                        <h3>NFe | NFCe Comparison</h3>
+                        <h3>NFe &times; NFCe</h3>
                     </a>
                     <a href="#" data-page="icms-withholding">
                         <span class="material-icons-sharp">receipt_long</span>
-                        <h3>ICMS Withholding</h3>
+                        <h3>ICMS ST</h3>
                     </a>
                     <a href="#" data-page="dirbi">
                         <span class="material-icons-sharp">request_quote</span>
@@ -150,119 +153,137 @@
                         <h3>SPED</h3>
                     </a>
                     <a href="#" data-page="corretor-fiscal">
-                        <span class="material-icons-sharp">build_circle</span>
+                        <span class="material-icons-sharp">healing</span>
                         <h3>Corretor Fiscal</h3>
                     </a>
                     <a href="#" data-page="settings">
                         <span class="material-icons-sharp">settings</span>
-                        <h3>Settings</h3>
+                        <h3>Configura&ccedil;&otilde;es</h3>
                     </a>
                     <a href="#" class="logout">
                         <span class="material-icons-sharp">logout</span>
-                        <h3>Logout</h3>
+                        <h3>Sair</h3>
                     </a>
-                </div>
+                </nav>
             </aside>
             <!-- End of Sidebar Section -->
 
-            <!-- Main Content -->
-            <main id="main-content">
-                <!-- Conteúdo será gerado dinamicamente pelo JavaScript -->
-            </main>
-            <!-- End of Main Content -->
-
-            <!-- Right Section -->
-            <div class="right-section">
-                <div class="nav">
-                    <button id="menu-btn">
+            <!-- Coluna de conteudo: topbar + pagina -->
+            <div class="app-main">
+                <header class="topbar">
+                    <button id="menu-btn" aria-label="Abrir menu">
                         <span class="material-icons-sharp">menu</span>
                     </button>
-                    <div class="dark-mode">
-                        <span class="material-icons-sharp active">light_mode</span>
-                        <span class="material-icons-sharp">dark_mode</span>
-                    </div>
-                    <div class="profile">
-                        <div class="info">
-                            <h3 id="user-greeting">Hey, <span id="current-user-name"></span></h3>
-                            <small id="admin-label" class="text-muted">Admin</small>
-                        </div>
-                        <div class="profile-photo">
-                            <img id="profile-image" src="assets/images/profile-2.png" alt="Profile Photo">
+
+                    <div class="topbar__greeting">
+                        <span class="topbar__greeting-icon" aria-hidden="true">
+                            <span class="material-icons-sharp">dashboard_customize</span>
+                        </span>
+                        <div class="topbar__greeting-text">
+                            <h3 id="user-greeting">Ol&aacute;, <span id="current-user-name"></span></h3>
+                            <small class="topbar__sub">Aqui est&aacute; o resumo da sua opera&ccedil;&atilde;o fiscal de hoje.</small>
                         </div>
                     </div>
-                </div>
-                <!-- End of Nav -->
 
-                <div class="user-profile">
-                    <img src="assets/images/logo.gif" alt="Logo" class="user-profile-gif logo-dark">
-                    <img src="assets/images/logo-light.gif" alt="Logo" class="user-profile-gif logo-light">
-                    <div class="user-profile-title">
-                        <h2>JosueProg</h2>
-                        <p>Fullstack Web Developer</p>
+                    <div class="topbar__search" role="search">
+                        <span class="material-icons-sharp topbar__search-icon" aria-hidden="true">search</span>
+                        <input type="text" id="global-search" autocomplete="off" spellcheck="false"
+                               placeholder="Buscar p&aacute;gina, ferramenta ou contribuinte..."
+                               aria-label="Buscar no sistema" aria-expanded="false"
+                               aria-controls="global-search-results" role="combobox" aria-autocomplete="list">
+                        <kbd class="topbar__kbd">Ctrl K</kbd>
+                        <div class="search-results" id="global-search-results" role="listbox" hidden></div>
                     </div>
-                </div>
 
-                <div class="reminders">
+                    <div class="topbar__actions">
+                        <div class="dark-mode" role="switch" tabindex="0" aria-label="Alternar tema claro e escuro">
+                            <span class="material-icons-sharp active">light_mode</span>
+                            <span class="material-icons-sharp">dark_mode</span>
+                        </div>
+                        <button class="icon-btn" id="alerts-btn" aria-label="Ver vencimentos">
+                            <span class="material-icons-sharp">notifications_none</span>
+                            <span class="icon-btn__badge" id="alerts-count" hidden>0</span>
+                        </button>
+                        <div class="profile">
+                            <div class="info">
+                                <small id="admin-label" class="text-muted">Admin</small>
+                            </div>
+                            <div class="profile-photo">
+                                <img id="profile-image" src="assets/images/profile-2.png" alt="Foto de perfil">
+                            </div>
+                        </div>
+                    </div>
+                </header>
+
+                <main id="main-content">
+                    <!-- Conteudo gerado dinamicamente pelo JavaScript -->
+                </main>
+
+                <!-- Painel de vencimentos: visivel apenas na Visao Geral (CSS por data-page) -->
+                <section class="reminders" aria-label="Vencimentos e lembretes">
                     <div class="header">
-                        <h2>Reminders</h2>
-                        <span class="material-icons-sharp">notifications_none</span>
+                        <h2>Vencimentos e lembretes</h2>
+                        <span class="material-icons-sharp" role="button" tabindex="0" aria-label="Abrir agenda fiscal">notifications_none</span>
                     </div>
-                    <div class="notification notification-envio deactive">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>Envio de Impostos</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                    <div class="reminders-list">
+                        <div class="notification notification-envio deactive">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
-                        </div>
-                    </div>
-                    <div class="notification notification-icms deactive">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>ICMS ST</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>Envio de Impostos</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
                         </div>
-                    </div>
-                    <div class="notification notification-dirbi">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>DIRBI</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                        <div class="notification notification-icms deactive">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
-                        </div>
-                    </div>
-                    <div class="notification notification-dctfweb">
-                        <div class="icon">
-                            <span class="material-icons-sharp">receipt</span>
-                        </div>
-                        <div class="content">
-                            <div class="info">
-                                <h3>DCTFWeb</h3>
-                                <small class="text_muted">Vencimento: Calculando...</small>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>ICMS ST</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
                             </div>
-                            <span class="material-icons-sharp">more_vert</span>
+                        </div>
+                        <div class="notification notification-dirbi">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
+                            </div>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>DIRBI</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
+                            </div>
+                        </div>
+                        <div class="notification notification-dctfweb">
+                            <div class="icon">
+                                <span class="material-icons-sharp">receipt</span>
+                            </div>
+                            <div class="content">
+                                <div class="info">
+                                    <h3>DCTFWeb</h3>
+                                    <small class="text_muted">Vencimento: Calculando...</small>
+                                </div>
+                                <span class="material-icons-sharp">more_vert</span>
+                            </div>
+                        </div>
+                        <div class="notification add-reminder" role="button" tabindex="0">
+                            <div>
+                                <span class="material-icons-sharp">add</span>
+                                <h3>Adicionar lembrete</h3>
+                            </div>
                         </div>
                     </div>
-                    <div class="notification add-reminder">
-                        <div>
-                            <span class="material-icons-sharp">add</span>
-                            <h3>Add Reminder</h3>
-                        </div>
-                    </div>
-                </div>
+                </section>
             </div>
+            <!-- End of Coluna de conteudo -->
         </div>
     </div>
 
